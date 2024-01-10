@@ -1,0 +1,35 @@
+name: Build and Push Docker Images
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - context: database
+            tag: your-username/your-repo-database
+          - context: webui
+            tag: your-username/your-repo-webui
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Log in to the GitHub Container Registry
+      uses: docker/login-action@v1
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v2
+      with:
+        context: ./src/${{ matrix.context }}
+        file: ./src/${{ matrix.context }}/Dockerfile
+        push: true
+        tags: ghcr.io/${{ matrix.tag }}:latest

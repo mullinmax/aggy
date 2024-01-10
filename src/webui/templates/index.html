@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head>
+    <title>Flask App</title>
+</head>
+<body>
+    <h1>Data from PostgreSQL</h1>
+    <ul>
+        {% for item in data %}
+            <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
