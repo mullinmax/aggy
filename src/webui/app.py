@@ -14,7 +14,7 @@ def get_db_connection():
 def index():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM your_table;')  # Replace with your query
+    cur.execute('SELECT * FROM schema_version;')  # Replace with your query
     data = cur.fetchall()
     cur.close()
     conn.close()

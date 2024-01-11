@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  database:
+    build: ./src/database
+    ports:
+      - "5432:5432"  # Expose if needed
+    environment:
+      - POSTGRES_DB=yourdb
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+
+  webui:
+    build: ./src/webui
+    ports:
+      - "5000:5000"
+    depends_on:
+      - database
+    environment:
+      - DB_HOST=database
+      - DB_NAME=yourdb
+      - DB_USER=user
+      - DB_PASS=password
+
+volumes:
+  dbdata:

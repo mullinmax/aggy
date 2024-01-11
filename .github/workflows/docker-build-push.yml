@@ -11,9 +11,9 @@ jobs:
       matrix:
         include:
           - context: database
-            tag: your-username/your-repo-database
+            tag: mullinmax/blinder-database
           - context: webui
-            tag: your-username/your-repo-webui
+            tag: mullinmax/blinder-webui
 
     steps:
     - name: Checkout code
