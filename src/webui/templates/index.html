@@ -1,14 +1,18 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
     <title>Flask App</title>
 </head>
 <body>
     <h1>Data from PostgreSQL</h1>
-    <ul>
-        {% for item in data %}
-            <li>{{ item }}</li>
-        {% endfor %}
-    </ul>
+    {% if user_data %}
+        <ul>
+            {% for user in user_data %}
+                <li>{{ user[0] }}</li> <!-- Assuming 'user[0]' is the data you want to display -->
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No data found.</p>
+    {% endif %}
 </body>
 </html>
