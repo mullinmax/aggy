@@ -5,9 +5,9 @@ services:
     ports:
       - "5432:5432"  # Expose if needed
     environment:
-      - POSTGRES_DB=yourdb
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - dbdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,9 +23,9 @@ services:
       - database
     environment:
       - DB_HOST=database
-      - DB_NAME=yourdb
-      - DB_USER=user
-      - DB_PASS=password
+      - DB_NAME=postgres
+      - DB_USER=postgres
+      - DB_PASS=postgres
 
 volumes:
   dbdata:
