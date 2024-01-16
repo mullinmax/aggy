@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS user_data (
     description TEXT
 );
 
+INSERT INTO user_data (name, description) VALUES
+('Alice', 'Description for Alice'),
+('Bob', 'Description for Bob'),
+('Charlie', 'Description for Charlie');
+
+
+SELECT * from user_data
 -- Apply second migration (version 2)
 DO $$
 BEGIN
