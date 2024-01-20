@@ -2,6 +2,25 @@
 
 
 
+## Sites to support
+
+* [ ] youtube
+* [ ] reddit
+* [ ] facebook
+* [ ] X
+* [ ] twitch
+* [ ] amazon? (search results)
+* [ ] mastadon
+* [ ] lemmy
+* [ ] instagram
+* [ ] tik tok
+* [ ] pinterest
+* [ ] linkedin
+* [ ] Adult media
+* [ ] threads
+
+
+
 
 
 ### Database Design
@@ -76,8 +95,11 @@ erDiagram
     item ||--o{ score : ranks
     score }o--|| model : produces
     model }o--|| user : predicts
-    model }o--|| vector_source : tarined_by
+    model }o--|| vector_source : trained_by
     item ||--o{ activity : logs
     activity }o--|| user : click
 
 ``` 
+
+## Redis for db?
+

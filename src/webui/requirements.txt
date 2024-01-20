@@ -1,2 +1,5 @@
 Flask
 psycopg2-binary
+requests
+feedparser
+beautifulsoup4
