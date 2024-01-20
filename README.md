@@ -103,3 +103,22 @@ erDiagram
 
 ## Redis for db?
 
+
+```redis
+
+```
+
+### Ingest
+
+```
+for feed in feed:
+    if now > last_read + feed_read_freq:
+        items = parse_feed(feed)
+        feed.last_read = now
+        for imem in items:
+            redis.items += {
+                item
+                feed.id
+            }
+```
+

@@ -1,18 +1,47 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Flask App</title>
+    <title>RSS Feed Viewer</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        function toggleSummary(id) {
+            var summary = document.getElementById(id);
+            var button = document.getElementById('button-' + id);
+            if (summary.style.display === 'none' || summary.style.display === '') {
+                summary.style.display = 'block';
+                button.textContent = '−';
+            } else {
+                summary.style.display = 'none';
+                button.textContent = '+';
+            }
+        }
+    
+        // Initialize summaries on page load
+        window.onload = function() {
+            var summaries = document.getElementsByClassName('summary');
+            for (var i = 0; i < summaries.length; i++) {
+                summaries[i].style.display = 'none'; // Hide summaries
+            }
+        };
+    </script>
 </head>
 <body>
-    <h1>Data from PostgreSQL</h1>
-    {% if user_data %}
+    <div class="container">
+        <h1>RSS Feed Items</h1>
         <ul>
-            {% for user in user_data %}
-                <li>{{ user[0] }}</li> <!-- Assuming 'user[0]' is the data you want to display -->
+            {% for item in feed_items %}
+                <li class="item">
+                    <span id="button-summary-{{ loop.index }}" class="toggle-button" onclick="toggleSummary('summary-{{ loop.index }}')">+</span>
+                    <a href="{{ item.link }}" target="_blank" class="title-link"><strong>{{ item.title | safe }}</strong></a>
+                    <div id="summary-{{ loop.index }}" class="summary">
+                        {{ item.summary | safe }}
+                    </div>
+                    {% if item.image %}
+                        <img src="{{ item.image }}" class="preview-image">
+                    {% endif %}
+                </li>
             {% endfor %}
         </ul>
-    {% else %}
-        <p>No data found.</p>
-    {% endif %}
+    </div>
 </body>
 </html>

@@ -1,41 +1,35 @@
 version: '3.8'
 
 networks:
- default:
-   external: true
-   name: "traefik_default"
+  default:
+    external: true
+    name: "traefik_default"
 
 services:
-  # database:
-  #   build: ./src/database
-  #   ports:
-  #     - "5432:5432"  # Expose if needed
-  #   environment:
-  #     - POSTGRES_DB=postgres
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=postgres
-  #   volumes:
-  #     - dbdata:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-  webui:
+  blinder-webui:
     build: ./src/webui
     ports:
       - "5000:5000"
-    # depends_on:
-    #   - database
     environment:
       - HOSTNAME=https://codehost.doze.dev
-    #   - DB_HOST=database
-    #   - DB_NAME=postgres
-    #   - DB_USER=postgres
-    #   - DB_PASS=postgres
     labels:
       - "traefik.http.routers.codehost.rule=Host(`codehost.doze.dev`)"
       - "traefik.http.routers.codehost.service=codehost"
       - "traefik.http.services.codehost.loadbalancer.server.port=5000"
+    depends_on:
+      - blinder-db
+
+  blinder-db:
+    image: "redis:latest"
+    ports:
+      - "6379"
+    volumes:
+      - blinder-db:/data
+
+  blinder-ingest:
+    build: ./src/ingest
+    depends_on:
+      - blinder-db
+
 volumes:
-  dbdata:
+  blinder-db:
