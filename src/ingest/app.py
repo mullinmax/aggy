@@ -3,62 +3,68 @@ import redis
 import json
 import bleach
 import requests
-from bs4 import BeautifulSoup
+import hashlib
+import base64
 
-# Environment variables for Redis
+# Environment variables
 REDIS_HOST = 'blinder-db'
 REDIS_PORT = 6379
+EXTRACT_HOST = 'blinder-preview'
+EXTRACT_PORT = 8080
+EXTRACT_USER = 'blinder'
+EXTRACT_SECRET = 'ney'
 
 # RSS Feed URL
 FEED_URL = 'https://rss-bridge.org/bridge01/?action=display&bridge=YoutubeBridge&context=By+custom+name&custom=%40TeslaDaily&duration_min=&duration_max=&format=Atom'
 
-def extract_og_image(url):
-    """Extracts Open Graph image from a given URL."""
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            og_image = soup.find('meta', property='og:image')
-            if og_image and og_image['content']:
-                return og_image['content']
-    except requests.RequestException as e:
-        print(f"Error fetching Open Graph image: {e}")
-    return ''
+def generate_signature(url, secret):
+    return hashlib.sha1(url.encode('utf-8') + secret.encode('utf-8')).hexdigest()
 
-def extract_image(entry):
-    """Extracts image from the feed entry."""
-    if 'media_content' in entry and len(entry.media_content) > 0:
-        return entry.media_content[0].get('url', '')
-    elif 'media_thumbnail' in entry and len(entry.media_thumbnail) > 0:
-        return entry.media_thumbnail[0].get('url', '')
-    elif 'enclosures' in entry and len(entry.enclosures) > 0:
-        return entry.enclosures[0].get('href', '')
-    return ''  # Default case if no image found
+def extract_content(url):
+    try:
+        base64_url = base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8').replace('\n', '')
+        signature = generate_signature(url, EXTRACT_SECRET)
+
+        extract_url = f'http://{EXTRACT_HOST}:{EXTRACT_PORT}/parser/{EXTRACT_USER}/{signature}?base64_url={base64_url}'
+        response = requests.get(extract_url, timeout=10)
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Error extracting content: {response.status_code}")
+    except requests.RequestException as e:
+        print(f"Error in extract request: {e}")
+    return {}
+
+def sanitize_content(content):
+    allowed_tags = ['p', 'br', 'strong', 'em', 'ul', 'ol', 'li', 'a']
+    return bleach.clean(content, tags=allowed_tags, attributes=['href'], strip=True)
 
 def main():
-    """Main function to ingest and store RSS feed items."""
-    # Connect to Redis
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-    # Parse the RSS feed
     feed = feedparser.parse(FEED_URL)
 
-    # Iterate over feed entries and save to Redis
     for entry in feed.entries:
-        # Attempt to extract image from the feed entry
-        image_url = extract_image(entry)
-
-        # If no image in the feed, try to extract Open Graph image
-        if not image_url:
-            image_url = extract_og_image(entry.link)
+        extracted_content = extract_content(entry.link)
 
         entry_data = {
-            'title': bleach.clean(entry.title, strip=True),
-            'summary': bleach.clean(entry.summary, tags=['p', 'br', 'strong', 'em', 'ul', 'ol', 'li', 'a'], attributes=['href'], strip=True),
-            'link': entry.link,
-            'image': image_url
+            'title': sanitize_content(extracted_content.get('title', '')),
+            'content': sanitize_content(extracted_content.get('content', '')),
+            'author': sanitize_content(extracted_content.get('author', '')),
+            'date_published': extracted_content.get('date_published', ''),
+            'lead_image_url': extracted_content.get('lead_image_url', ''),
+            'dek': sanitize_content(extracted_content.get('dek', '')),
+            'next_page_url': extracted_content.get('next_page_url', ''),
+            'url': entry.link,
+            'domain': extracted_content.get('domain', ''),
+            'excerpt': sanitize_content(extracted_content.get('excerpt', '')),
+            'word_count': extracted_content.get('word_count', 0),
+            'direction': extracted_content.get('direction', 'ltr'),
+            'total_pages': extracted_content.get('total_pages', 1),
+            'rendered_pages': extracted_content.get('rendered_pages', 1)
         }
-        print(f"adding {entry_data['title']}: {entry_data['image']}")
+        print(f"adding {entry_data['title']}")
         r.set(f"rss:{entry.id}", json.dumps(entry_data))
 
 if __name__ == "__main__":

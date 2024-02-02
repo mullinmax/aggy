@@ -31,5 +31,20 @@ services:
     depends_on:
       - blinder-db
 
+  blinder-preview:
+    image: leftbrained/extract
+    ports:
+      - 8080
+    environment:
+      - EXTRACT_USER=blinder
+      - EXTRACT_SECRET=ney
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /app/users
+        echo "$$EXTRACT_SECRET" > /app/users/$$EXTRACT_USER
+        node app/server.js
+
 volumes:
   blinder-db:

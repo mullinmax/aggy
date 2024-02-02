@@ -12,6 +12,30 @@ REDIS_PORT = 6379
 # Connect to Redis
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
+@app.route('/add_feed', methods=['GET', 'POST'])
+def add_feed():
+    if request.method == 'POST':
+        feed_name = request.form.get('feed_name')
+        feed_category = request.form.get('feed_category')
+        feed_schedule = request.form.get('feed_schedule')
+        feed_url = request.form.get('feed_url')
+
+        if feed_name and feed_category and feed_schedule and feed_url:
+            # Construct the feed object
+            feed_data = {
+                'name': feed_name,
+                'category': feed_category,
+                'schedule': feed_schedule,
+                'url': feed_url
+            }
+
+            # Save to Redis
+            r.set(f"feed:{feed_name}", json.dumps(feed_data))
+
+            return redirect(url_for('index'))
+
+    return render_template('add_feed.html')
+
 @app.route('/')
 def index():
     # Retrieve keys for all feed items
