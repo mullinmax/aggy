@@ -38,7 +38,19 @@
                 </div>
                 <div class="modal-body">
                     <form id="addFeedForm" action="{{ url_for('add_feed') }}" method="post">
-                        <!-- Form fields... -->
+                        <div class="form-group">
+                            <label for="feedName">Feed Name</label>
+                            <input type="text" class="form-control" id="feedName" name="feed_name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="feedUrl">Feed URL</label>
+                            <input type="url" class="form-control" id="feedUrl" name="feed_url" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="feedCategory">Category</label>
+                            <input type="text" class="form-control" id="feedCategory" name="feed_category">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Feed</button>
                     </form>
                 </div>
             </div>
