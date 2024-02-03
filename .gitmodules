@@ -1,3 +1,0 @@
-[submodule "src/extract/parser-api"]
-	path = src/extract/parser-api
-	url = https://github.com/postlight/parser-api.git

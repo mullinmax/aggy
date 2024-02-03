@@ -6,6 +6,13 @@ networks:
     name: "traefik_default"
 
 services:
+  blinder-db:
+    image: "redis:latest"
+    ports:
+      - "6379"
+    volumes:
+      - blinder-db:/data
+
   blinder-webui:
     build: ./src/webui
     ports:
@@ -19,32 +26,17 @@ services:
     depends_on:
       - blinder-db
 
-  blinder-db:
-    image: "redis:latest"
+  # https://github.com/HenryQW/mercury-parser-api
+  blinder-extract:
+    image: wangqiru/mercury-parser-api
     ports:
-      - "6379"
-    volumes:
-      - blinder-db:/data
+      - 3000
 
   blinder-ingest:
     build: ./src/ingest
     depends_on:
       - blinder-db
-
-  blinder-preview:
-    image: leftbrained/extract
-    ports:
-      - 8080
-    environment:
-      - EXTRACT_USER=blinder
-      - EXTRACT_SECRET=ney
-    entrypoint:
-      - sh
-      - -c
-      - |
-        mkdir -p /app/users
-        echo "$$EXTRACT_SECRET" > /app/users/$$EXTRACT_USER
-        node app/server.js
+      - blinder-extract
 
 volumes:
   blinder-db:

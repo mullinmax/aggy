@@ -45,8 +45,12 @@ def index():
     feed_items = []
     for key in keys:
         item = json.loads(r.get(key))
-        item['title'] = bleach.clean(item['title'], strip=True)
-        item['summary'] = bleach.clean(item['summary'], tags=['p', 'br', 'strong', 'em', 'ul', 'ol', 'li', 'a'], attributes=['href'], strip=True)
+
+        # Sanitize each string field
+        for field, value in item.items():
+            if isinstance(value, str):
+                item[field] = bleach.clean(value, strip=True)
+
         feed_items.append(item)
 
     return render_template('index.html', feed_items=feed_items)
