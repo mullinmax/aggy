@@ -116,7 +116,7 @@ def process_feed(feed_key):
         feed = feedparser.parse(feed_url)
         existing_items = r.smembers(f"{feed_key}:items")
 
-        for entry in feed.entries[:5]:
+        for entry in feed.entries:
             feed_item_key = f"{feed_key}:item:{entry.id}"
 
             if feed_item_key in existing_items:
@@ -155,9 +155,12 @@ def trigger_feed():
         return jsonify({"status": "error", "message": "Feed key is required"}), 400
 
 
+def start_app():
+    app.run(host='0.0.0.0', port=9001)
 
 def main():
-    app.run(host='0.0.0.0', port=9001)
+    thread = Thread(target=start_app)
+    thread.start()
 
     logging.info("Starting and ingestion process...")
     process_all_feeds()
