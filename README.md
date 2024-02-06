@@ -2,23 +2,18 @@
 
 
 
-## Sites to support
-
-* [ ] youtube
-* [ ] reddit
-* [ ] facebook
-* [ ] X
-* [ ] twitch
-* [ ] amazon? (search results)
-* [ ] mastadon
-* [ ] lemmy
-* [ ] instagram
-* [ ] tik tok
-* [ ] pinterest
-* [ ] linkedin
-* [ ] Adult media
-* [ ] threads
-
+## TODO
+- [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
+- [ ] make side menu useable
+- [ ] pagination
+- [ ] add published date, favicon and metadata to items
+- [ ] add feed management + stats(opens, % open, new since last open)
+- [ ] collect user data (opens, up and down votes)
+- [ ] break image collection into seperate microservice
+- [ ] create embeddings microservice for text/images
+- [ ] create microservice for training models on embeddings and user data
+- [ ] find most relevant image on a website using embeddings?
+- [ ] fix reddit albums getting very low res thumbnails
 
 
 
@@ -100,25 +95,3 @@ erDiagram
     activity }o--|| user : click
 
 ``` 
-
-## Redis for db?
-
-
-```redis
-
-```
-
-### Ingest
-
-```
-for feed in feed:
-    if now > last_read + feed_read_freq:
-        items = parse_feed(feed)
-        feed.last_read = now
-        for imem in items:
-            redis.items += {
-                item
-                feed.id
-            }
-```
-

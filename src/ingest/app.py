@@ -105,6 +105,8 @@ def process_all_feeds():
         feed_data_keys = r.smembers(f"category:{category}")
         for feed_key in feed_data_keys:
             process_feed(feed_key)
+    
+    r.bgsave()
 
 def process_feed(feed_key):
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
