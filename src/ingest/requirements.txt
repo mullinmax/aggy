@@ -2,4 +2,6 @@ feedparser
 redis
 bleach
 requests
+croniter
 beautifulsoup4
+flask

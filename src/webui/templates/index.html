@@ -6,27 +6,48 @@
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
-    <div class="container my-4">
-        <h1 class="text-center mb-4">Blinder</h1>
-        <button id="addFeedButton" class="btn btn-primary mb-3" data-toggle="modal" data-target="#addFeedModal">Add New Feed</button>
-
+    <div class="container-fluid">
         <div class="row">
-            {% for item in feed_items %}
-                <div class="col-md-4 mb-3">
-                    <div class="card">
-                        <img src="{{ item.lead_image_url }}" class="card-img-top" alt="...">
-                        <div class="card-body">
-                            <h5 class="card-title">{{ item.title | safe }}</h5>
-                            <p class="card-text">{{ item.summary | safe }}</p>
-                            <a href="{{ item.url }}" target="_blank" class="btn btn-secondary">Read More</a>
+            <!-- Sidebar for categories -->
+            <div class="col-md-3">
+                <h3>Categories</h3>
+                <ul class="list-group">
+                    <li class="list-group-item">
+                        <a href="{{ url_for('index') }}">All Categories</a>
+                    </li>
+                    {% for category, feeds in categories.items() %}
+                        <li class="list-group-item">
+                            <a href="{{ url_for('index', category_name=category) }}">{{ category }}</a>
+                        </li>
+                    {% endfor %}
+                </ul>
+                <button id="addFeedButton" class="btn btn-primary mt-3" data-toggle="modal" data-target="#addFeedModal">Add New Feed</button>
+            </div>
+
+            <!-- Main content area for feed items -->
+            <div class="col-md-9">
+                <h1 class="text-center mb-4">{{ current_category or "All Categories" }}</h1>
+                <div class="row">
+                    {% for item in feed_items %}
+                        <div class="col-md-4 mb-3">
+                            <div class="card">
+                                {% if item.image_data %}
+                                    <img src="data:image/jpeg;base64,{{ item.image_data }}" class="card-img-top" alt="{{ item.title }}">
+                                {% endif %}
+                                <div class="card-body">
+                                    <h5 class="card-title">{{ item.title | safe }}</h5>
+                                    <p class="card-text">{{ item.summary | safe }}</p>
+                                    <a href="{{ item.url }}" target="_blank" class="btn btn-secondary">Read More</a>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    {% endfor %}
                 </div>
-            {% endfor %}
+            </div>
         </div>
     </div>
 
-    <!-- Modal Structure -->
+    <!-- Modal for Adding New Feed -->
     <div class="modal fade" id="addFeedModal" tabindex="-1" role="dialog" aria-labelledby="modalLabel" aria-hidden="true">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
