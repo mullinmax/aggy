@@ -3,8 +3,9 @@
 
 
 ## TODO
-- [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
 - [ ] make side menu useable
+    - [ ] add an edit/delete button/route for feeds
+    - [ ] when adding feed suggest categories/autofill
 - [ ] pagination
 - [ ] add published date, favicon and metadata to items
 - [ ] add feed management + stats(opens, % open, new since last open)
@@ -14,7 +15,7 @@
 - [ ] create microservice for training models on embeddings and user data
 - [ ] find most relevant image on a website using embeddings?
 - [ ] fix reddit albums getting very low res thumbnails
-
+- [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
 
 
 

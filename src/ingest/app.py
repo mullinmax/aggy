@@ -164,6 +164,7 @@ def main():
     thread = Thread(target=start_app)
     thread.start()
 
+    time.sleep(5)
     logging.info("Starting and ingestion process...")
     process_all_feeds()
 
