@@ -22,77 +22,60 @@
 ### Database Design
 
 ```mermaid
-erDiagram
-    item {
-        item_id id
-        feed_id id
-        title string
-        body string
-        raw_xml string
-        ingest_date datetime
-    }
+flowchart TD
 
-    feed {
-        feed_id id
-        name string
-        url string
-        source type
-        auth string
-    }
+    subgraph key
+        set{{set}}
+        ordered_set([ordered set])
+        string[string]
+        hash>hash]
+        list[[list]]
+    end
 
-    score {
-        score id
-        item_id id
-        model_id id
-        score float
-        confidence float
-    }
+    categories(["
+        CATEGORIES
+        order implies menu order
+    "])
+    
+    schema_version["SCHEMA_VERSION"]
+    category_feeds(["
+        CATEGORY:tech-news:FEEDS
+        order implies menu order
+    "])
 
-    model {
-        model_id id
-        user_id id
-        vector_source_id id
-        train_date datetime
-        tp int
-        fp int
-        tn int
-        fn int
-        weights string
-    }
+    feed>"
+        FEED:Tesla 🚗⚡
+    "]
 
-    vector_source {
-        vector_source_id id
-        name string
-    }
+    url[tesla-news.com/rss]
+    model[model]
+    feed_items{{"
+        FEED:Tesla 🚗⚡:ITEMS
+        sort by: score
+    "}}
+    unread_feed_items{{"
+        FEED:Tesla 🚗⚡:UNREAD_ITEMS
+        sort by: score
+    "}}
 
-    vector {
-        item_id id
-        source id
-    }
+    
 
-    activity {
-        activity_id id
-        user_id id
-        action string
-        time datetime
-    }
+    item>FEED:Tesla 🚗⚡:ITEM:https://tesla.com/blog/1]
 
-    user {
-        id id
-        name string
-        hashed_password string
-        write bool
-        admin bool
-    }
+    item --> link
+    item --> title
+    item --> content
+    item --> user_vote["user vote"]
+    
+    item --> image
 
-    item }o--|| feed : from
-    vector }o--|| vector_source : from
-    item ||--o{ vector : describes
-    item ||--o{ score : ranks
-    score }o--|| model : produces
-    model }o--|| user : predicts
-    model }o--|| vector_source : trained_by
-    item ||--o{ activity : logs
-    activity }o--|| user : click
+    categories --tech-news--> category_feeds
+    category_feeds --Tesla 🚗⚡--> feed
+    feed --url--> url
+    feed --model--> model
+    feed --unread_items_key--> unread_feed_items
+    feed --items_key--> feed_items
+    unread_feed_items --> item
+    feed_items --> item
 
-``` 
+```
