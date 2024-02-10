@@ -19,17 +19,17 @@ services:
     ports:
       - 3000
 
-  blinder-ingest:
-    build: ./src/ingest
-    ports:
-      - 9001
-    environment:
-      - REDIS_HOST=blinder-db
-      - REDIS_PORT=6379
-      - CRON_EXPRESSIONS=0 0/2 * * *
-    depends_on:
-      - blinder-db
-      - blinder-extract
+  # blinder-ingest:
+  #   build: ./src/ingest
+  #   ports:
+  #     - 9001
+  #   environment:
+  #     - REDIS_HOST=blinder-db
+  #     - REDIS_PORT=6379
+  #     - CRON_EXPRESSIONS=0 0/2 * * *
+  #   depends_on:
+  #     - blinder-db
+  #     - blinder-extract
 
   blinder-webui:
     build: ./src/webui
@@ -41,13 +41,14 @@ services:
       - REDIS_PORT=6379
       - INGEST_HOST=blinder-ingest
       - INGEST_PORT=9001
+      - BLINDER_SECRET_KEY=9ud98fhc9e7fh93ufhjd
     labels:
       - "traefik.http.routers.codehost.rule=Host(`codehost.doze.dev`)"
       - "traefik.http.routers.codehost.service=codehost"
       - "traefik.http.services.codehost.loadbalancer.server.port=5000"
     depends_on:
       - blinder-db
-      - blinder-ingest
+      # - blinder-ingest
 
 volumes:
   blinder-db:

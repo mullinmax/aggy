@@ -22,11 +22,61 @@
 ### Database Design
 
 ```mermaid
+flowchart TB
+
+    subgraph Legend
+        direction LR
+        set{{set}}
+        ordered_set([sortered set])
+        string[string]
+        hash>hash]
+        list[[list]]
+        key[\key/]
+    end
+
+    subgraph User Space
+        user>USER:username] 
+        user--password--> password_hash[password hash]
+        user--key-->misc_user_settings[misc user settings]
+        
+        categories([USER:username:CATEGORIES])
+        category>USER:username:CATEGORY:category]
+        category_model[category model]
+        feeds([USER:username:FEEDS])
+        feed>USER:username:FEED:feedname]
+        feed_url[feed url]
+        items([USER:username:FEED:feedname:ITEMS])
+        items_subset{{USER:username:FEED:feedname:ITEMS_SUBSET liked/read}}
+
+        categories --> category
+        category --model--> category_model
+        category --> feeds
+        feeds --> feed
+        feed --> feed_url
+        feed --> items
+        feed --> items_subset
+    end
+
+    items-->item
+    items_subset-->item
+    item>ITEM:url]
+    item-->title
+    item-->content
+    item-->score
+    item-->refrence_count
+    schema_version[SCHEMA_VERSION]
+
+```
+
+
+### old design
+---
+```mermaid
 flowchart TD
 
-    subgraph key
+    subgraph legend
         set{{set}}
-        ordered_set([ordered set])
+        ordered_set([sortered set])
         string[string]
         hash>hash]
         list[[list]]
@@ -44,23 +94,23 @@ flowchart TD
     "])
 
     feed>"
-        FEED:Tesla 🚗⚡
+        CATEGORY:tech-news:FEED:Tesla 🚗⚡
     "]
 
     url[tesla-news.com/rss]
     model[model]
     feed_items{{"
-        FEED:Tesla 🚗⚡:ITEMS
+        CATEGORY:tech-news:FEED:Tesla 🚗⚡:ITEMS
         sort by: score
     "}}
     unread_feed_items{{"
-        FEED:Tesla 🚗⚡:UNREAD_ITEMS
+        CATEGORY:tech-news:FEED:Tesla 🚗⚡:UNREAD_ITEMS
         sort by: score
     "}}
 
     
 
-    item>FEED:Tesla 🚗⚡:ITEM:https://tesla.com/blog/1]
+    item>CATEGORY:tech-news:FEED:Tesla 🚗⚡:ITEM:https://tesla.com/blog/1]
 
     item --> link
     item --> title
