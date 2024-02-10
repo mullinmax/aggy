@@ -1,7 +1,8 @@
-from flask import Blueprint, render_template, redirect, url_for
+from flask import Blueprint, render_template, redirect, url_for, flash
 from flask_login import login_required
 from routes.feed_form import FeedForm
 from routes.category_form import CategoryForm
+from db import r
 
 home_bp = Blueprint('home', __name__, template_folder='templates')
 
@@ -30,7 +31,7 @@ def add_category():
             # Save the new category
             r.set(category_key, category_name)
             flash('Category added successfully.', 'success')
-            return redirect(url_for('auth.dashboard'))  # Adjust the redirect as needed
+            return redirect(url_for('home.home'))  # Adjust the redirect as needed
     return render_template('category_form.html', form=form)
 
 @home_bp.route('/add_feed', methods=['GET', 'POST'])
@@ -50,8 +51,8 @@ def add_feed():
             # Save the new feed with its categories and URL
             r.hmset(feed_key, {'url': feed_url, 'categories': ','.join(selected_categories)})
             flash('Feed added successfully.', 'success')
-            return redirect(url_for('auth.dashboard'))  # Adjust the redirect as needed
-    return render_template('feed_form.html', form=form)
+            return redirect(url_for('home.home'))  # Adjust the redirect as needed
+    return render_template('feed_form.html', feed_form=form)
 
 def get_all_categories():
     # This function needs to retrieve all categories from Redis

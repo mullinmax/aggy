@@ -4,16 +4,17 @@ import redis
 import bcrypt
 import os
 import logging
+from db import r
 
 # Create a Blueprint for authentication
 auth_bp = Blueprint('auth', __name__)
 
-# Environment variables for Redis
-REDIS_HOST = os.getenv('REDIS_HOST')
-REDIS_PORT = os.getenv('REDIS_PORT')
+# # Environment variables for Redis
+# REDIS_HOST = os.getenv('REDIS_HOST')
+# REDIS_PORT = os.getenv('REDIS_PORT')
 
-# Initialize Redis connection
-r = redis.Redis(host=REDIS_HOST, port=int(REDIS_PORT), decode_responses=True)
+# # Initialize Redis connection
+# r = redis.Redis(host=REDIS_HOST, port=int(REDIS_PORT), decode_responses=True)
 
 # Initialize LoginManager
 login_manager = LoginManager()

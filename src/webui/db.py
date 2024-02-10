@@ -3,9 +3,7 @@ import redis
 
 REDIS_HOST = os.getenv('REDIS_HOST')
 REDIS_PORT = os.getenv('REDIS_PORT')
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
-
-
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 # db setup
 def init_db():
@@ -19,8 +17,6 @@ def create_category(category):
 # read categories
 def read_categories():
     return r.zrange("CATEGORIES", 0 -1)
-
-
 
 # create feed
 def create_feed(category, feed_name, url):
@@ -48,7 +44,7 @@ def delete_feed():
 # create item
 def create_item(category, feed, link, title, content, image_key=None):
     feed_key = f'CATEGORY:{category}:FEED:{feed}'
-    r.
+    # r.
     r.hset(f"{feed_key}:ITEM:{link}", mapping={
         'title':title,
         'content':content,
