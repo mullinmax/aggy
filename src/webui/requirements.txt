@@ -1,5 +1,6 @@
-Flask
-flask_login
+flask
+flask-login
+flask-wtf
 redis
 bcrypt
 # bleach

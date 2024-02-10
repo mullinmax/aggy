@@ -1,0 +1,34 @@
+<!-- feed_form.html -->
+<form method="post" action="{{ url_for('home.add_feed') }}">
+    {{ feed_form.hidden_tag() }}
+    <div class="form-group">
+        {{ feed_form.name.label(class="form-control-label") }}
+        {{ feed_form.name(class="form-control") }}
+        {% if feed_form.name.errors %}
+            {% for error in feed_form.name.errors %}
+                <div class="alert alert-danger">{{ error }}</div>
+            {% endfor %}
+        {% endif %}
+    </div>
+    <div class="form-group">
+        {{ feed_form.url.label(class="form-control-label") }}
+        {{ feed_form.url(class="form-control") }}
+        {% if feed_form.url.errors %}
+            {% for error in feed_form.url.errors %}
+                <div class="alert alert-danger">{{ error }}</div>
+            {% endfor %}
+        {% endif %}
+    </div>
+    <div class="form-group">
+        {{ feed_form.categories.label(class="form-control-label") }}
+        {{ feed_form.categories(class="form-control") }}
+        {% if feed_form.categories.errors %}
+            {% for error in feed_form.categories.errors %}
+                <div class="alert alert-danger">{{ error }}</div>
+            {% endfor %}
+        {% endif %}
+    </div>
+    <div class="form-group">
+        {{ feed_form.submit(class="btn btn-primary") }}
+    </div>
+</form>

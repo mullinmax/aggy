@@ -1,6 +1,7 @@
 from flask import Flask
+from flask_login import LoginManager
 import os
-from routes.auth import auth_bp
+from routes.auth import auth_bp, login_manager
 from routes.home import home_bp
 
 # Environment variables for Redis
@@ -12,6 +13,9 @@ BLINDER_SECRET_KEY = os.getenv('BLINDER_SECRET_KEY')
 
 app = Flask(__name__)
 app.secret_key = os.getenv('BLINDER_SECRET_KEY')
+
+# Initialize Flask-Login
+login_manager.init_app(app)
 
 # Register the authentication Blueprint
 app.register_blueprint(auth_bp)
