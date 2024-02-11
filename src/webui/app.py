@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, redirect, url_for
 from flask_login import LoginManager
 import os
 from routes.auth import auth_bp, login_manager
@@ -20,6 +20,11 @@ login_manager.init_app(app)
 # Register the authentication Blueprint
 app.register_blueprint(auth_bp)
 app.register_blueprint(home_bp)
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    return redirect(url_for('home.home'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

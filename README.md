@@ -42,7 +42,7 @@ flowchart TB
         categories([USER:username:CATEGORIES])
         category>USER:username:CATEGORY:category]
         category_model[category model]
-        feeds([USER:username:FEEDS])
+        category_feeds([USER:user:CATEGORY:category:FEEDS])
         feed>USER:username:FEED:feedname]
         feed_url[feed url]
         items([USER:username:FEED:feedname:ITEMS])
@@ -50,10 +50,10 @@ flowchart TB
 
         categories --> category
         category --model--> category_model
-        category --> feeds
-        feeds --> feed
-        feed --> feed_url
-        feed --> items
+        category --feeds--> category_feeds
+        category_feeds --> feed
+        feed --url--> feed_url
+        feed --items_key--> items
         feed --> items_subset
     end
 

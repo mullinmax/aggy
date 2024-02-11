@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, redirect, url_for, flash
-from flask_login import login_required
+from flask_login import login_required, current_user
 from routes.feed_form import FeedForm
 from routes.category_form import CategoryForm
 from db import r
@@ -24,14 +24,12 @@ def add_category():
     if form.validate_on_submit():
         category_name = form.name.data
         # Create a unique key for the category in Redis
-        category_key = f"CATEGORY:{category_name}"
-        if r.exists(category_key):
-            flash('Category already exists.', 'error')
-        else:
-            # Save the new category
-            r.set(category_key, category_name)
-            flash('Category added successfully.', 'success')
-            return redirect(url_for('home.home'))  # Adjust the redirect as needed
+        categories_key = f"USER:{current_user.id}:CATEGORIES"
+        category_key = f"USER:{current_user.id}:CATEGORY:{category_name}"
+        r.zadd(categories_key, {category_key:0}, nx=True) # Add to categories if not already in there
+        r.bgsave()
+        flash('Category added successfully.', 'success')
+        return redirect(url_for('home.home'))  # Adjust the redirect as needed
     return render_template('category_form.html', form=form)
 
 @home_bp.route('/add_feed', methods=['GET', 'POST'])
