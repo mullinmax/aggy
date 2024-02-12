@@ -57,79 +57,17 @@ flowchart TB
         category_feeds --> feed
         feed --url--> feed_url
         feed --name--> feed_name
-        feed --items_key--> items
+        feed -.-> items
         
     end
 
     items-->item
-    items_subset-->item
     item>ITEM:url_hash]
+    item-->url
     item-->title
     item-->content
     item-->score
     item-->refrence_count
     schema_version[SCHEMA_VERSION]
-
-```
-
-
-### old design
----
-```mermaid
-flowchart TD
-
-    subgraph legend
-        set{{set}}
-        ordered_set([sortered set])
-        string[string]
-        hash>hash]
-        list[[list]]
-    end
-
-    categories(["
-        CATEGORIES
-        order implies menu order
-    "])
-    
-    schema_version["SCHEMA_VERSION"]
-    category_feeds(["
-        CATEGORY:tech-news:FEEDS
-        order implies menu order
-    "])
-
-    feed>"
-        CATEGORY:tech-news:FEED:Tesla 🚗⚡
-    "]
-
-    url[tesla-news.com/rss]
-    model[model]
-    feed_items{{"
-        CATEGORY:tech-news:FEED:Tesla 🚗⚡:ITEMS
-        sort by: score
-    "}}
-    unread_feed_items{{"
-        CATEGORY:tech-news:FEED:Tesla 🚗⚡:UNREAD_ITEMS
-        sort by: score
-    "}}
-
-    
-
-    item>CATEGORY:tech-news:FEED:Tesla 🚗⚡:ITEM:https://tesla.com/blog/1]
-
-    item --> link
-    item --> title
-    item --> content
-    item --> user_vote["user vote"]
-    
-    item --> image
-
-    categories --tech-news--> category_feeds
-    category_feeds --Tesla 🚗⚡--> feed
-    feed --url--> url
-    feed --model--> model
-    feed --unread_items_key--> unread_feed_items
-    feed --items_key--> feed_items
-    unread_feed_items --> item
-    feed_items --> item
 
 ```
