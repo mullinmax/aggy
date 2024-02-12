@@ -35,8 +35,9 @@ flowchart TB
     end
 
     subgraph User Space
-        user>USER:username] 
+        user>USER:username_hash] 
         user--password--> password_hash[password hash]
+        user--username--> username[username]
         user--key-->misc_user_settings[misc user settings]
         
         categories([USER:username:CATEGORIES])
@@ -50,7 +51,7 @@ flowchart TB
 
         categories --> category
         category --model--> category_model
-        category --feeds--> category_feeds
+        category -.-> category_feeds
         category_feeds --> feed
         feed --url--> feed_url
         feed --items_key--> items

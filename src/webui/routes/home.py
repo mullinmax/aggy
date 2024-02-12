@@ -32,25 +32,46 @@ def add_category():
         return redirect(url_for('home.home'))  # Adjust the redirect as needed
     return render_template('category_form.html', form=form)
 
+# @home_bp.route('/add_feed', methods=['GET', 'POST'])
+# @login_required
+# def add_feed():
+#     form = FeedForm()
+#     # Dynamically populate the categories choices
+#     form.categories.choices = [(category, category) for category in get_all_categories()]
+#     if form.validate_on_submit():
+#         feed_name = form.name.data
+#         feed_url = form.url.data
+#         selected_categories = form.categories.data
+#         category_key = "USER:{current_user.id}:CATEGORY:{}"
+#         feed_key = f"USER:{current_user.id}:FEED:{feed_name}"
+
+#         r.hmset(feed_key, {'url': feed_url, 'categories': ','.join(selected_categories)})
+#         flash('Feed added successfully.', 'success')
+#         return redirect(url_for('home.home'))  # Adjust the redirect as needed
+#     return render_template('feed_form.html', feed_form=form)
+
+
 @home_bp.route('/add_feed', methods=['GET', 'POST'])
 @login_required
 def add_feed():
     form = FeedForm()
-    # Dynamically populate the categories choices
-    form.categories.choices = [(category, category) for category in get_all_categories()]
     if form.validate_on_submit():
         feed_name = form.name.data
         feed_url = form.url.data
-        selected_categories = form.categories.data
-        feed_key = f"FEED:{feed_name}"
-        if r.exists(feed_key):
-            flash('Feed already exists.', 'error')
-        else:
-            # Save the new feed with its categories and URL
-            r.hmset(feed_key, {'url': feed_url, 'categories': ','.join(selected_categories)})
-            flash('Feed added successfully.', 'success')
-            return redirect(url_for('home.home'))  # Adjust the redirect as needed
-    return render_template('feed_form.html', feed_form=form)
+        category_name = form.category.data.strip()
+
+        # Check if the category already exists; if not, create a new one
+        category_key = f"USER:{current_user.id}:CATEGORY:{category_name}"
+        if not r.exists(category_key):
+            r.set(category_key, category_name)  # Create the new category
+
+        feed_key = f"USER:{current_user.id}:FEED:{feed_name}"
+        r.hmset(feed_key, {'url': feed_url, 'category': category_name})
+        flash('Feed added successfully.', 'success')
+        return redirect(url_for('home.home'))
+
+    return render_template('feed_form.html', feed_form=form, categories=get_all_categories())
+
 
 def get_all_categories():
     # This function needs to retrieve all categories from Redis
