@@ -34,33 +34,36 @@ flowchart TB
         key[\key/]
     end
 
-    subgraph User Space
+    subgraph User Space ALL keys prefixed with USER:username_hash:
         user>USER:username_hash] 
         user--password--> password_hash[password hash]
         user--username--> username[username]
         user--key-->misc_user_settings[misc user settings]
         
-        categories([USER:username:CATEGORIES])
-        category>USER:username:CATEGORY:category]
+        categories([CATEGORIES])
+        category>CATEGORY:uuid]
         category_model[category model]
-        category_feeds([USER:user:CATEGORY:category:FEEDS])
-        feed>USER:username:FEED:feedname]
+        category_feeds([CATEGORY:uuid:FEEDS])
+        feed>FEED:uuid]
         feed_url[feed url]
-        items([USER:username:FEED:feedname:ITEMS])
-        items_subset{{USER:username:FEED:feedname:ITEMS_SUBSET liked/read}}
+        feed_name[feed name]
+        items([FEED:uuid:ITEMS])
 
+        
         categories --> category
+        
         category --model--> category_model
         category -.-> category_feeds
         category_feeds --> feed
         feed --url--> feed_url
+        feed --name--> feed_name
         feed --items_key--> items
-        feed --> items_subset
+        
     end
 
     items-->item
     items_subset-->item
-    item>ITEM:url]
+    item>ITEM:url_hash]
     item-->title
     item-->content
     item-->score
