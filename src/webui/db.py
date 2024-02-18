@@ -1,9 +1,11 @@
 import os
 import redis
-from pydantic import BaseModel, HttpUrl, constr, ValidationError, validator
+from pydantic import BaseModel, HttpUrl, constr, ValidationError
+from uuid import uuid4
+from typing import List, Set
 
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = os.getenv('REDIS_PORT', 6379)
+REDIS_HOST = os.getenv('REDIS_HOST')
+REDIS_PORT = os.getenv('REDIS_PORT')
 r = redis.Redis(host=REDIS_HOST, port=int(REDIS_PORT), decode_responses=True, db=0)
 
 class FeedAlreadyExistsError(Exception):
@@ -15,111 +17,113 @@ class FeedNotFoundError(Exception):
 def init_db():
     r.set("SCHEMA_VERSION", "1.0.0")
 
+class Category(BaseModel):
+    user_hash: str
+    name: constr(strict=True, min_length=1)
+    uuid: str = ""  # UUID is generated if not provided
+
+    def create(self):
+        if not self.uuid:
+            self.uuid = str(uuid4())
+        category_key = f"USER:{self.user_hash}:CATEGORY:{self.uuid}"
+        
+        if not r.exists(category_key):
+            r.hset(category_key, mapping={'name': self.name, 'user': self.user_hash})
+            r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.uuid)
+        
+        return self.uuid
+
+    @staticmethod
+    def read_all(user_hash) -> List['Category']:
+        category_uuids = r.smembers(f"USER:{user_hash}:CATEGORIES")
+        categories = []
+        for uuid in category_uuids:
+            category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{uuid}")
+            categories.append(Category(**category_data, uuid=uuid))
+        return categories
+
 class Feed(BaseModel):
     user: str
     name: constr(strict=True, min_length=1)
     url: HttpUrl
-    category: constr(strict=True, min_length=1)
-
-    # @validator('name', 'category')
-    # def no_colons_allowed(cls, v, field):
-    #     if ':' in v:
-    #         raise ValueError(f"The {field.name} cannot contain colons (:)")
-    #     return v
+    category_uuids: Set[str] = set()  # Set of category UUIDs
+    uuid: str = ""  # UUID is generated if not provided
 
     def create(self):
-        feed_key = f"USER:{self.user}:FEED:{self.name}"
-        category_key = f"USER:{self.user}:CATEGORY:{self.category}"
-        feeds_key = f"{category_key}:FEEDS"
-
-        # Check if the feed already exists
-        if r.exists(feed_key):
-            raise Exception(f'Feed: {feed_key} already exists')
-
-        # Use ZADD to add the category and feed to sorted sets
-        # Assuming a default score for demonstration purposes. Adjust as needed.
-        default_score = 0
-        r.zadd(f"USER:{self.user}:CATEGORIES", {category_key: default_score}, nx=True)
-        r.zadd(feeds_key, {feed_key: default_score}, nx=True)
-
-        # Set feed details
-        r.hset(feed_key, mapping={
-            'url': self.url,
-            'category': self.category
-            # Include other details as necessary
-        })
-
-    @classmethod
-    def read(cls, user, feed_name):
-        feed_key = f"USER:{user}:FEED:{feed_name}"
-        if not r.exists(feed_key):
-            raise FeedNotFoundError(f'Feed {feed_name} not found for user {user}')
+        if not self.uuid:
+            self.uuid = str(uuid4())
+        feed_key = f"USER:{self.user_hash}:FEED:{self.uuid}"
         
-        feed_data = r.hgetall(feed_key)
-        return cls(user=user, name=feed_name, **feed_data)
+        if not r.exists(feed_key):
+            r.hset(feed_key, mapping={
+                'url': self.url,
+                'name': self.name,
+                'user': self.user_hash
+                }
+            )
+            for category_uuid in self.category_uuids:
+                self._add_to_category(category_uuid)
+        
+        return self.uuid
+
+    def _add_to_category(self, category_uuid):
+        r.sadd(f"USER:{self.user_hash}:CATEGORY:{category_uuid}:FEEDS", self.uuid)
+        r.sadd(f"USER:{self.user_hash}:FEED:{self.uuid}:CATEGORIES", category_uuid)
+
+    def update_categories(self, new_category_uuids: Set[str]):
+        # Validate new categories exist
+        valid_new_categories = set()
+        for category_uuid in new_category_uuids:
+            if r.exists(f"USER:{self.user_hash}:CATEGORY:{category_uuid}"):
+                valid_new_categories.add(category_uuid)
+        
+        # Proceed only if there are valid new categories
+        if not valid_new_categories:
+            raise ValueError("No valid new categories provided.")
+        
+        # Get current categories
+        current_categories = r.smembers(f"USER:{self.user_hash}:FEED:{self.uuid}:CATEGORIES")
+
+        # Find categories to remove (those not in new valid categories)
+        categories_to_remove = current_categories - valid_new_categories
+
+        # Remove feed from categories no longer associated with
+        for category_uuid in categories_to_remove:
+            r.srem(f"USER:{self.user_hash}:CATEGORY:{category_uuid}:FEEDS", self.uuid)
+            r.srem(f"USER:{self.user_hash}:FEED:{self.uuid}:CATEGORIES", category_uuid)
+
+        # Find new categories to add (those not in current categories)
+        categories_to_add = valid_new_categories - current_categories
+
+        # Add feed to new categories
+        for category_uuid in categories_to_add:
+            self._add_to_category(category_uuid)
+
+    @staticmethod
+    def read(user_hash, feed_uuid) -> 'Feed':
+        feed_key = f"USER:{self.user_hash}:FEED:{feed_uuid}"
+        if r.exists(feed_key):
+            feed_data = r.hgetall(feed_key)
+            category_uuids = r.smembers(f"USER:{self.user_hash}:FEED:{feed_uuid}:CATEGORIES")
+            return Feed(**feed_data, category_uuids=category_uuids, uuid=feed_uuid)
+        else:
+            return None
+
+    @staticmethod
+    def read_all(user) -> List['Feed']:
+        feed_uuids = r.keys(f"USER:{user}:FEED:*")
+        feeds = []
+        for uuid in feed_uuids:
+            feed_data = r.hgetall(f"USER:{self.user_hash}:FEED:{uuid}")
+            category_uuids = r.smembers(f"USER:{self.user_hash}:FEED:{uuid}:CATEGORIES")
+            feeds.append(Feed(**feed_data, category_uuids=category_uuids, uuid=uuid))
+        return feeds
 
     def delete(self):
-        feed_key = f"USER:{self.user}:FEED:{self.name}"
-        if not r.exists(feed_key):
-            raise FeedNotFoundError(f'Feed {self.name} not found for user {self.user}')
-        
-        # r.
-        r.delete(feed_key)
-        # Optionally remove the feed from the category set
-
-
-
-
-
-# create category
-def create_category(category):
-    r.zadd("CATEGORIES", 0, f"CATEGORY:{category}:FEEDS", nx=True)
-
-# read categories
-def read_categories():
-    return r.zrange("CATEGORIES", 0 -1)
-
-# create feed
-def create_feed(category, feed_name, url):
-    create_category(category)
-    r.hset(f"CATEGORY:{category}:FEED:{feed_name}", mapping={
-        'url':url,
-        'unread_items_key':f'CATEGORY:{category}:FEED:{feed_name}:UNREAD_ITEMS',
-        'items_key':f'CATEGORY:{category}:FEED:{feed_name}:ITEMS'
-    })
-
-# read feeds
-def read_feed(category, feed):
-    return r.hget(f"CATEGORY:{category}:FEED:{feed_name}")
-
-# update feed
-def update_feed():
-    pass
-
-# delete feed
-def delete_feed():
-    pass
-
-
-
-# create item
-def create_item(category, feed, link, title, content, image_key=None):
-    feed_key = f'CATEGORY:{category}:FEED:{feed}'
-    # r.
-    r.hset(f"{feed_key}:ITEM:{link}", mapping={
-        'title':title,
-        'content':content,
-        'image':image_key
-    })
-
-# read item
-def read_item(category, feed, link):
-    return r.hget(f"CATEGORY:{category}:FEED:{feed_name}:ITEM:{link}")
-
-# update item
-def update_item():
-    pass
-
-# delete item
-def delete_item():
-    pass
+        feed_key = f"USER:{self.user_hash}:FEED:{self.uuid}"
+        if r.exists(feed_key):
+            # Clean up category memberships
+            category_uuids = r.smembers(f"USER:{self.user_hash}:FEED:{self.uuid}:CATEGORIES")
+            for category_uuid in category_uuids:
+                r.srem(f"USER:{self.user_hash}:CATEGORY:{category_uuid}:FEEDS", self.uuid)
+            r.delete(feed_key)

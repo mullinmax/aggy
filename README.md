@@ -27,11 +27,12 @@ flowchart TB
     subgraph Legend
         direction LR
         set{{set}}
-        ordered_set([sortered set])
+        sorted_set([sortered set])
         string[string]
         hash>hash]
         list[[list]]
-        key[\key/]
+        hash --linked by key-->string
+        hash -.linked implicitly.-> sorted_set
     end
 
     subgraph User Space ALL keys prefixed with USER:username_hash:
@@ -44,6 +45,7 @@ flowchart TB
         category>CATEGORY:uuid]
         category_model[category model]
         category_feeds([CATEGORY:uuid:FEEDS])
+        feed_categories([FEED:uuid:CATEGORIES])
         feed>FEED:uuid]
         feed_url[feed url]
         feed_name[feed name]
@@ -55,9 +57,12 @@ flowchart TB
         category --model--> category_model
         category -.-> category_feeds
         category_feeds --> feed
+        feed -.-> feed_categories
+        feed_categories --> category
         feed --url--> feed_url
         feed --name--> feed_name
         feed -.-> items
+
         
     end
 
