@@ -1,4 +1,4 @@
-from flask import Flask, Blueprint, request, redirect, url_for, render_template, flash, session
+from flask import Flask, Blueprint, request, redirect, url_for, render_template, flash, session, jsonify, current_app
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required
 import redis
 import bcrypt
@@ -35,46 +35,53 @@ def load_user(username_hash):
 def login():
     """Login route for authenticating users."""
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password'].encode('utf-8')
+        username = request.form.get('username')
+        password = request.form.get('password')
 
-        hashed_username = hash_username(username)
-        user_key = f'USER:{hashed_username}'
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
+
+        user_hash = hash_username(username)
+        current_app.logger.info(user_hash)
+        user_key = f'USER:{user_hash}'
 
         user_data = r.hgetall(user_key)
         stored_password_hash = user_data.get('password')
-        if stored_password_hash and bcrypt.checkpw(password, stored_password_hash.encode('utf-8')):
-            user = User(hashed_username, username)
+        if stored_password_hash and bcrypt.checkpw(password.encode('utf-8'), stored_password_hash.encode('utf-8')):
+            user = User(user_hash, username)
             login_user(user)
-            flash('Logged in successfully.')
-            return redirect(url_for('home.home'))  # Ensure 'home.home' is the correct route
+            return jsonify({'message': 'Logged in successfully.'}), 200
         else:
-            flash('Invalid username or password')
+            return jsonify({'error': 'Invalid username or password'}), 401
+
     return render_template('login.html')
+
 
 @auth_bp.route('/register', methods=['GET', 'POST'])
 def register():
     """Route for registering new users."""
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password'].encode('utf-8')
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        # Check if username and password are provided
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
 
         hashed_username = hash_username(username)
         user_key = f'USER:{hashed_username}'
 
         if r.exists(user_key):
-            flash('Username already exists')
-            return render_template('register.html')
+            return jsonify({'error': 'Username already exists'}), 409
 
-        hashed_password = bcrypt.hashpw(password, bcrypt.gensalt()).decode('utf-8')
-        r.hset(user_key, mapping={
-            'username': username,
-            'password': hashed_password,
-        })
-        flash('Registration successful! Please log in.')
-        return redirect(url_for('auth.login'))
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        r.hset(user_key, mapping={'username': username, 'password': hashed_password})
+        r.bgsave()
+        return jsonify({'message': 'Registration successful! Please log in.'}), 201
 
+    # For GET request, render the registration form
     return render_template('register.html')
+
 
 @auth_bp.route('/logout')
 def logout():

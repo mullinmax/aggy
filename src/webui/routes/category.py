@@ -9,7 +9,6 @@ category_bp = Blueprint('category', __name__, url_prefix='/category')
 @category_bp.route('/create', methods=['POST'])
 @login_required
 def create_category():
-    current_app.logger.info('HELLO')
     # Assuming the username_hash is stored in the session upon login
     user_hash = current_user.id
     current_app.logger.info(user_hash)
@@ -32,10 +31,10 @@ def create_category():
 @category_bp.route('/list', methods=['GET'])
 @login_required
 def list_categories():
-    user_hash = session.get('user_hash')
+    user_hash = current_user.id
     if not user_hash:
         flash('User identification failed.')
         return redirect(url_for('auth.login'))
 
-    categories = Category.read_all(user=user_hash)
+    categories = Category.read_all(user_hash=user_hash)
     return jsonify(categories), 200

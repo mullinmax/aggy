@@ -28,7 +28,7 @@ class Category(BaseModel):
         category_key = f"USER:{self.user_hash}:CATEGORY:{self.uuid}"
         
         if not r.exists(category_key):
-            r.hset(category_key, mapping={'name': self.name, 'user': self.user_hash})
+            r.hset(category_key, mapping={'name': self.name, 'user_hash': self.user_hash})
             r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.uuid)
         
         return self.uuid

@@ -9,7 +9,7 @@
             <div class="card">
                 <h5 class="card-header">Register</h5>
                 <div class="card-body">
-                    <form method="post" action="/register">
+                    <form id="registrationForm">
                         <div class="form-group">
                             <label for="username">Username</label>
                             <input type="text" class="form-control" id="username" name="username" placeholder="Enter username" required>
@@ -25,4 +25,36 @@
         </div>
     </div>
 </div>
+<script>
+    document.getElementById('registrationForm').addEventListener('submit', function(e) {
+        e.preventDefault();  // Prevent the default form submission
+
+        var formData = new FormData(this);
+        fetch('/register', {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-CSRFToken': '{{ csrf_token() }}'  // Include CSRF token
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.error) {
+                alert(data.error);  // Display error message
+            } else {
+                alert(data.message);  // Display success message
+                window.location.href = '/home';  // Redirect to the home page
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('An error occurred');
+        });
+    });
+</script>
 {% endblock %}
