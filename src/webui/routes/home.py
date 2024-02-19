@@ -1,7 +1,5 @@
 from flask import Blueprint, render_template, redirect, url_for, flash, current_app
 from flask_login import login_required, current_user
-from routes.feed_form import FeedForm
-from routes.category_form import CategoryForm
 from db import r, Category
 
 home_bp = Blueprint('home', __name__, template_folder='templates')
@@ -15,7 +13,7 @@ def home():
         return redirect(url_for('auth.login'))
 
     categories = Category.read_all(user_hash=user_hash)
-    return render_template('home.html', categories=categories, category_form=CategoryForm(), feed_form=FeedForm())
+    return render_template('home.html', categories=categories)
 
 def get_all_categories():
     # This function needs to retrieve all categories from Redis

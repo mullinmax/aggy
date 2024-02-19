@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ category.name }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2 class="text-center">{{ category.name }}</h2>
+    
+    <!-- Feeds in the Category -->
+    <div class="mb-3">
+        <h4>Feeds</h4>
+        <ul class="list-group">
+            {% for feed in category.feeds %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    {{ feed.name }}
+                    <a href="/feed/{{ feed.id }}">View Feed</a>
+                </li>
+            {% endfor %}
+            <li class="list-group-item">
+                <button class="btn btn-link" type="button" data-bs-toggle="collapse" data-bs-target="#addFeedForm" aria-expanded="false" aria-controls="addFeedForm">
+                    + Add Feed
+                </button>
+            </li>
+        </ul>
+    </div>
+
+    <!-- Add Feed Form -->
+    <div class="row justify-content-center mt-4">
+        <div class="col-md-6">
+            <h3 class="text-center">Add New Feed to "{{ category.name }}"</h3>
+            {% with all_categories=[category] %}
+                {% include 'feed_form.html' %}
+            {% endwith %}
+        </div>
+    </div>
+
+    <!-- Items from All Feeds in the Category -->
+    <div>
+        <h4>Items in "{{ category.name }}" Category</h4>
+        {% for item in category.items %}
+            <div class="card mt-2">
+                <div class="card-body">
+                    <h5 class="card-title">{{ item.title }}</h5>
+                    <p class="card-text">{{ item.description }}</p>
+                    <a href="{{ item.link }}" class="card-link">Read more</a>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, session, jsonify, flash, redirect, url_for, current_app
+from flask import Blueprint, request, session, jsonify, flash, redirect, url_for, current_app, render_template
 from flask_login import login_required, current_user
 from db import Category  # Import your Category class here
 
@@ -40,3 +40,8 @@ def list_categories():
     categories = Category.read_all(user_hash=user_hash)
     return jsonify(categories), 200
 
+@category_bp.route('/<name_hash>', methods=['GET'])
+@login_required
+def view_category(name_hash):
+    return render_template('view_category.html')
+    
