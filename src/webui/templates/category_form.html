@@ -18,14 +18,24 @@
                 'X-CSRFToken': '{{ csrf_token() }}'  // Add CSRF token if you're using CSRF protection
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                // Handle non-OK responses by parsing the JSON body to get the error message
+                return response.json().then(data => {
+                    throw new Error(data.error || 'Network response was not ok');
+                });
+            }
+            return response.json();
+        })
         .then(data => {
-            alert(data.message);  // Display success message
-            window.location.href = '/home';  // Redirect to the home page or any other page
+            if (data.message) {
+                showToast(data.message);
+                window.location.href = '/home';  // Redirect to the home page
+            }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('An error occurred');
+            showToast(error.message, true);  // Show the actual error message
         });
     });
 </script>

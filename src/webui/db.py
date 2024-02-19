@@ -3,6 +3,7 @@ import redis
 from pydantic import BaseModel, HttpUrl, constr, ValidationError
 from uuid import uuid4
 from typing import List, Set
+import hashlib
 
 REDIS_HOST = os.getenv('REDIS_HOST')
 REDIS_PORT = os.getenv('REDIS_PORT')
@@ -20,26 +21,28 @@ def init_db():
 class Category(BaseModel):
     user_hash: str
     name: constr(strict=True, min_length=1)
-    uuid: str = ""  # UUID is generated if not provided
+    name_hash: str = ""  # generated if not provided
 
     def create(self):
-        if not self.uuid:
-            self.uuid = str(uuid4())
-        category_key = f"USER:{self.user_hash}:CATEGORY:{self.uuid}"
+        if not self.name_hash:
+            self.name_hash = hashlib.sha256(self.name.encode()).hexdigest()
+        category_key = f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
         
-        if not r.exists(category_key):
-            r.hset(category_key, mapping={'name': self.name, 'user_hash': self.user_hash})
-            r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.uuid)
+        if r.exists(category_key):
+            raise Exception(f"Category with name {self.name} already exists")    
+
+        r.hset(category_key, mapping={'name': self.name, 'user_hash': self.user_hash})
+        r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
         
-        return self.uuid
+        return category_key
 
     @staticmethod
     def read_all(user_hash) -> List['Category']:
-        category_uuids = r.smembers(f"USER:{user_hash}:CATEGORIES")
+        category_name_hashs = r.smembers(f"USER:{user_hash}:CATEGORIES")
         categories = []
-        for uuid in category_uuids:
-            category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{uuid}")
-            categories.append(Category(**category_data, uuid=uuid))
+        for name_hash in category_name_hashs:
+            category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{name_hash}")
+            categories.append(Category(**category_data, name_hash=name_hash))
         return categories
 
 class Feed(BaseModel):

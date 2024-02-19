@@ -23,9 +23,10 @@ def create_category():
     # Create and save the new category
     try:
         category = Category(user_hash=user_hash, name=category_name)
-        category_uuid = category.create()
-        return jsonify({'message': 'Category created successfully', 'category_uuid': category_uuid}), 201
+        category_key = category.create()
+        return jsonify({'message': 'Category created successfully', 'category_key': category_key}), 201
     except Exception as e:
+        current_app.logger.info(str(e))
         return jsonify({'error': str(e)}), 400
 
 @category_bp.route('/list', methods=['GET'])
@@ -38,3 +39,4 @@ def list_categories():
 
     categories = Category.read_all(user_hash=user_hash)
     return jsonify(categories), 200
+
