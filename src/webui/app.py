@@ -26,10 +26,10 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(home_bp)
 app.register_blueprint(category_bp)
 
-# @app.route('/', defaults={'path': ''})
-# @app.route('/<path:path>')
-# def catch_all(path):
-#     return redirect(url_for('home.home'))
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    return redirect(url_for('home.home'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

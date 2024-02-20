@@ -6,31 +6,39 @@
 <div class="container mt-4">
     <h2 class="text-center">{{ category.name }}</h2>
     
-    <!-- Feeds in the Category -->
+    <!-- Collapsible Feeds in the Category -->
     <div class="mb-3">
-        <h4>Feeds</h4>
-        <ul class="list-group">
-            {% for feed in category.feeds %}
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                    {{ feed.name }}
-                    <a href="/feed/{{ feed.id }}">View Feed</a>
-                </li>
-            {% endfor %}
-            <li class="list-group-item">
-                <button class="btn btn-link" type="button" data-bs-toggle="collapse" data-bs-target="#addFeedForm" aria-expanded="false" aria-controls="addFeedForm">
-                    + Add Feed
-                </button>
-            </li>
-        </ul>
+        <button class="btn btn-link" type="button" data-bs-toggle="collapse" data-bs-target="#feedsList" aria-expanded="false" aria-controls="feedsList">
+            <h4>Feeds</h4>
+        </button>
+        <div class="collapse" id="feedsList">
+            <ul class="list-group">
+                {% for feed in feeds %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        {{ feed.name }}
+                        <span class="settings-gear">
+                            <a href="/edit_feed/{{ feed.id }}"><i class="fas fa-cog"></i></a>
+                        </span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
     </div>
 
-    <!-- Add Feed Form -->
-    <div class="row justify-content-center mt-4">
-        <div class="col-md-6">
-            <h3 class="text-center">Add New Feed to "{{ category.name }}"</h3>
-            {% with all_categories=[category] %}
-                {% include 'feed_form.html' %}
-            {% endwith %}
+    <!-- Add Feed Button and Collapsible Form -->
+    <div class="mb-3">
+        <button class="btn btn-link" type="button" data-bs-toggle="collapse" data-bs-target="#addFeedForm" aria-expanded="false" aria-controls="addFeedForm">
+            + Add Feed
+        </button>
+        <div class="collapse" id="addFeedForm">
+            <div class="row justify-content-center mt-4">
+                <div class="col-md-6">
+                    <h3 class="text-center">Add New Feed to "{{ category.name }}"</h3>
+                    {% with all_categories=[category] %}
+                        {% include 'feed_form.html' %}
+                    {% endwith %}
+                </div>
+            </div>
         </div>
     </div>
 

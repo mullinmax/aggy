@@ -11,11 +11,6 @@ category_bp = Blueprint('category', __name__, url_prefix='/category')
 def create_category():
     # Assuming the username_hash is stored in the session upon login
     user_hash = current_user.id
-    current_app.logger.info(user_hash)
-    if not user_hash:
-        flash('User identification failed.')
-        return redirect(url_for('auth.login'))
-
     category_name = request.form.get('name')
     if not category_name:
         return jsonify({'error': 'Category name is required'}), 400
@@ -33,15 +28,26 @@ def create_category():
 @login_required
 def list_categories():
     user_hash = current_user.id
-    if not user_hash:
-        flash('User identification failed.')
-        return redirect(url_for('auth.login'))
-
     categories = Category.read_all(user_hash=user_hash)
     return jsonify(categories), 200
 
 @category_bp.route('/<name_hash>', methods=['GET'])
 @login_required
 def view_category(name_hash):
-    return render_template('view_category.html')
+    try:
+        user_hash = current_user.id
+        category = Category.read(user_hash, name_hash)
+        feeds = [
+            {
+                'name':'first',
+                'id':'1u0wud09udw'
+            },
+            {
+                'name':'second',
+                'id':'1u0wudasdaw'
+            }
+        ]
+        return render_template('view_category.html', category=category, feeds=feeds)
+    except:
+        return redirect(url_for('home.home'))
     

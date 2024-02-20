@@ -4,6 +4,7 @@ from pydantic import BaseModel, HttpUrl, constr, ValidationError
 from uuid import uuid4
 from typing import List, Set
 import hashlib
+from flask import current_app
 
 REDIS_HOST = os.getenv('REDIS_HOST')
 REDIS_PORT = os.getenv('REDIS_PORT')
@@ -36,13 +37,21 @@ class Category(BaseModel):
         
         return category_key
 
-    @staticmethod
-    def read_all(user_hash) -> List['Category']:
+    @classmethod
+    def read(cls, user_hash, name_hash):
+        category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{name_hash}")
+        current_app.logger.info(category_data)
+        if category_data:
+            return Category(**category_data, name_hash=name_hash)
+        else:
+            raise Exception("Category does not exist")
+
+    @classmethod
+    def read_all(cls, user_hash) -> List['Category']:
         category_name_hashs = r.smembers(f"USER:{user_hash}:CATEGORIES")
         categories = []
         for name_hash in category_name_hashs:
-            category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{name_hash}")
-            categories.append(Category(**category_data, name_hash=name_hash))
+            categories.append(cls.read(user_hash, name_hash))
         return categories
 
 class Feed(BaseModel):
