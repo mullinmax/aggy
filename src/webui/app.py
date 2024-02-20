@@ -29,6 +29,7 @@ app.register_blueprint(category_bp)
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def catch_all(path):
+    app.logger.error(f'rerouting unknown route to home: {path}')
     return redirect(url_for('home.home'))
 
 if __name__ == '__main__':
