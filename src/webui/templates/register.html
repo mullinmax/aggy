@@ -39,21 +39,21 @@
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Network response was not ok');
+                throw new Error('Unable to register, please wait a moment then try again');
             }
             return response.json();
         })
         .then(data => {
             if (data.error) {
-                alert(data.error);  // Display error message
+                showToast(error, true);
             } else {
-                alert(data.message);  // Display success message
+                showToast(data.message);  // Display success message
                 window.location.href = '/home';  // Redirect to the home page
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('An error occurred');
+            showToast(error, true);
         });
     });
 </script>

@@ -42,21 +42,20 @@
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Network response was not ok');
+                throw new Error('Unable to login, please check your username & password, then try again');
             }
             return response.json();
         })
         .then(data => {
             if (data.error) {
-                alert(data.error);
+                showToast(data.error);
             } else {
-                alert(data.message);
                 window.location.href = '/home';
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('An error occurred');
+            showToast(error, true);
         });
     });
 </script>
