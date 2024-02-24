@@ -1,6 +1,6 @@
 from flask import Blueprint, request, session, jsonify, flash, redirect, url_for, current_app, render_template
 from flask_login import login_required, current_user
-from db import Category  # Import your Category class here
+from db import Category
 
 # Define the blueprint
 category_bp = Blueprint('category', __name__, url_prefix='/category')

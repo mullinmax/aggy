@@ -6,6 +6,7 @@ import os
 from routes.auth import auth_bp, login_manager
 from routes.home import home_bp
 from routes.category import category_bp
+from routes.feed import feed_bp
 import logging 
 # Environment variables for Redis
 REDIS_HOST = os.getenv('REDIS_HOST')
@@ -25,6 +26,7 @@ login_manager.init_app(app)
 app.register_blueprint(auth_bp)
 app.register_blueprint(home_bp)
 app.register_blueprint(category_bp)
+app.register_blueprint(feed_bp)
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')

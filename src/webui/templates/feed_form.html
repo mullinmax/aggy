@@ -12,7 +12,7 @@
         <label for="categories">Categories</label>
         <select multiple class="form-control" id="categories" name="categories">
             {% for category in all_categories %}
-                <option value="{{ category.id }}">{{ category.name }}</option>
+                <option value="{{ category.name_hash }}">{{ category.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -21,9 +21,9 @@
 <script>
     document.getElementById('addFeedForm').addEventListener('submit', function(e) {
         e.preventDefault();  // Prevent the default form submission
-
+        
         var formData = new FormData(this);
-        fetch('/add_feed', {
+        fetch('/feed/add', {
             method: 'POST',
             body: formData,
             headers: {
@@ -41,7 +41,6 @@
         .then(data => {
             if (data.message) {
                 showToast(data.message);
-                // Optionally redirect or update the page
             }
         })
         .catch(error => {

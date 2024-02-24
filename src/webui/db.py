@@ -55,7 +55,7 @@ class Category(BaseModel):
         return categories
 
 class Feed(BaseModel):
-    user: str
+    user_hash: str
     name: constr(strict=True, min_length=1)
     url: HttpUrl
     category_uuids: Set[str] = set()  # Set of category UUIDs
@@ -68,7 +68,7 @@ class Feed(BaseModel):
         
         if not r.exists(feed_key):
             r.hset(feed_key, mapping={
-                'url': self.url,
+                'url': str(self.url),
                 'name': self.name,
                 'user': self.user_hash
                 }
@@ -122,8 +122,8 @@ class Feed(BaseModel):
             return None
 
     @staticmethod
-    def read_all(user) -> List['Feed']:
-        feed_uuids = r.keys(f"USER:{user}:FEED:*")
+    def read_all(user_hash) -> List['Feed']:
+        feed_uuids = r.keys(f"USER:{user_hash}:FEED:*")
         feeds = []
         for uuid in feed_uuids:
             feed_data = r.hgetall(f"USER:{self.user_hash}:FEED:{uuid}")
