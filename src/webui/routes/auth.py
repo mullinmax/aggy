@@ -76,6 +76,7 @@ def register():
 
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         r.hset(user_key, mapping={'username': username, 'password': hashed_password})
+        r.sadd('USERS', user_key)
         r.bgsave()
         return jsonify({'message': 'Registration successful! Please log in.'}), 201
 

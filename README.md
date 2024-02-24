@@ -46,6 +46,7 @@ flowchart TB
         category_model[category model]
         category_feeds([CATEGORY:uuid:FEEDS])
         feed_categories([FEED:uuid:CATEGORIES])
+        feeds{{FEEDS}}
         feed>FEED:uuid]
         feed_url[feed url]
         feed_name[feed name]
@@ -57,6 +58,7 @@ flowchart TB
         category --model--> category_model
         category -.-> category_feeds
         category_feeds --> feed
+        feeds --> feed
         feed -.-> feed_categories
         feed_categories --> category
         feed --url--> feed_url
@@ -74,5 +76,6 @@ flowchart TB
     item-->score
     item-->refrence_count
     schema_version[SCHEMA_VERSION]
+    users{{USERS}} --> user
 
 ```

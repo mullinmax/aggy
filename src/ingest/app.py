@@ -100,28 +100,26 @@ def process_all_feeds():
     logging.info("Fetching and processing feeds...")
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-    feed_keys = r.smembers("categories")
-    for category in feed_keys:
-        feed_data_keys = r.smembers(f"category:{category}")
-        for feed_key in feed_data_keys:
+    user_keys = r.smembers('USERS')
+    for user_key in user_keys:
+        feed_keys = r.smembers(f"{user_key}:FEEDS")
+        for feed_key in feed_keys:
             process_feed(feed_key)
-    
     r.bgsave()
 
 def process_feed(feed_key):
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
     logging.info(f'getting items in {feed_key}')
-    feed_data = json.loads(r.get(feed_key))
-    feed_url = feed_data.get('url')
-
+    
+    feed_url = r.hget(feed_key, 'url')
+    
     if feed_url:
         feed = feedparser.parse(feed_url)
-        existing_items = r.smembers(f"{feed_key}:items")
 
         for entry in feed.entries:
-            feed_item_key = f"{feed_key}:item:{entry.id}"
+            feed_item_key = f"ITEM:{entry.id}"
 
-            if feed_item_key in existing_items:
+            if r.exists(feed_item_key):
                 logging.info(f"Item already exists in database: {feed_item_key}")
                 continue  
 
@@ -130,7 +128,7 @@ def process_feed(feed_key):
             entry_data = {
                 'title': extracted_content.get('title') or entry.title,
                 'content': extracted_content.get('content') or entry.content[0]['value'],
-                'author': extracted_content.get('author') or entry.author or 'Unknown',
+                'author': extracted_content.get('author') or entry.get('author') or 'Unknown',
                 'date_published': extracted_content.get('date_published') or entry.published or str(datetime.today()),
                 'image_key': download_image(extracted_content.get('lead_image_url', '')) or download_image(extract_og_image(entry.link)),
                 'url': entry.link,

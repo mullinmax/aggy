@@ -19,17 +19,17 @@ services:
     ports:
       - 3000
 
-  # blinder-ingest:
-  #   build: ./src/ingest
-  #   ports:
-  #     - 9001
-  #   environment:
-  #     - REDIS_HOST=blinder-db
-  #     - REDIS_PORT=6379
-  #     - CRON_EXPRESSIONS=0 0/2 * * *
-  #   depends_on:
-  #     - blinder-db
-  #     - blinder-extract
+  blinder-ingest:
+    build: ./src/ingest
+    ports:
+      - 9001
+    environment:
+      - REDIS_HOST=blinder-db
+      - REDIS_PORT=6379
+      - CRON_EXPRESSIONS=0 0/2 * * *
+    depends_on:
+      - blinder-db
+      - blinder-extract
 
   blinder-webui:
     build: ./src/webui

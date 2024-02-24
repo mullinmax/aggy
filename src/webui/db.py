@@ -76,6 +76,7 @@ class Feed(BaseModel):
             for category_uuid in self.category_uuids:
                 self._add_to_category(category_uuid)
         
+            r.sadd(f"USER:{self.user_hash}:FEEDS", feed_key)
         return self.uuid
 
     def _add_to_category(self, category_uuid):
@@ -138,4 +139,5 @@ class Feed(BaseModel):
             category_uuids = r.smembers(f"USER:{self.user_hash}:FEED:{self.uuid}:CATEGORIES")
             for category_uuid in category_uuids:
                 r.srem(f"USER:{self.user_hash}:CATEGORY:{category_uuid}:FEEDS", self.uuid)
+            r.srem(f"USER:{self.user_hash}:FEEDS", feed_key)
             r.delete(feed_key)
