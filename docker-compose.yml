@@ -26,7 +26,9 @@ services:
     environment:
       - REDIS_HOST=blinder-db
       - REDIS_PORT=6379
-      - CRON_EXPRESSIONS=0 0/2 * * *
+      - EXTRACT_HOST=blinder-extract
+      - EXTRACT_PORT=3000
+      - INGEST_NUM_THREADS=4
     depends_on:
       - blinder-db
       - blinder-extract

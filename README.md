@@ -77,5 +77,6 @@ flowchart TB
     item-->refrence_count
     schema_version[SCHEMA_VERSION]
     users{{USERS}} --> user
+    feeds_to_ingest([FEEDS-TO-INGEST]) --> feed
 
 ```

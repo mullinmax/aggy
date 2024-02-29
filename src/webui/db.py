@@ -77,6 +77,7 @@ class Feed(BaseModel):
                 self._add_to_category(category_uuid)
         
             r.sadd(f"USER:{self.user_hash}:FEEDS", feed_key)
+            r.zadd("FEEDS-TO-INGEST", mapping={feed_key:0})
         return self.uuid
 
     def _add_to_category(self, category_uuid):
