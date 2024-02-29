@@ -1,4 +1,11 @@
 import feedparser
+import logging
+import redis
+import hashlib
+import requests
+import json
+
+import config
 
 def extract_content(url):
     try:
@@ -8,7 +15,7 @@ def extract_content(url):
         headers_json = json.dumps(headers)
 
         response = requests.get(
-            f'http://{EXTRACT_HOST}:{EXTRACT_PORT}/parser/',
+            f'http://{config.EXTRACT_HOST}:{config.EXTRACT_PORT}/parser/',
             params={
                 'url': url,
                 'headers': headers_json
@@ -39,15 +46,16 @@ def extract_og_image(url):
     return ''
 
 def parse_feed(feed_key):
-    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+    logging.info(f'starting parsing feed with key: {feed_key}')
+    r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
     # get url from feed
     url = r.hget(feed_key, 'url')
     if not url:
         logging.error(f'unable to find url for feed_key {feed_key}')
 
-    feed = feedparser.parse(feed_url)
+    feed = feedparser.parse(url)
     for entry in feed.entries:
-        hashed_url = hashlib.sha256(entry.url.encode()).hexdigest()
+        hashed_url = hashlib.sha256(entry.link.encode()).hexdigest()
         item_key = f'ITEM:{hashed_url}'
 
         # we're using hlen because we want to check that it exists and has some content
@@ -72,3 +80,28 @@ def parse_feed(feed_key):
         r.hmset(item_key, entry_data)
         r.sadd(f"{feed_key}:ITEMS", item_key)
         logging.info(f"Added {item_key} to {feed_key}")
+
+def download_image(url):
+    if url is None or len(url) < 5:
+        return None
+
+    r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
+    image_key = f'img:{url}'
+
+    if r.exists(image_key):
+        return image_key
+
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+    try:
+        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        if response.status_code == 200 and response.headers.get('Content-Type', '').startswith('image/'):
+            # Saving image data to Redis
+            r.set(image_key, response.content)
+            logging.info(f'Image downloaded and stored: {url}')
+            return image_key
+        else:
+            logging.error(f'Failed to download image: {url} with status code: {response.status_code}')
+            return None
+    except requests.RequestException as e:
+        logging.error(f'Error downloading image: {e}')
+        return None

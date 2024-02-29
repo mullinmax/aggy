@@ -1,0 +1,11 @@
+import os
+
+# Environment variables
+REDIS_HOST = os.getenv('REDIS_HOST')
+REDIS_PORT = int(os.getenv('REDIS_PORT'))
+EXTRACT_HOST = os.getenv('EXTRACT_HOST')
+EXTRACT_PORT = int(os.getenv('EXTRACT_PORT'))
+INGEST_NUM_THREADS = int(os.getenv('INGEST_NUM_THREADS'))
+
+FEEDS_TO_INGEST_KEY = 'FEEDS-TO-INGEST'
+FEED_INGESTION_PERIOD = 1800
