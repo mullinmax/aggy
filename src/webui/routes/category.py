@@ -1,6 +1,7 @@
 from flask import Blueprint, request, session, jsonify, flash, redirect, url_for, current_app, render_template
 from flask_login import login_required, current_user
-from db import Category
+from db import Category, Feed
+import logging
 
 # Define the blueprint
 category_bp = Blueprint('category', __name__, url_prefix='/category')
@@ -34,20 +35,23 @@ def list_categories():
 @category_bp.route('/<name_hash>', methods=['GET'])
 @login_required
 def view_category(name_hash):
-    try:
-        user_hash = current_user.id
-        category = Category.read(user_hash, name_hash)
-        feeds = [
-            {
-                'name':'first',
-                'id':'1u0wud09udw'
-            },
-            {
-                'name':'second',
-                'id':'1u0wudasdaw'
-            }
-        ]
-        return render_template('view_category.html', category=category, feeds=feeds)
-    except:
-        return redirect(url_for('home.home'))
-    
+    # try:
+    user_hash = current_user.id
+    category = Category.read(user_hash, name_hash)
+    feeds = Feed.read_all(user_hash)
+        
+        # feeds = [
+        #     {
+        #         'name':'first',
+        #         'id':'1u0wud09udw'
+        #     },
+        #     {
+        #         'name':'second',
+        #         'id':'1u0wudasdaw'
+        #     }
+        # ]
+    return render_template('view_category.html', category=category, feeds=feeds)
+    # except Exception as e:
+    #     logging.error(e)        
+    #     return redirect(url_for('home.home'))
+  

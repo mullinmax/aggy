@@ -47,10 +47,10 @@ flowchart TB
         category_feeds([CATEGORY:uuid:FEEDS])
         feed_categories([FEED:uuid:CATEGORIES])
         feeds{{FEEDS}}
-        feed>FEED:uuid]
-        feed_url[feed url]
-        feed_name[feed name]
-        items([FEED:uuid:ITEMS])
+        feed>FEED:name_hash]
+        feed_url[url]
+        feed_name[name]
+        items([FEED:name_hash:ITEMS])
 
         
         categories --> category
@@ -77,6 +77,6 @@ flowchart TB
     item-->refrence_count
     schema_version[SCHEMA_VERSION]
     users{{USERS}} --> user
-    feeds_to_ingest([FEEDS-TO-INGEST]) --> feed
+    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
 
 ```

@@ -12,24 +12,27 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 def build_feed_to_ingest_list():
-    logging.info(f'building FEEDS-TO-INGEST list')
+    logging.info(f'building FEED-KEYS-TO-INGEST list')
     r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
     # read in each user
-    user_keys = r.smembers('USERS')
-    for user_key in user_keys:
+    user_hashes = r.smembers('USERS')
+    for user_hash in user_hashes:
+        logging.info(f'collecting feeds from user: {user_hash}')
         # read in each feed from each user
-        feed_keys = r.smembers(f"{user_key}:FEEDS")
-        target_time = (datetime.now() + timedelta(seconds=config.FEED_INGESTION_PERIOD)).timestamp()
-        r.zadd(
-            config.FEEDS_TO_INGEST_KEY,
-            mapping={feed_key: target_time for feed_key in feed_keys},
-            lt=True #take the sooner of the values if a feed already exists
-        )
-    logging.info(f'FEEDS-TO-INGEST build complete')
+        feed_hashes = r.smembers(f"USER:{user_hash}:FEEDS")
+        logging.info(f'user: {user_hash} feed_hashes: {feed_hashes}')
+        if len(feed_hashes) > 0:
+            target_time = (datetime.now() + timedelta(seconds=config.FEED_INGESTION_PERIOD)).timestamp()
+            r.zadd(
+                config.FEEDS_TO_INGEST_KEY,
+                mapping={f"USER:{user_hash}:FEED:{feed_hash}": target_time for feed_hash in feed_hashes},
+                lt=True #take the sooner of the values if a feed already exists
+            )
+    logging.info(f'FEED-KEYS-TO-INGEST build complete')
 
 def parse_next_feed():
     r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
-    # get the lowest scoring (ie soonest required) feed from FEEDS-TO-INGEST
+    # get the lowest scoring (ie soonest required) feed from FEED-KEYS-TO-INGEST
     res = r.zmpop(1, [config.FEEDS_TO_INGEST_KEY], min=True)[1][0]
     logging.info(f'result of poping min: {res}')
     feed_key, target_time = res 
@@ -72,7 +75,7 @@ if __name__ == "__main__":
         # check if there's a feed that needs to be read
         
         res = r.zrange(config.FEEDS_TO_INGEST_KEY, 0, 0, withscores=True)
-        logging.info(res)
+        logging.info(f"next feed to ingest: {res}")
         if res is not None and len(res) > 0:
             target_time = datetime.fromtimestamp(res[0][1])
             logging.info(f'target time is {target_time.strftime("%a %d %b %Y, %I:%M%p")}')

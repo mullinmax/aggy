@@ -4,6 +4,7 @@ import redis
 import hashlib
 import requests
 import json
+from bs4 import BeautifulSoup
 
 import config
 
