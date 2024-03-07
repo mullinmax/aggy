@@ -39,17 +39,6 @@ def view_category(name_hash):
     user_hash = current_user.id
     category = Category.read(user_hash, name_hash)
     feeds = Feed.read_all(user_hash)
-        
-        # feeds = [
-        #     {
-        #         'name':'first',
-        #         'id':'1u0wud09udw'
-        #     },
-        #     {
-        #         'name':'second',
-        #         'id':'1u0wudasdaw'
-        #     }
-        # ]
     return render_template('view_category.html', category=category, feeds=feeds)
     # except Exception as e:
     #     logging.error(e)        

@@ -10,12 +10,6 @@ REDIS_HOST = os.getenv('REDIS_HOST')
 REDIS_PORT = os.getenv('REDIS_PORT')
 r = redis.Redis(host=REDIS_HOST, port=int(REDIS_PORT), decode_responses=True, db=0)
 
-class FeedAlreadyExistsError(Exception):
-    pass
-
-class FeedNotFoundError(Exception):
-    pass
-
 def init_db():
     r.set("SCHEMA_VERSION", "1.0.0")
 

@@ -45,6 +45,7 @@ flowchart TB
         category>CATEGORY:uuid]
         category_model[category model]
         category_feeds([CATEGORY:uuid:FEEDS])
+        category_items([CATEGORY:uuid:ITEMS])
         feed_categories([FEED:uuid:CATEGORIES])
         feeds{{FEEDS}}
         feed>FEED:name_hash]
@@ -56,8 +57,10 @@ flowchart TB
         categories --> category
         
         category --model--> category_model
+        category -.-> category_items
         category -.-> category_feeds
         category_feeds --> feed
+        category_items -.-> items
         feeds --> feed
         feed -.-> feed_categories
         feed_categories --> category
