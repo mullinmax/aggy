@@ -163,8 +163,12 @@ class Feed(BaseModel):
 class Item(BaseModel):
     url_hash: str
     title: constr(strict=True, min_length=1)
-    url: HttpUrl
     content: str
+    author: str
+    image_key: str
+    url: HttpUrl
+    domain: str
+    excerpt: str
 
     @classmethod
     def read(cls, url_hash):
