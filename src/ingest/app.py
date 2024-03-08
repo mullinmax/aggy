@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import os
 import redis
+# from db import Category
 
 from parse_feed import parse_feed
 import config

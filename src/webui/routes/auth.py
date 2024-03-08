@@ -1,6 +1,5 @@
 from flask import Flask, Blueprint, request, redirect, url_for, render_template, flash, session, jsonify, current_app
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required
-import redis
 import bcrypt
 import os
 import hashlib
