@@ -46,12 +46,12 @@
     <!-- Items from All Feeds in the Category -->
     <div>
         <h4>Items in "{{ category.name }}" Category</h4>
-        {% for item in category.items %}
+        {% for item in category.get_all_items() %}
             <div class="card mt-2">
                 <div class="card-body">
                     <h5 class="card-title">{{ item.title }}</h5>
-                    <p class="card-text">{{ item.description }}</p>
-                    <a href="{{ item.link }}" class="card-link">Read more</a>
+                    <p class="card-text">{{ item.content }}</p>
+                    <a href="{{ item.url }}" class="card-link">Read more</a>
                 </div>
             </div>
         {% endfor %}

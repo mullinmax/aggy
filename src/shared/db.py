@@ -22,10 +22,14 @@ class Category(BaseModel):
     name: constr(strict=True, min_length=1)
     name_hash: str = ""  # generated if not provided
 
-    def create(self):
+    @property
+    def __key__(self):
         if not self.name_hash:
             self.name_hash = hashlib.sha256(self.name.encode()).hexdigest()
-        category_key = f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
+        return f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
+
+    def create(self):
+        category_key = self.__key__
         
         if r.exists(category_key):
             raise Exception(f"Category with name {self.name} already exists")    
@@ -51,6 +55,14 @@ class Category(BaseModel):
         for name_hash in category_name_hashs:
             categories.append(cls.read(user_hash, name_hash))
         return categories
+
+    def get_all_items(self):
+        current_app.logger.info(f'getting all items in {self.__key__}')
+        url_hashes = r.zrange(f'{self.__key__}:ITEMS', 0, -1)
+        current_app.logger.info(f'{url_hashes=}')
+        items = [Item.read(url_hash) for url_hash in url_hashes]
+        current_app.logger.info(f'items recovered: {items}')
+        return items
 
 class Feed(BaseModel):
     user_hash: str
@@ -147,3 +159,17 @@ class Feed(BaseModel):
                 r.srem(f"USER:{self.user_hash}:CATEGORY:{category_hash}:FEEDS", self.name_hash)
             r.srem(f"USER:{self.user_hash}:FEEDS", feed_key)
             r.delete(feed_key)
+
+class Item(BaseModel):
+    url_hash: str
+    title: constr(strict=True, min_length=1)
+    url: HttpUrl
+    content: str
+
+    @classmethod
+    def read(cls, url_hash):
+        return Item(
+            **r.hgetall(f'ITEM:{url_hash}'),
+            url_hash=url_hash
+        )
+

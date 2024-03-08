@@ -86,11 +86,11 @@ def parse_feed(feed_key):
         }
 
         r.hmset(item_key, entry_data)
-        r.sadd(f"{feed_key}:ITEMS", item_key)
-        logging.info(f"Added {item_key} to {feed_key}")
+        r.sadd(f"{feed_key}:ITEMS", hashed_url)
+        logging.info(f"Added {hashed_url} to {feed_key}")
         for category_key in category_keys:
-            logging.info(f'Adding item {item_key} to category {category_key}')
-            r.sadd(f"{category_key}:ITEMS", item_key)
+            logging.info(f'Adding item {hashed_url} to category {category_key}')
+            r.zadd(f"{category_key}:ITEMS", {hashed_url:0}, nx=True)
 
 def download_image(url):
     if url is None or len(url) < 5:

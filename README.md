@@ -23,7 +23,8 @@
 
 ```mermaid
 flowchart TB
-
+    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
+    
     subgraph Legend
         direction LR
         set{{set}}
@@ -60,7 +61,6 @@ flowchart TB
         category -.-> category_items
         category -.-> category_feeds
         category_feeds --> feed
-        category_items -.-> item
         feeds --> feed
         feed -.-> feed_categories
         feed_categories --> category
@@ -72,6 +72,7 @@ flowchart TB
     end
 
     items-->item
+    category_items -.-> item
     item>ITEM:url_hash]
     item-->url
     item-->title
@@ -80,6 +81,6 @@ flowchart TB
     item-->refrence_count
     schema_version[SCHEMA_VERSION]
     users{{USERS}} --> user
-    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
+    
 
 ```
