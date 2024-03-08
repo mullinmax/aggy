@@ -5,11 +5,11 @@ from typing import List, Set
 import hashlib
 from flask import current_app
 
-import config
+from shared.config import config
 
 r = redis.Redis(
-    host=config.REDIS_HOST, 
-    port=config.REDIS_PORT, 
+    host=config.get('REDIS_HOST'), 
+    port=int(config.get('REDIS_PORT')), 
     decode_responses=True, 
     db=0
 )
@@ -79,7 +79,7 @@ class Feed(BaseModel):
             self._add_to_category(category_hash)
     
         r.sadd(f"USER:{self.user_hash}:FEEDS", self.name_hash)
-        r.zadd("FEED-KEYS-TO-INGEST", mapping={feed_key:0})
+        r.zadd(config.get("FEED_KEYS_TO_INGEST"), mapping={feed_key:0})
         
         return self.name_hash
 

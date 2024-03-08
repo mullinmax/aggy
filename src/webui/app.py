@@ -9,10 +9,10 @@ from routes.category import category_bp
 from routes.feed import feed_bp
 import logging 
 
-import config
+from shared.config import config
 
 app = Flask(__name__)
-app.secret_key = config.BLINDER_SECRET_KEY
+app.secret_key = config.get('BLINDER_SECRET_KEY')
 app.logger.setLevel(logging.INFO)
 csrf = CSRFProtect(app)
 

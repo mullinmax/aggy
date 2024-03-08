@@ -1,11 +1,26 @@
+# config_manager.py
 import os
 
-# Environment variables
-REDIS_HOST = os.getenv('REDIS_HOST')
-REDIS_PORT = int(os.getenv('REDIS_PORT'))
-EXTRACT_HOST = os.getenv('EXTRACT_HOST')
-EXTRACT_PORT = int(os.getenv('EXTRACT_PORT'))
-INGEST_NUM_THREADS = int(os.getenv('INGEST_NUM_THREADS'))
+from shared.defaults import DEFAULT_CONFIG
 
-FEEDS_TO_INGEST_KEY = 'FEED-KEYS-TO-INGEST'
-FEED_INGESTION_PERIOD = 1800
+class Config:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        self.config = {}
+
+    def get(self, key):
+        if key not in self.config:
+            self.config[key] = os.getenv(key) or DEFAULT_CONFIG.get(key)
+
+        return self.config.get(key)
+        
+    def set(self, key, value):
+        self.config[key] = value
+
+config = Config()

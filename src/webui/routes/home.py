@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, redirect, url_for, flash, current_app
 from flask_login import login_required, current_user
-from db import r, Category
+from shared.db import r, Category
 
 home_bp = Blueprint('home', __name__, template_folder='templates')
 

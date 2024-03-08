@@ -6,7 +6,7 @@ import requests
 import json
 from bs4 import BeautifulSoup
 
-import config
+from shared.config import config
 
 def extract_content(url):
     try:
@@ -16,7 +16,7 @@ def extract_content(url):
         headers_json = json.dumps(headers)
 
         response = requests.get(
-            f'http://{config.EXTRACT_HOST}:{config.EXTRACT_PORT}/parser/',
+            f"http://{config.get('EXTRACT_HOST')}:{config.get('EXTRACT_PORT')}/parser/",
             params={
                 'url': url,
                 'headers': headers_json
@@ -48,7 +48,7 @@ def extract_og_image(url):
 
 def parse_feed(feed_key):
     logging.info(f'starting parsing feed with key: {feed_key}')
-    r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
+    r = redis.Redis(host=config.get('REDIS_HOST'), port=config.get('REDIS_PORT'), decode_responses=True)
     # get url from feed
     url = r.hget(feed_key, 'url')
     if not url:
@@ -86,7 +86,7 @@ def download_image(url):
     if url is None or len(url) < 5:
         return None
 
-    r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
+    r = redis.Redis(host=config.get('REDIS_HOST'), port=config.get('REDIS_PORT'), decode_responses=True)
     image_key = f'img:{url}'
 
     if r.exists(image_key):

@@ -4,5 +4,3 @@ flask-wtf
 redis
 bcrypt
 pydantic
-# bleach
-# requests

@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, Blueprint, current_app
 from flask_login import login_required, current_user
-from db import Feed
+from shared.db import Feed
 import json
 
 # Define the blueprint

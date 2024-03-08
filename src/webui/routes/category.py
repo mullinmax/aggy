@@ -1,6 +1,6 @@
 from flask import Blueprint, request, session, jsonify, flash, redirect, url_for, current_app, render_template
 from flask_login import login_required, current_user
-from db import Category, Feed
+from shared.db import Category, Feed
 import logging
 
 # Define the blueprint

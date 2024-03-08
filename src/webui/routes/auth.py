@@ -3,7 +3,7 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 import bcrypt
 import os
 import hashlib
-from db import r
+from shared.db import r
 
 # Create a Blueprint for authentication
 auth_bp = Blueprint('auth', __name__)
