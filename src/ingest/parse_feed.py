@@ -7,6 +7,7 @@ import json
 from bs4 import BeautifulSoup
 
 from shared.config import config
+from shared import db
 
 def extract_content(url):
     try:
@@ -48,11 +49,17 @@ def extract_og_image(url):
 
 def parse_feed(feed_key):
     logging.info(f'starting parsing feed with key: {feed_key}')
-    r = redis.Redis(host=config.get('REDIS_HOST'), port=config.get('REDIS_PORT'), decode_responses=True)
+    r = db.r
     # get url from feed
     url = r.hget(feed_key, 'url')
     if not url:
         logging.error(f'unable to find url for feed_key {feed_key}')
+
+
+    # find all categories that the feed is a member of
+    user_prefix = feed_key.split(':FEED:')[0]
+    categories = r.smembers(f'{feed_key}:CATEGORIES')
+    category_keys = [f'{user_prefix}:CATEGORY:{category}' for category in categories]
 
     feed = feedparser.parse(url)
     for entry in feed.entries:
@@ -81,12 +88,15 @@ def parse_feed(feed_key):
         r.hmset(item_key, entry_data)
         r.sadd(f"{feed_key}:ITEMS", item_key)
         logging.info(f"Added {item_key} to {feed_key}")
+        for category_key in category_keys:
+            logging.info(f'Adding item {item_key} to category {category_key}')
+            r.sadd(f"{category_key}:ITEMS", item_key)
 
 def download_image(url):
     if url is None or len(url) < 5:
         return None
 
-    r = redis.Redis(host=config.get('REDIS_HOST'), port=config.get('REDIS_PORT'), decode_responses=True)
+    r = db.r
     image_key = f'img:{url}'
 
     if r.exists(image_key):

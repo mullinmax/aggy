@@ -56,7 +56,7 @@ class Feed(BaseModel):
     user_hash: str
     name: constr(strict=True, min_length=1)
     url: HttpUrl
-    category_hashes: Set[str] = set()  # Set of category UUIDs
+    category_hashes: Set[str] # Set of category UUIDs
     name_hash: str = ""  # generated if not provided
 
     def create(self):
@@ -66,7 +66,7 @@ class Feed(BaseModel):
         
         if r.exists(feed_key):
             raise Exception(f'Cannot create duplicate feed {feed_key}')            
-        
+
         r.hset(
             feed_key, 
             mapping={
@@ -79,8 +79,8 @@ class Feed(BaseModel):
             self._add_to_category(category_hash)
     
         r.sadd(f"USER:{self.user_hash}:FEEDS", self.name_hash)
-        r.zadd(config.get("FEED_KEYS_TO_INGEST"), mapping={feed_key:0})
-        
+        r.zadd(config.get("FEEDS_TO_INGEST_KEY"), mapping={feed_key:0})
+
         return self.name_hash
 
     def _add_to_category(self, category_hash):

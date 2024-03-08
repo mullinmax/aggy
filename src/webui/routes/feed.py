@@ -13,16 +13,16 @@ def add_feed():
         user_hash = current_user.id
         feed_name = request.form.get('feedName')
         feed_url = request.form.get('feedUrl')
-        category_uuids = request.form.getlist('categories')
+        category_hashes = request.form.getlist('categories')
         
-        current_app.logger.info(feed_url)
+        current_app.logger.info(category_hashes)
         
         # Create and save the new feed
         feed = Feed(
             user_hash=user_hash,
             name=feed_name,
             url=feed_url,
-            category_uuids=set(category_uuids)
+            category_hashes=set(category_hashes)
         )
         feed_uuid = feed.create()
 
