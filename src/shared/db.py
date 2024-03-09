@@ -4,6 +4,7 @@ from uuid import uuid4
 from typing import List, Set
 import hashlib
 from flask import current_app
+from datetime import datetime
 
 from shared.config import config
 
@@ -61,7 +62,7 @@ class Category(BaseModel):
         url_hashes = r.zrange(f'{self.__key__}:ITEMS', 0, -1)
         current_app.logger.info(f'{url_hashes=}')
         items = [Item.read(url_hash) for url_hash in url_hashes]
-        current_app.logger.info(f'items recovered: {items}')
+        current_app.logger.info(f'number of items recovered: {len(items)}')
         return items
 
 class Feed(BaseModel):
@@ -165,10 +166,11 @@ class Item(BaseModel):
     title: constr(strict=True, min_length=1)
     content: str
     author: str
-    image_key: str
+    image_url: str
     url: HttpUrl
     domain: str
     excerpt: str
+    date_published: datetime = None
 
     @classmethod
     def read(cls, url_hash):
@@ -177,3 +179,9 @@ class Item(BaseModel):
             url_hash=url_hash
         )
 
+    # @property
+    # def preview_image(self):
+    #     if self.image_key is None:
+    #         return None
+        
+    #     return r.get(self.image_key)

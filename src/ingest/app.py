@@ -51,6 +51,9 @@ def parse_next_feed():
         )
         return
 
+    # parse the feed
+    parse_feed(feed_key)
+    
     # update the feed read time for next go-round
     r.zadd(
         config.get('FEEDS_TO_INGEST_KEY'), 
@@ -58,8 +61,6 @@ def parse_next_feed():
         lt=True #take the sooner of the values if a feed already exists
     )
     
-    # parse the feed
-    parse_feed(feed_key)
 
 if __name__ == "__main__":
     r = db.r
@@ -71,7 +72,10 @@ if __name__ == "__main__":
         # occasionally build/repair the FEEDS-TO-INGEST list
         if last_feeds_to_ingest_build_timestamp < datetime.now():
             # executor.submit(build_feed_to_ingest_list)
-            build_feed_to_ingest_list()
+            try:
+                build_feed_to_ingest_list()
+            except Exception as e:
+                logging.error(e)
             last_feeds_to_ingest_build_timestamp = datetime.now() + timedelta(seconds=3600)
         
         # check if there's a feed that needs to be read
@@ -85,7 +89,10 @@ if __name__ == "__main__":
             if target_time < datetime.now() + timedelta(minutes=1):
                 logging.info('Processing next feed')
                 # executor.submit(parse_next_feed)
-                parse_next_feed()
+                try:
+                    parse_next_feed()
+                except Exception as e:
+                    logging.error(e)
             else:
                 time.sleep(5)
         time.sleep(10)

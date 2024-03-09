@@ -5,6 +5,8 @@ import hashlib
 import requests
 import json
 from bs4 import BeautifulSoup
+from bleach import clean
+import dateparser
 
 from shared.config import config
 from shared import db
@@ -62,57 +64,53 @@ def parse_feed(feed_key):
     category_keys = [f'{user_prefix}:CATEGORY:{category}' for category in categories]
 
     feed = feedparser.parse(url)
+    url_hashes_to_link = []
     for entry in feed.entries:
-        hashed_url = hashlib.sha256(entry.link.encode()).hexdigest()
-        item_key = f'ITEM:{hashed_url}'
+        url_hash = hashlib.sha256(entry.link.encode()).hexdigest()
+        item_key = f'ITEM:{url_hash}'
 
         # we're using hlen because we want to check that it exists and has some content
         # in the future we can setup preview refreshing when something isn't right by simply deleting the contents
         if r.hlen(item_key) > 0:
             logging.info(f"Item already exists in database: {item_key}")
+            url_hashes_to_link.append(url_hash)
             continue  
 
         extracted_content = extract_content(entry.link)
-        
+
         entry_data = {
             'title': extracted_content.get('title') or entry.title,
             'content': extracted_content.get('content') or entry.content[0]['value'],
             'author': extracted_content.get('author') or entry.get('author') or 'Unknown',
             'date_published': extracted_content.get('date_published') or entry.published or str(datetime.today()),
-            'image_key': download_image(extracted_content.get('lead_image_url', '')) or download_image(extract_og_image(entry.link)),
+            'image_url': extracted_content.get('lead_image_url', '') or extract_og_image(entry.link),
             'url': entry.link,
             'domain': extracted_content.get('domain') or entry.link,
             'excerpt': extracted_content.get('excerpt') or entry.content[0]['value']
         }
 
+        entry_data['date_published'] = clean_date(entry_data['date_published'])
+
+        sanitized_item = {}
+        for k, v in entry_data.items():
+            sanitized_item[k] = sanitize(v)
+
         r.hmset(item_key, entry_data)
-        r.sadd(f"{feed_key}:ITEMS", hashed_url)
-        logging.info(f"Added {hashed_url} to {feed_key}")
+        url_hashes_to_link.append(url_hash)
+    
+    for url_hash in url_hashes_to_link:
+        r.sadd(f"{feed_key}:ITEMS", url_hash)
+        logging.info(f"Added {url_hash} to {feed_key}")
         for category_key in category_keys:
-            logging.info(f'Adding item {hashed_url} to category {category_key}')
-            r.zadd(f"{category_key}:ITEMS", {hashed_url:0}, nx=True)
+            logging.info(f'Adding item {url_hash} to category {category_key}')
+            r.zadd(f"{category_key}:ITEMS", {url_hash:0}, nx=True)
 
-def download_image(url):
-    if url is None or len(url) < 5:
-        return None
+def sanitize(x): 
+    return clean(
+        x, 
+        tags = ['p', 'b', 'i', 'u', 'a', 'img'],
+        attributes = {'a': ['href', 'title'], 'img': ['src', 'alt']}
+    )
 
-    r = db.r
-    image_key = f'img:{url}'
-
-    if r.exists(image_key):
-        return image_key
-
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-    try:
-        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        if response.status_code == 200 and response.headers.get('Content-Type', '').startswith('image/'):
-            # Saving image data to Redis
-            r.set(image_key, response.content)
-            logging.info(f'Image downloaded and stored: {url}')
-            return image_key
-        else:
-            logging.error(f'Failed to download image: {url} with status code: {response.status_code}')
-            return None
-    except requests.RequestException as e:
-        logging.error(f'Error downloading image: {e}')
-        return None
+def clean_date(date_str):
+    return str(dateparser.parse(str(date_str)))

@@ -79,8 +79,9 @@ flowchart TB
     item-->content
     item-->score
     item-->refrence_count
+    item--> image_key
+    image_key-->image[IMAGE:hash]
     schema_version[SCHEMA_VERSION]
     users{{USERS}} --> user
-    
 
 ```
