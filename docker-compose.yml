@@ -50,7 +50,6 @@ services:
       - "traefik.http.services.codehost.loadbalancer.server.port=5000"
     depends_on:
       - blinder-db
-      # - blinder-ingest
 
 volumes:
   blinder-db:
