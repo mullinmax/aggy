@@ -32,7 +32,8 @@ def reset_items():
         from shared.db import r
         # delete all items
         all_items = r.keys('ITEM:*')
-        r.delete(*all_items)
+        for item in all_items:
+            r.delete(items)
         app.logger.info(f'Deleted {len(all_items)} items')
 
         # clear out all feeds
@@ -55,8 +56,7 @@ def reset_items():
         # set all feeds to be parsed now
         r.zunionstore(
             config.get('FEEDS_TO_INGEST_KEY'), 
-            mapping={config.get('FEEDS_TO_INGEST_KEY'): 0},
-            aggregate=WEIGHTS
+            keys={config.get('FEEDS_TO_INGEST_KEY'): 0}
         )
         
         # save db

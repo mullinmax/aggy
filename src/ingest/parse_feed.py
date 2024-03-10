@@ -1,6 +1,5 @@
 import feedparser
 import logging
-import redis
 import hashlib
 import requests
 import json
@@ -9,7 +8,7 @@ from bleach import clean
 import dateparser
 
 from shared.config import config
-from shared import db
+from shared.db import r, ItemLoose, ItemStrict
 
 def extract_content(url):
     try:
@@ -51,7 +50,6 @@ def extract_og_image(url):
 
 def parse_feed(feed_key):
     logging.info(f'starting parsing feed with key: {feed_key}')
-    r = db.r
     # get url from feed
     url = r.hget(feed_key, 'url')
     if not url:
@@ -95,8 +93,11 @@ def parse_feed(feed_key):
         for k, v in entry_data.items():
             sanitized_item[k] = sanitize(v)
 
-        r.hmset(item_key, entry_data)
-        url_hashes_to_link.append(url_hash)
+        item = ItemStrict(**entry_data)
+        ItemStrict.create(item)
+
+        # r.hmset(item_key, entry_data)
+        url_hashes_to_link.append(item.url_hash)
     
     for url_hash in url_hashes_to_link:
         r.sadd(f"{feed_key}:ITEMS", url_hash)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl, validator, constr
+from pydantic import BaseModel, HttpUrl, validator, constr, root_validator
 from datetime import datetime
 import dateparser
 from bleach import clean
@@ -9,30 +9,31 @@ from .base import BlinderBaseModel, r
 
 class ItemBase(BlinderBaseModel):
     url: HttpUrl
+    url_hash: str
     content: Optional[str] = None
     date_published: Optional[datetime] = None
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        if not self.url_hash:
-            self.url_hash = self.generate_url_hash()
-
-    def generate_url_hash(self):
-        # Generate a URL hash if not provided
-        url_str = str(self.url)
-        return hashlib.sha256(url_str.encode('utf-8')).hexdigest()
+    @root_validator(pre=True)
+    def ensure_url_hash(cls, values):
+        url = values.get('url')
+        url_hash = values.get('url_hash')
+        if url and not url_hash:
+            values['url_hash'] = hashlib.sha256(str(url).encode('utf-8')).hexdigest()
+        elif not url:
+            raise ValueError("URL must be provided to generate url_hash")
+        return values
 
     @classmethod
     def create(cls, item):
         if not item.url_hash:
             item.url_hash = item.generate_url_hash()
         item_json = item.json()
-        cls.r.set(f'ITEM:{item.url_hash}', item_json)
+        r.set(f'ITEM:{item.url_hash}', item_json)
 
 
     @classmethod
     def read(cls, url_hash):
-        item_json = cls.r.get(f'ITEM:{url_hash}')
+        item_json = r.get(f'ITEM:{url_hash}')
         if item_json:
             return cls.parse_raw(item_json)
         return None
@@ -41,7 +42,7 @@ class ItemBase(BlinderBaseModel):
     @classmethod
     def update(cls, url_hash, **updates):
         # Fetch the existing item
-        item_json = cls.r.get(f'ITEM:{url_hash}')
+        item_json = r.get(f'ITEM:{url_hash}')
         if item_json:
             # Deserialize JSON string to an item instance
             item = cls.parse_raw(item_json)
@@ -54,14 +55,14 @@ class ItemBase(BlinderBaseModel):
             updated_item_json = item.json()
             
             # Save the updated item back to Redis
-            cls.r.set(f'ITEM:{url_hash}', updated_item_json)
+            r.set(f'ITEM:{url_hash}', updated_item_json)
         else:
             raise ValueError(f"Item with url_hash {url_hash} not found")
 
 
     @classmethod
     def delete(cls, url_hash):
-        cls.r.delete(f'ITEM:{url_hash}')
+        r.delete(f'ITEM:{url_hash}')
 
     @validator('content', pre=True, allow_reuse=True)
     def sanitize_content(cls, v):
@@ -96,7 +97,6 @@ class ItemBase(BlinderBaseModel):
 
 
 class ItemStrict(ItemBase):
-    url_hash: str
     title: constr(strict=True, min_length=1)
     author: str
     image_url: str
@@ -104,7 +104,6 @@ class ItemStrict(ItemBase):
     excerpt: str
 
 class ItemLoose(ItemStrict):
-    url_hash: Optional[str] = None
     title: Optional[constr(strict=True, min_length=1)] = None
     author: Optional[str] = None
     image_url: Optional[str] = None

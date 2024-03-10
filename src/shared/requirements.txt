@@ -3,6 +3,7 @@ pydantic
 flask
 redis
 dateparser
+bleach
 
 # TESTING
 pytest

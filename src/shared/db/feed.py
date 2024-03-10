@@ -1,8 +1,10 @@
 from pydantic import constr, HttpUrl
 from typing import List, Set
 from flask import current_app
+import hashlib
 
 from .base import BlinderBaseModel, r
+from shared.config import config
 
 class Feed(BlinderBaseModel):
     user_hash: str

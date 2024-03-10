@@ -14,10 +14,6 @@ r = redis.Redis(
 )
 
 class BlinderBaseModel(BaseModel):
-    @functools.cached_property
-    def r(self):
-        return r
-
     def str_dict(self, *args, **kwargs) -> Dict[str, Any]:
         d = super().dict(*args, **kwargs)
         
@@ -32,3 +28,7 @@ class BlinderBaseModel(BaseModel):
             # Add handling for other types as necessary
         
         return d
+
+    @property
+    def key(self):
+        raise NotImplementedError()
