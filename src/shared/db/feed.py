@@ -2,7 +2,7 @@ from pydantic import constr, HttpUrl
 from typing import List, Set
 from flask import current_app
 
-from shared.db.base import BlinderBaseModel, r
+from .base import BlinderBaseModel, r
 
 class Feed(BlinderBaseModel):
     user_hash: str

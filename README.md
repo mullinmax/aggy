@@ -73,13 +73,7 @@ flowchart TB
 
     items-->item
     category_items -.-> item
-    item>ITEM:url_hash]
-    item-->url
-    item-->title
-    item-->content
-    item-->score
-    item-->refrence_count
-    item--> image_key
+    item[ITEM:url_hash]
     image_key-->image[IMAGE:hash]
     schema_version[SCHEMA_VERSION]
     users{{USERS}} --> user

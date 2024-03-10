@@ -1,7 +1,7 @@
 # config_manager.py
 import os
 
-from shared.defaults import DEFAULT_CONFIG
+from .defaults import DEFAULT_CONFIG
 
 class Config:
     _instance = None
@@ -17,7 +17,6 @@ class Config:
     def get(self, key):
         if key not in self.config:
             self.config[key] = os.getenv(key) or DEFAULT_CONFIG.get(key)
-
         return self.config.get(key)
         
     def set(self, key, value):

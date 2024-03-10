@@ -1,29 +1,112 @@
-from pydantic import HttpUrl, constr
+from pydantic import BaseModel, HttpUrl, validator, constr
 from datetime import datetime
+import dateparser
+from bleach import clean
+from typing import Optional
+import hashlib
 
-from shared.db.base import BlinderBaseModel, r
+from .base import BlinderBaseModel, r
 
-class Item(BlinderBaseModel):
-    url_hash: str
-    title: constr(strict=True, min_length=1)
-    content: str
-    author: str
-    image_url: str
+class ItemBase(BlinderBaseModel):
     url: HttpUrl
-    domain: str
-    excerpt: str
-    date_published: datetime = None
+    content: Optional[str] = None
+    date_published: Optional[datetime] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if not self.url_hash:
+            self.url_hash = self.generate_url_hash()
+
+    def generate_url_hash(self):
+        # Generate a URL hash if not provided
+        url_str = str(self.url)
+        return hashlib.sha256(url_str.encode('utf-8')).hexdigest()
+
+    @classmethod
+    def create(cls, item):
+        if not item.url_hash:
+            item.url_hash = item.generate_url_hash()
+        item_json = item.json()
+        cls.r.set(f'ITEM:{item.url_hash}', item_json)
+
 
     @classmethod
     def read(cls, url_hash):
-        return Item(
-            **r.hgetall(f'ITEM:{url_hash}'),
-            url_hash=url_hash
-        )
+        item_json = cls.r.get(f'ITEM:{url_hash}')
+        if item_json:
+            return cls.parse_raw(item_json)
+        return None
 
-    # @property
-    # def preview_image(self):
-    #     if self.image_key is None:
-    #         return None
-        
-    #     return r.get(self.image_key)
+
+    @classmethod
+    def update(cls, url_hash, **updates):
+        # Fetch the existing item
+        item_json = cls.r.get(f'ITEM:{url_hash}')
+        if item_json:
+            # Deserialize JSON string to an item instance
+            item = cls.parse_raw(item_json)
+            
+            # Update the item with the provided changes
+            for field, value in updates.items():
+                setattr(item, field, value)
+            
+            # Serialize the updated item back to a JSON string
+            updated_item_json = item.json()
+            
+            # Save the updated item back to Redis
+            cls.r.set(f'ITEM:{url_hash}', updated_item_json)
+        else:
+            raise ValueError(f"Item with url_hash {url_hash} not found")
+
+
+    @classmethod
+    def delete(cls, url_hash):
+        cls.r.delete(f'ITEM:{url_hash}')
+
+    @validator('content', pre=True, allow_reuse=True)
+    def sanitize_content(cls, v):
+        if v:
+            return clean(
+                str(v), 
+                tags=['p', 'b', 'i', 'u', 'a', 'img'],
+                attributes={'a': ['href', 'title'], 'img': ['src', 'alt']},
+                strip=True
+            )
+        return v
+
+    @validator('date_published', pre=True, allow_reuse=True)
+    def parse_date_published(cls, v):
+        if v is None:
+            return None
+        parsed_date = dateparser.parse(v)
+        if parsed_date:
+            return parsed_date
+        raise ValueError("Invalid date format")
+
+    @validator('title', 'author', 'image_url', 'domain', 'excerpt', 'content', pre=True, allow_reuse=True, check_fields=False)
+    def remove_html_tags(cls, v):
+        if v:
+            return clean(
+                str(v), 
+                tags=[],
+                attributes={},
+                strip=True
+            )
+        return v
+
+
+class ItemStrict(ItemBase):
+    url_hash: str
+    title: constr(strict=True, min_length=1)
+    author: str
+    image_url: str
+    domain: str
+    excerpt: str
+
+class ItemLoose(ItemStrict):
+    url_hash: Optional[str] = None
+    title: Optional[constr(strict=True, min_length=1)] = None
+    author: Optional[str] = None
+    image_url: Optional[str] = None
+    domain: Optional[str] = None
+    excerpt: Optional[str] = None
