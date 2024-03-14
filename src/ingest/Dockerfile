@@ -1,4 +1,5 @@
-FROM blinder-shared:latest as base
+ARG BASE_IMAGE=blinder-shared:latest
+FROM $BASE_IMAGE as base
 
 COPY . .
 
