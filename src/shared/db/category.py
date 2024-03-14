@@ -1,6 +1,7 @@
 from pydantic import constr
 from typing import List
 from flask import current_app
+import hashlib
 
 from .base import BlinderBaseModel, r
 from .item import ItemStrict
@@ -47,7 +48,10 @@ class Category(BlinderBaseModel):
     def get_all_items(self):
         current_app.logger.info(f'getting all items in {self.__key__}')
         url_hashes = r.zrange(f'{self.__key__}:ITEMS', 0, -1)
-        current_app.logger.info(f'{url_hashes=}')
+        current_app.logger.info(f'retreived {len(url_hashes)} url_hashes')
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
-        current_app.logger.info(f'number of items recovered: {len(items)}')
+        items = [i for i in items if i]
+        current_app.logger.info(f'number of items retreived: {len(items)}')
+        if len(items) > 0:
+            current_app.logger.info(f'First item: {str(items[0])}')
         return items

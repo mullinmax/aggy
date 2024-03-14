@@ -33,7 +33,7 @@ def reset_items():
         # delete all items
         all_items = r.keys('ITEM:*')
         for item in all_items:
-            r.delete(items)
+            r.delete(item)
         app.logger.info(f'Deleted {len(all_items)} items')
 
         # clear out all feeds

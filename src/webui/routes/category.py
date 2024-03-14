@@ -37,9 +37,12 @@ def list_categories():
 def view_category(name_hash):
     # try:
     user_hash = current_user.id
+    current_app.logger.info(f'Requested URL: {request.url}')
+    current_app.logger.info(f'{user_hash=} {name_hash=}')
     category = Category.read(user_hash, name_hash)
     feeds = Feed.read_all(user_hash)
-    return render_template('view_category.html', category=category, feeds=feeds)
+    items = category.get_all_items()
+    return render_template('view_category.html', category=category, feeds=feeds, items=items)
     # except Exception as e:
     #     logging.error(e)        
     #     return redirect(url_for('home.home'))

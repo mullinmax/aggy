@@ -4,13 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import os
 import redis
-# from db import Category
+import traceback
 
 from parse_feed import parse_feed
 from shared.config import config
 from shared import db
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 
 
 def build_feed_to_ingest_list():
@@ -76,6 +75,7 @@ if __name__ == "__main__":
                 build_feed_to_ingest_list()
             except Exception as e:
                 logging.error(e)
+                logging.error(traceback.format_exc())
             last_feeds_to_ingest_build_timestamp = datetime.now() + timedelta(seconds=3600)
         
         # check if there's a feed that needs to be read
@@ -93,6 +93,7 @@ if __name__ == "__main__":
                     parse_next_feed()
                 except Exception as e:
                     logging.error(e)
+                    logging.error(traceback.format_exc())
             else:
                 time.sleep(5)
         time.sleep(10)

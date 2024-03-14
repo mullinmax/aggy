@@ -4,6 +4,8 @@ flask
 redis
 dateparser
 bleach
+requests
+beautifulsoup4
 
 # TESTING
 pytest

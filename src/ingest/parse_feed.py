@@ -8,7 +8,7 @@ from bleach import clean
 import dateparser
 
 from shared.config import config
-from shared.db import r, ItemLoose, ItemStrict
+from shared.db import r, ItemLoose, ItemStrict, Feed
 
 def extract_content(url):
     try:
@@ -27,7 +27,13 @@ def extract_content(url):
         )
 
         if response.status_code == 200:
-            return response.json()
+            result = response.json()
+
+            # remove redundant url to make item creation more elegant
+            if 'url' in result:
+                del result['url']
+
+            return result
         else:
             logging.error(f"Error extracting content: {response.status_code}, Response: {response.text}")
             return {}
@@ -35,83 +41,92 @@ def extract_content(url):
         logging.error(f"Error in extract request: {e}")
         return {}
 
-def extract_og_image(url):
-    """Extracts Open Graph image from a given URL."""
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            og_image = soup.find('meta', property='og:image')
-            if og_image and og_image['content']:
-                return og_image['content']
-    except requests.RequestException as e:
-        logging.info(f"Error fetching Open Graph image: {e}")
-    return ''
+def get_opengraph_metadata(url):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    og_tags = soup.find_all('meta', attrs={'property': lambda x: x and x.startswith('og:')})
+    og_data = {tag['property'].replace('og:', ''): tag['content'] for tag in og_tags if 'content' in tag.attrs}
+    return og_data
 
 def parse_feed(feed_key):
     logging.info(f'starting parsing feed with key: {feed_key}')
-    # get url from feed
-    url = r.hget(feed_key, 'url')
-    if not url:
-        logging.error(f'unable to find url for feed_key {feed_key}')
 
+    user_hash = feed_key.split(':FEED:')[0].replace('USER:','')
+    feed_hash = feed_key.split(':FEED:')[1]
+
+    feed = Feed.read(user_hash=user_hash, feed_hash=feed_hash)
+    feed = feedparser.parse(str(feed.url))
 
     # find all categories that the feed is a member of
-    user_prefix = feed_key.split(':FEED:')[0]
-    categories = r.smembers(f'{feed_key}:CATEGORIES')
-    category_keys = [f'{user_prefix}:CATEGORY:{category}' for category in categories]
+    category_hashes = r.smembers(f'USER:{user_hash}:FEED:{feed_hash}:CATEGORIES')
+    category_keys = [f'USER:{user_hash}:CATEGORY:{category_hash}' for category_hash in category_hashes]
 
-    feed = feedparser.parse(url)
     url_hashes_to_link = []
     for entry in feed.entries:
-        url_hash = hashlib.sha256(entry.link.encode()).hexdigest()
-        item_key = f'ITEM:{url_hash}'
+        temp_item = ItemLoose(url=entry.link)
 
         # we're using hlen because we want to check that it exists and has some content
         # in the future we can setup preview refreshing when something isn't right by simply deleting the contents
-        if r.hlen(item_key) > 0:
-            logging.info(f"Item already exists in database: {item_key}")
-            url_hashes_to_link.append(url_hash)
+        if temp_item.exists():
+            logging.info(f"Item already exists in database: {temp_item.key}")
+            url_hashes_to_link.append(temp_item.url_hash)
             continue  
 
-        extracted_content = extract_content(entry.link)
+        extract_item = ItemLoose(
+            **extract_content(entry.link),
+            url = entry.link
+        )
 
-        entry_data = {
-            'title': extracted_content.get('title') or entry.title,
-            'content': extracted_content.get('content') or entry.content[0]['value'],
-            'author': extracted_content.get('author') or entry.get('author') or 'Unknown',
-            'date_published': extracted_content.get('date_published') or entry.published or str(datetime.today()),
-            'image_url': extracted_content.get('lead_image_url', '') or extract_og_image(entry.link),
-            'url': entry.link,
-            'domain': extracted_content.get('domain') or entry.link,
-            'excerpt': extracted_content.get('excerpt') or entry.content[0]['value']
-        }
+        try:
+            entry_content = entry.get('content')[0]['value']
+        except:
+            entry_content = None
+        entry_item = ItemLoose(
+            url =  entry.get('link'),
+            title = entry.get('title'),
+            content = entry_content,
+            author = entry.get('author'),
+            date_published = entry.get('published'),
+            domain = entry.get('link'),
+            excerpt = entry_content
+        )
 
-        entry_data['date_published'] = clean_date(entry_data['date_published'])
+        parsed_og_content = get_opengraph_metadata(url=entry.link)
+        # https://ogp.me/
+        open_graph_item = ItemLoose(
+            url = entry.link,
+            image_url = parsed_og_content.get('image'),
+            domain = parsed_og_content.get('site_name'),
+            excerpt = parsed_og_content.get('description'),
+            content = parsed_og_content.get('description'),
+            title = parsed_og_content.get('title'),
+            # future video url for embedding a web player?
+            # video = parsed_og_content['video'] # https://youtube.com/slightly/different/url
+            # type = parsed_og_content['type'] # "video"
+            # embeddable audio file?
+            # audio = parsed_og_content['audio']
+        )
 
-        sanitized_item = {}
-        for k, v in entry_data.items():
-            sanitized_item[k] = sanitize(v)
 
-        item = ItemStrict(**entry_data)
-        ItemStrict.create(item)
+        best_item = ItemLoose.merge_instances(items=[extract_item, entry_item, open_graph_item])
+        
+        # Attempt to make strict item from best of all
+        try:
+            final_item = ItemStrict(**best_item.dict())
+        except Exception as e:
+            logging.error('failed to parse best item into strict item')
+            logging.error(str(best_item))
+            #TODO make sure we don't attempt this url over and over
 
-        # r.hmset(item_key, entry_data)
-        url_hashes_to_link.append(item.url_hash)
+        final_item.create()
+
+        url_hashes_to_link.append(final_item.url_hash)
     
-    for url_hash in url_hashes_to_link:
-        r.sadd(f"{feed_key}:ITEMS", url_hash)
-        logging.info(f"Added {url_hash} to {feed_key}")
-        for category_key in category_keys:
-            logging.info(f'Adding item {url_hash} to category {category_key}')
-            r.zadd(f"{category_key}:ITEMS", {url_hash:0}, nx=True)
+    #TODO leverage redis pipeline to make this more efficient and less spammy
+    logging.info(f"Adding {len(url_hashes_to_link)} items to feed: {feed_key}")
+    r.sadd(f"{feed_key}:ITEMS", *url_hashes_to_link)
+    for category_key in category_keys:
+        r.zadd(f"{category_key}:ITEMS", {url_hash:0 for url_hash in url_hashes_to_link}, nx=True)
+        logging.info(f"Added {len(url_hashes_to_link)} items to category {category_key}")
+    
 
-def sanitize(x): 
-    return clean(
-        x, 
-        tags = ['p', 'b', 'i', 'u', 'a', 'img'],
-        attributes = {'a': ['href', 'title'], 'img': ['src', 'alt']}
-    )
-
-def clean_date(date_str):
-    return str(dateparser.parse(str(date_str)))

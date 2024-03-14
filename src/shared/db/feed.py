@@ -72,7 +72,7 @@ class Feed(BlinderBaseModel):
 
     @staticmethod
     def read(user_hash, feed_hash) -> 'Feed':
-        feed_key = f"USER:{self.user_hash}:FEED:{feed_hash}"
+        feed_key = f"USER:{user_hash}:FEED:{feed_hash}"
         if r.exists(feed_key):
             feed_data = r.hgetall(feed_key)
             category_hashes = r.smembers(f"USER:{user_hash}:FEED:{feed_hash}:CATEGORIES")
