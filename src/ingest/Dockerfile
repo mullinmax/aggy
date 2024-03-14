@@ -1,4 +1,4 @@
-FROM blinder-base:latest as base
+FROM blinder-shared:latest as base
 
 COPY . .
 
