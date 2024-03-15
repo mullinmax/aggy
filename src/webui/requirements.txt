@@ -1,6 +1,6 @@
+bcrypt
 flask
 flask-login
 flask-wtf
-redis
-bcrypt
 pydantic
+redis

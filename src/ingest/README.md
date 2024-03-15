@@ -1,7 +1,7 @@
 # Ingestion Service for Blinder
 
 steps:
- - read in users from database 
+ - read in users from database
  - read feeds from database
  - check how long ago the feed was last checked
  - update last checked field

@@ -3,6 +3,7 @@ import os
 
 from .defaults import DEFAULT_CONFIG
 
+
 class Config:
     _instance = None
 
@@ -18,8 +19,9 @@ class Config:
         if key not in self.config:
             self.config[key] = os.getenv(key) or DEFAULT_CONFIG.get(key)
         return self.config.get(key)
-        
+
     def set(self, key, value):
         self.config[key] = value
+
 
 config = Config()

@@ -1,15 +1,15 @@
-# PROD
-pydantic
-flask
-redis
-dateparser
-bleach
-requests
 beautifulsoup4
-
-# TESTING
-pytest
-redislite
+bleach
+dateparser
+flask
 
 # DEVELOPMENT
 pre-commit
+# PROD
+pydantic
+
+# TESTING
+pytest
+redis
+redislite
+requests

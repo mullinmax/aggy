@@ -1,9 +1,9 @@
-feedparser
-redis
-bleach
-requests
-croniter
 beautifulsoup4
-flask
 bleach
+bleach
+croniter
 dateparser
+feedparser
+flask
+redis
+requests

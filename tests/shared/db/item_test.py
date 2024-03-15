@@ -1,7 +1,8 @@
 import pytest
 from redislite import Redis
 
-from src.shared.db import BlinderBaseModel, ItemLoose, ItemStrict, ItemBase
+from src.shared.db import BlinderBaseModel, ItemLoose
+
 
 @pytest.fixture(scope="session", autouse=True)
 def override_redis_connection():
@@ -14,6 +15,7 @@ def override_redis_connection():
     # Teardown and revert to the original Redis connection after tests
     BlinderBaseModel.r.shutdown()
     BlinderBaseModel.r = original_redis
+
 
 def test_create_read_item():
     item_data = {
@@ -32,6 +34,7 @@ def test_create_read_item():
     assert read_item
     assert str(read_item.url) == item_data["url"]
 
+
 def test_update_item():
     item_data = {
         "url": "https://example.com",
@@ -46,6 +49,7 @@ def test_update_item():
     updated_item = ItemLoose.read(item.url_hash)
     assert updated_item.title == update_data["title"]
 
+
 def test_delete_item():
     item_data = {
         "url": "https://example.com",
@@ -57,4 +61,3 @@ def test_delete_item():
     ItemLoose.delete(item.url_hash)
     deleted_item = ItemLoose.read(item.url_hash)
     assert deleted_item is None
-

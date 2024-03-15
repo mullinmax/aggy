@@ -6,6 +6,7 @@ import hashlib
 from .base import BlinderBaseModel, r
 from .item import ItemStrict
 
+
 class Category(BlinderBaseModel):
     user_hash: str
     name: constr(strict=True, min_length=1)
@@ -19,13 +20,13 @@ class Category(BlinderBaseModel):
 
     def create(self):
         category_key = self.__key__
-        
-        if r.exists(category_key):
-            raise Exception(f"Category with name {self.name} already exists")    
 
-        r.hset(category_key, mapping={'name': self.name, 'user_hash': self.user_hash})
+        if r.exists(category_key):
+            raise Exception(f"Category with name {self.name} already exists")
+
+        r.hset(category_key, mapping={"name": self.name, "user_hash": self.user_hash})
         r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
-        
+
         return category_key
 
     @classmethod
@@ -38,7 +39,7 @@ class Category(BlinderBaseModel):
             raise Exception("Category does not exist")
 
     @classmethod
-    def read_all(cls, user_hash) -> List['Category']:
+    def read_all(cls, user_hash) -> List["Category"]:
         category_name_hashs = r.smembers(f"USER:{user_hash}:CATEGORIES")
         categories = []
         for name_hash in category_name_hashs:
@@ -46,12 +47,12 @@ class Category(BlinderBaseModel):
         return categories
 
     def get_all_items(self):
-        current_app.logger.info(f'getting all items in {self.__key__}')
-        url_hashes = r.zrange(f'{self.__key__}:ITEMS', 0, -1)
-        current_app.logger.info(f'retreived {len(url_hashes)} url_hashes')
+        current_app.logger.info(f"getting all items in {self.__key__}")
+        url_hashes = r.zrange(f"{self.__key__}:ITEMS", 0, -1)
+        current_app.logger.info(f"retreived {len(url_hashes)} url_hashes")
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
         items = [i for i in items if i]
-        current_app.logger.info(f'number of items retreived: {len(items)}')
+        current_app.logger.info(f"number of items retreived: {len(items)}")
         if len(items) > 0:
-            current_app.logger.info(f'First item: {str(items[0])}')
+            current_app.logger.info(f"First item: {str(items[0])}")
         return items

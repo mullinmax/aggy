@@ -21,7 +21,7 @@
 <script>
     document.getElementById('addFeedForm').addEventListener('submit', function(e) {
         e.preventDefault();  // Prevent the default form submission
-        
+
         var formData = new FormData(this);
         fetch('/feed/add', {
             method: 'POST',
