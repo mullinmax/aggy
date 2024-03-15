@@ -54,11 +54,27 @@ class ItemBase(BlinderBaseModel):
     def delete(self):
         r.delete(self.key)
 
+    def remove_tags_with_content(html, tags_to_remove=["script", "style"]):
+        """
+        Removes specified tags and their content from HTML.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        for tag in tags_to_remove:
+            [s.extract() for s in soup(tag)]
+
+        return str(soup)
+
     @validator("content", pre=True, allow_reuse=True, check_fields=False)
     def sanitize_and_fix_links(cls, v, values):
-        # TODO fix this so it correctly finds and fixes relative links
         if "url" in values and v:
             soup = BeautifulSoup(str(v), "html.parser")
+
+            # remove all script tags
+            [s.extract() for s in soup("script")]
+
+            # remove all style tags
+            [s.extract() for s in soup("style")]
 
             # Find all <a> tags with a relative href attribute
             for a_tag in soup.find_all("a", href=True):
