@@ -1,6 +1,4 @@
-from pydantic import BaseModel, HttpUrl
-from typing import Any, Dict
-from datetime import datetime, date
+from pydantic import BaseModel
 import redis
 from redislite import Redis as redis_lite
 
@@ -23,21 +21,6 @@ r = get_redis_connection()
 
 
 class BlinderBaseModel(BaseModel):
-    def str_dict(self, *args, **kwargs) -> Dict[str, Any]:
-        d = super().dict(*args, **kwargs)
-
-        # Convert fields to appropriate format for Redis
-        for key, value in d.items():
-            if isinstance(value, (datetime, date)):
-                # Convert datetime/date to ISO 8601 string format
-                d[key] = value.isoformat()
-            elif isinstance(value, HttpUrl):
-                # Convert HttpUrl to string
-                d[key] = str(value)
-            # Add handling for other types as necessary
-
-        return d
-
     @property
     def key(self):
         raise NotImplementedError()
