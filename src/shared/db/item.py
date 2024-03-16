@@ -1,4 +1,4 @@
-from pydantic import field_validator, StringConstraints, HttpUrl, validator
+from pydantic import field_validator, StringConstraints, HttpUrl, model_validator
 from datetime import datetime
 import dateparser
 from bleach import clean
@@ -33,7 +33,7 @@ class ItemBase(BlinderBaseModel):
 
     def create(self):
         with self.redis_con() as r:
-            r.set(self.key, self.json())
+            r.set(self.key, self.model_dump_json())
 
     @classmethod
     def read(cls, url_hash):
@@ -41,7 +41,7 @@ class ItemBase(BlinderBaseModel):
             item_json = r.get(f"ITEM:{url_hash}")
 
         if item_json:
-            return cls.parse_raw(item_json)
+            return cls.model_validate_json(item_json)
         return None
 
     def update(self, **updates):
@@ -49,7 +49,7 @@ class ItemBase(BlinderBaseModel):
             item_json = r.get(self.key)
 
         if item_json:
-            item = self.parse_raw(item_json)
+            item = self.model_validate_json(item_json)
 
             for field, value in updates.items():
                 setattr(item, field, value)
@@ -75,46 +75,51 @@ class ItemBase(BlinderBaseModel):
 
     # TODO[pydantic]: We couldn't refactor the `validator`, please replace it by `field_validator` manually.
     # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-validators for more information.
-    @validator("content", pre=True, check_fields=False)
-    def sanitize_and_fix_links(cls, v, values):
-        if "url" in values and v:
-            soup = BeautifulSoup(str(v), "html.parser")
+    @model_validator(mode="after")
+    def sanitize_and_fix_links(self):
+        soup = BeautifulSoup(str(self.content), "html.parser")
 
-            # remove all script tags
-            [s.extract() for s in soup("script")]
+        # remove all script tags
+        [s.extract() for s in soup("script")]
 
-            # remove all style tags
-            [s.extract() for s in soup("style")]
+        # remove all style tags
+        [s.extract() for s in soup("style")]
 
-            # Find all <a> tags with a relative href attribute
-            for a_tag in soup.find_all("a", href=True):
-                # Check if the link is relative
-                href = a_tag["href"]
-                parsed_href = urlparse(href)
-                if not parsed_href.netloc:
-                    # Join the relative link with the base URL
-                    base_url = str(values["url"])
-                    absolute_url = urljoin(base_url, href)
-                    a_tag["href"] = absolute_url
+        base_url = str(self.url)
 
-            # Find and fix relative src in <img> tags
-            for img_tag in soup.find_all("img", src=True):
-                src = img_tag["src"]
-                parsed_src = urlparse(src)
-                if not parsed_src.netloc:
-                    base_url = str(values["url"])
-                    absolute_url = urljoin(base_url, src)
-                    img_tag["src"] = absolute_url
+        # Find all <a> tags with a relative href attribute
+        for a_tag in soup.find_all("a", href=True):
+            # Check if the link is relative
+            href = a_tag["href"]
+            parsed_href = urlparse(href)
+            if not parsed_href.netloc:
+                # Join the relative link with the base URL
+                absolute_url = urljoin(base_url, href)
+                a_tag["href"] = absolute_url
 
-            # Sanitize the potentially modified HTML
-            sanitized_html = clean(
-                str(soup),
-                tags=["p", "b", "i", "u", "a", "img"],
-                attributes={"a": ["href", "title"], "img": ["src", "alt"]},
-                strip=True,
-            )
-            return sanitized_html
-        return v
+        # Find and fix relative src in <img> tags
+        for img_tag in soup.find_all("img", src=True):
+            src = img_tag["src"]
+            parsed_src = urlparse(src)
+            if not parsed_src.netloc:
+                absolute_url = urljoin(base_url, src)
+                img_tag["src"] = absolute_url
+
+        # Sanitize the potentially modified HTML
+        self.content = clean(
+            str(soup),
+            tags=["p", "b", "i", "u", "a", "img", "table", "tr", "td", "th"],
+            attributes={
+                "a": ["href", "title"],
+                "img": ["src", "alt"],
+                "table": [],  # Add any table-related attributes if needed
+                "tr": [],
+                "td": ["colspan", "rowspan"],
+                "th": ["colspan", "rowspan"],
+            },
+            strip=True,
+        )
+        return self
 
     @field_validator("date_published", mode="before")
     @classmethod
