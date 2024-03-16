@@ -69,5 +69,5 @@ def redis_server():
     else:
         # In CI/CD environments, assume Redis is already running and configured
         redis_host = config.get("REDIS_HOST")
-        wait_for_redis_to_be_ready(redis_host)
+        wait_for_redis_to_be_ready(redis_host, timeout=60)
         yield redis_host
