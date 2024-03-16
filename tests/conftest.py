@@ -27,7 +27,7 @@ def redis_container():
         name=container_name,
         detach=True,
         auto_remove=True,
-        network="traefik_default",
+        network=config.get("PYTEST_REDIS_DOCKER_NETWORK"),
     )
 
     yield container_name  # Container name used as the hostname
@@ -61,9 +61,15 @@ def wait_for_redis_to_be_ready(host, timeout=10):
 
 @pytest.fixture(scope="session", autouse=True)
 def redis_server():
-    """Pytest fixture to manage the Redis server lifecycle."""
-    with redis_container() as redis_hostname:
-        wait_for_redis_to_be_ready(redis_hostname)
-        config.set("REDIS_PORT", 6379)
-        config.set("REDIS_HOST", redis_hostname)
-        yield redis_hostname
+    if config.get("PYTEST_RUNTIME_TYPE", "local") == "local":
+        with redis_container() as redis_hostname:
+            wait_for_redis_to_be_ready(redis_hostname)
+            config.set("REDIS_PORT", 6379)
+            config.set("REDIS_HOST", redis_hostname)
+            yield redis_hostname
+    else:
+        # In CI/CD environments, assume Redis is already running and configured
+        redis_host = config.get("REDIS_HOST")
+        redis_port = config.get("REDIS_PORT", 6379)
+        wait_for_redis_to_be_ready(redis_host, redis_port)
+        yield redis_host
