@@ -58,3 +58,7 @@ jobs:
         PYTEST_REDIS_DOCKER_NETWORK: bridge
       run: |
         pytest
+
+    - name: Test Redis connection (Diagnostic)
+      run: |
+        docker run --network container:test_redis redis redis-cli -h redis ping
