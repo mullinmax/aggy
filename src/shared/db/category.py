@@ -1,15 +1,16 @@
-from pydantic import constr
+from pydantic import StringConstraints
 from typing import List
 from flask import current_app
 import hashlib
 
 from .base import BlinderBaseModel
 from .item import ItemStrict
+from typing_extensions import Annotated
 
 
 class Category(BlinderBaseModel):
     user_hash: str
-    name: constr(strict=True, min_length=1)
+    name: Annotated[str, StringConstraints(strict=True, min_length=1)]
     name_hash: str = ""  # generated if not provided
 
     @property

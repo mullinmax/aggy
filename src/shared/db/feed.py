@@ -1,15 +1,16 @@
-from pydantic import constr, HttpUrl
+from pydantic import StringConstraints, HttpUrl
 from typing import List, Set
 from flask import current_app
 import hashlib
 
 from .base import BlinderBaseModel
 from shared.config import config
+from typing_extensions import Annotated
 
 
 class Feed(BlinderBaseModel):
     user_hash: str
-    name: constr(strict=True, min_length=1)
+    name: Annotated[str, StringConstraints(strict=True, min_length=1)]
     url: HttpUrl
     category_hashes: Set[str]  # Set of category UUIDs
     name_hash: str = ""  # generated if not provided

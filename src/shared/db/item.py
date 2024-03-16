@@ -1,4 +1,4 @@
-from pydantic import HttpUrl, validator, constr
+from pydantic import field_validator, StringConstraints, HttpUrl, validator
 from datetime import datetime
 import dateparser
 from bleach import clean
@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from .base import BlinderBaseModel
+from typing_extensions import Annotated
 
 
 class ItemBase(BlinderBaseModel):
@@ -72,7 +73,9 @@ class ItemBase(BlinderBaseModel):
 
         return str(soup)
 
-    @validator("content", pre=True, allow_reuse=True, check_fields=False)
+    # TODO[pydantic]: We couldn't refactor the `validator`, please replace it by `field_validator` manually.
+    # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-validators for more information.
+    @validator("content", pre=True, check_fields=False)
     def sanitize_and_fix_links(cls, v, values):
         if "url" in values and v:
             soup = BeautifulSoup(str(v), "html.parser")
@@ -113,7 +116,8 @@ class ItemBase(BlinderBaseModel):
             return sanitized_html
         return v
 
-    @validator("date_published", pre=True, allow_reuse=True)
+    @field_validator("date_published", mode="before")
+    @classmethod
     def parse_date_published(cls, v):
         if v is None:
             return None
@@ -122,15 +126,10 @@ class ItemBase(BlinderBaseModel):
             return parsed_date
         raise ValueError("Invalid date format")
 
-    @validator(
-        "title",
-        "author",
-        "domain",
-        "excerpt",
-        pre=True,
-        allow_reuse=True,
-        check_fields=False,
+    @field_validator(
+        "title", "author", "domain", "excerpt", mode="before", check_fields=False
     )
+    @classmethod
     def remove_html_tags(cls, v):
         if v:
             return clean(
@@ -140,7 +139,7 @@ class ItemBase(BlinderBaseModel):
 
 
 class ItemStrict(ItemBase):
-    title: constr(strict=True, min_length=1)
+    title: Annotated[str, StringConstraints(strict=True, min_length=1)]
     domain: str
     excerpt: str
     content: str
