@@ -51,8 +51,7 @@ def is_redis_ready(host, port=6379):
 
 def wait_for_redis_to_be_ready(host, timeout=10):
     """Wait for Redis to be ready, up to a specified timeout."""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
+    for i in range(timeout):
         if is_redis_ready(host):
             return
         time.sleep(1)
