@@ -17,6 +17,10 @@ class BlinderBaseModel(BaseModel):
     def key(self):
         raise NotImplementedError()
 
+    def exists(self) -> bool:
+        with self.redis_con() as r:
+            return r.exists(self.key)
+
     @classmethod
     @contextmanager
     def redis_con(cls):

@@ -11,26 +11,44 @@ from typing_extensions import Annotated
 class Category(BlinderBaseModel):
     user_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
-    name_hash: str = ""  # generated if not provided
 
     @property
-    def __key__(self):
-        if not self.name_hash:
-            self.name_hash = hashlib.sha256(self.name.encode()).hexdigest()
+    def key(self):
         return f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
 
+    @property
+    def name_hash(self):
+        return hashlib.sha256(self.name.encode()).hexdigest()
+
     def create(self):
-        category_key = self.__key__
         with self.redis_con() as r:
-            if r.exists(category_key):
+            if self.exists():
                 raise Exception(f"Category with name {self.name} already exists")
 
-            r.hset(
-                category_key, mapping={"name": self.name, "user_hash": self.user_hash}
-            )
+            r.hset(self.key, mapping={"name": self.name})
             r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
 
-        return category_key
+        return self.key
+
+    def delete(self):
+        with self.redis_con() as r:
+            # remove category from list of user's categories
+            r.srem(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
+
+            # remove category from feed's lists of categories
+            feeds_key = f"{self.key}:FEEDS"
+            for feed_hash in r.smembers(feeds_key):
+                r.srem(
+                    f"USER:{self.user_hash}:FEED:{feed_hash}::CATEGORIES",
+                    self.name_hash,
+                )
+            r.delete(feeds_key)
+
+            # delete list of category items
+            r.delete(f"{self.key}:ITEMS")
+
+            # delete self
+            r.delete(self.key)
 
     @classmethod
     def read(cls, user_hash, name_hash):
@@ -54,10 +72,10 @@ class Category(BlinderBaseModel):
         return categories
 
     def get_all_items(self):
-        current_app.logger.info(f"getting all items in {self.__key__}")
+        current_app.logger.info(f"getting all items in {self.key}")
 
         with self.redis_con() as r:
-            url_hashes = r.zrange(f"{self.__key__}:ITEMS", 0, -1)
+            url_hashes = r.zrange(f"{self.key}:ITEMS", 0, -1)
 
         current_app.logger.info(f"retreived {len(url_hashes)} url_hashes")
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
