@@ -1,6 +1,6 @@
 import pytest
-from redislite import Redis as redis_lite
-from src.shared.db.base import BlinderBaseModel, get_redis_connection
+import redis
+from src.shared.db.base import BlinderBaseModel
 
 
 def test_key_property_raises_not_implemented_error():
@@ -10,6 +10,9 @@ def test_key_property_raises_not_implemented_error():
         _ = model.key
 
 
-def test_redis_connection_in_test_mode():
-    r = get_redis_connection()
-    assert isinstance(r, redis_lite), "Should use redislite in testing mode"
+def test_redis_con():
+    model = BlinderBaseModel()
+
+    with model.redis_con() as r:
+        assert isinstance(r, redis.Redis)
+        # r.ping()

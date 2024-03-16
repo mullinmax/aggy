@@ -8,7 +8,7 @@ import html
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
-from .base import BlinderBaseModel, r
+from .base import BlinderBaseModel
 
 
 class ItemBase(BlinderBaseModel):
@@ -27,20 +27,26 @@ class ItemBase(BlinderBaseModel):
         return hashlib.sha256(encoded_str).hexdigest()
 
     def exists(self) -> bool:
-        return r.strlen(self.key) > 0
+        with self.redis_con() as r:
+            return r.strlen(self.key) > 0
 
     def create(self):
-        r.set(self.key, self.json())
+        with self.redis_con() as r:
+            r.set(self.key, self.json())
 
     @classmethod
     def read(cls, url_hash):
-        item_json = r.get(f"ITEM:{url_hash}")
+        with cls.redis_con() as r:
+            item_json = r.get(f"ITEM:{url_hash}")
+
         if item_json:
             return cls.parse_raw(item_json)
         return None
 
     def update(self, **updates):
-        item_json = r.get(self.key)
+        with self.redis_con() as r:
+            item_json = r.get(self.key)
+
         if item_json:
             item = self.parse_raw(item_json)
 
@@ -52,7 +58,8 @@ class ItemBase(BlinderBaseModel):
             raise ValueError(f"Item with url_hash {self.key} not found")
 
     def delete(self):
-        r.delete(self.key)
+        with self.redis_con() as r:
+            r.delete(self.key)
 
     def remove_tags_with_content(html, tags_to_remove=["script", "style"]):
         """

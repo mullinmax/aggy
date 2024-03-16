@@ -1,15 +1,11 @@
 beautifulsoup4
 bleach
 dateparser
+docker
 flask
-
-# DEVELOPMENT
 pre-commit
-# PROD
 pydantic
-
-# TESTING
+pydantic
 pytest
 redis
-redislite
 requests
