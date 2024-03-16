@@ -3,15 +3,7 @@ on: [push, pull_request]
 
 jobs:
   test:
-
     runs-on: ubuntu-latest
-
-    services:
-      redis:
-        image: redis
-        ports:
-          - 6379:6379
-        options: --name test_redis --network-alias redis
 
     steps:
     - uses: actions/checkout@v2
@@ -28,37 +20,13 @@ jobs:
         pip install -r src/shared/requirements.txt
         pip install pytest docker redis
 
-    - name: Print Redis logs (Diagnostic)
-      if: always()  # Ensure this runs even if previous steps fail
-      run: |
-        sleep 5  # Give Redis a moment to start up
-        docker logs test_redis
-
-    - name: Test Redis connection (Diagnostic)
-      run: |
-        redis-cli -h redis -p 6379 ping
-
-    - name: Print environment variables (Diagnostic)
-      run: |
-        echo "REDIS_HOST=${REDIS_HOST}"
-        echo "REDIS_PORT=${REDIS_PORT}"
-        echo "PYTEST_RUNTIME_TYPE=${PYTEST_RUNTIME_TYPE}"
-        echo "PYTEST_REDIS_DOCKER_NETWORK=${PYTEST_REDIS_DOCKER_NETWORK}"
-
-    - name: Inspect Docker network (Diagnostic)
-      run: |
-        docker network ls
-        docker network inspect bridge
+    - name: Start Redis
+      uses: supercharge/redis-github-action@1.8.0
 
     - name: Run tests
       env:
-        REDIS_HOST: redis  # Uses the service container's network alias
-        REDIS_PORT: 6379
         PYTEST_RUNTIME_TYPE: ci
-        PYTEST_REDIS_DOCKER_NETWORK: bridge
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
       run: |
         pytest
-
-    - name: Test Redis connection (Diagnostic)
-      run: |
-        docker run --network container:test_redis redis redis-cli -h redis ping
