@@ -1,6 +1,5 @@
 from pydantic import StringConstraints
 from typing import List
-from flask import current_app
 import hashlib
 
 from .base import BlinderBaseModel
@@ -15,6 +14,10 @@ class Category(BlinderBaseModel):
     @property
     def key(self):
         return f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
+
+    @property
+    def items_key(self):
+        return f"{self.key}:CATEGORY:{self.name_hash}:ITEMS"
 
     @property
     def name_hash(self):
@@ -54,10 +57,9 @@ class Category(BlinderBaseModel):
     def read(cls, user_hash, name_hash):
         with cls.redis_con() as r:
             category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{name_hash}")
-            current_app.logger.info(category_data)
 
         if category_data:
-            return Category(**category_data, name_hash=name_hash)
+            return Category(name_hash=name_hash, user_hash=user_hash, **category_data)
         else:
             raise Exception("Category does not exist")
 
@@ -72,15 +74,9 @@ class Category(BlinderBaseModel):
         return categories
 
     def get_all_items(self):
-        current_app.logger.info(f"getting all items in {self.key}")
-
         with self.redis_con() as r:
-            url_hashes = r.zrange(f"{self.key}:ITEMS", 0, -1)
+            url_hashes = r.zrange(self.items_key, 0, -1)
 
-        current_app.logger.info(f"retreived {len(url_hashes)} url_hashes")
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
         items = [i for i in items if i]
-        current_app.logger.info(f"number of items retreived: {len(items)}")
-        if len(items) > 0:
-            current_app.logger.info(f"First item: {str(items[0])}")
         return items

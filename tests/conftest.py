@@ -3,10 +3,19 @@ import pytest
 import redis
 from contextlib import contextmanager
 import time
+import warnings
 
 from src.shared.config import config
 
+# fixtures
+from fixtures.category import unique_category  # noqa
+from fixtures.item import unique_item_strict  # noqa
+
 client = docker.from_env()
+
+
+# removes unimportant issue about item urls being strings when serialized
+warnings.filterwarnings("ignore", message=".*")
 
 
 @contextmanager

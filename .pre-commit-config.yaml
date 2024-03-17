@@ -7,18 +7,24 @@ repos:
       - id: check-ast
       - id: end-of-file-fixer
       - id: name-tests-test
+        exclude: ^fixtures/
       - id: requirements-txt-fixer
       - id: trailing-whitespace
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
     rev: v0.3.2
     hooks:
-      # Run the linter.
       - id: ruff
         args: [ --fix ]
-      # Run the formatter.
       - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-csslint
     rev: v1.0.5
     hooks:
       - id: csslint
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest --cov=./ --cov-report=xml:./coverage.xml
+        language: system
+        types: [python]
+        pass_filenames: false

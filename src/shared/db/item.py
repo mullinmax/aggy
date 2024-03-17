@@ -73,8 +73,6 @@ class ItemBase(BlinderBaseModel):
 
         return str(soup)
 
-    # TODO[pydantic]: We couldn't refactor the `validator`, please replace it by `field_validator` manually.
-    # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-validators for more information.
     @model_validator(mode="after")
     def sanitize_and_fix_links(self):
         soup = BeautifulSoup(str(self.content), "html.parser")

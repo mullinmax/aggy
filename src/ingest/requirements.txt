@@ -1,6 +1,5 @@
 beautifulsoup4
 bleach
-bleach
 croniter
 dateparser
 feedparser

@@ -19,7 +19,7 @@ class BlinderBaseModel(BaseModel):
 
     def exists(self) -> bool:
         with self.redis_con() as r:
-            return r.exists(self.key)
+            return bool(r.exists(self.key))
 
     @classmethod
     @contextmanager

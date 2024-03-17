@@ -5,7 +5,7 @@ docker
 flask
 pre-commit
 pydantic
-pydantic
 pytest
+pytest-cov
 redis
 requests
