@@ -31,7 +31,10 @@ class ItemBase(BlinderBaseModel):
         with self.redis_con() as r:
             return r.strlen(self.key) > 0
 
-    def create(self):
+    def create(self, overwrite=False):
+        if not overwrite and self.exists():
+            raise ValueError(f"Item with url_hash {self.key} already exists")
+
         with self.redis_con() as r:
             r.set(self.key, self.model_dump_json())
 
@@ -45,33 +48,13 @@ class ItemBase(BlinderBaseModel):
         return None
 
     def update(self, **updates):
-        with self.redis_con() as r:
-            item_json = r.get(self.key)
-
-        if item_json:
-            item = self.model_validate_json(item_json)
-
-            for field, value in updates.items():
-                setattr(item, field, value)
-
-            item.create()
-        else:
-            raise ValueError(f"Item with url_hash {self.key} not found")
+        for field, value in updates.items():
+            setattr(self, field, value)
+        self.create(overwrite=True)
 
     def delete(self):
         with self.redis_con() as r:
             r.delete(self.key)
-
-    def remove_tags_with_content(html, tags_to_remove=["script", "style"]):
-        """
-        Removes specified tags and their content from HTML.
-        """
-        soup = BeautifulSoup(html, "html.parser")
-
-        for tag in tags_to_remove:
-            [s.extract() for s in soup(tag)]
-
-        return str(soup)
 
     @model_validator(mode="after")
     def sanitize_and_fix_links(self):

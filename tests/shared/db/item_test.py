@@ -1,23 +1,6 @@
 import pytest
-import uuid
 
-from src.shared.db.item import ItemLoose
-
-
-@pytest.fixture(scope="function")
-def unique_item_data():
-    """Generates unique item data for each test."""
-    unique_id = str(uuid.uuid4())
-    return {
-        "url": f"https://example.com/{unique_id}",
-        "title": f"Example Title {unique_id}",
-        "content": f"<p>Example Content {unique_id}</p>",
-        "author": f"Author Name {unique_id}",
-        "image_url": f"https://example.com/image{unique_id}.jpg",
-        "domain": f"example{unique_id}.com",
-        "excerpt": f"Example excerpt {unique_id}",
-        "date_published": "2021-01-01T00:00:00",
-    }
+from src.shared.db.item import ItemLoose, ItemStrict
 
 
 @pytest.mark.parametrize(
@@ -35,89 +18,131 @@ def unique_item_data():
         ),
     ],
 )
-def test_content_sanitization(html_input, expected_output, unique_item_data):
+def test_content_sanitization(html_input, expected_output, unique_item_strict):
     """Tests that only safe HTML content is retained."""
-    unique_item_data["content"] = html_input
-    item = ItemLoose(**unique_item_data)
+    unique_item_strict.content = html_input
+    unique_item_strict.create()
+
+    item = ItemLoose.read(unique_item_strict.url_hash)
     assert item.content == expected_output
 
 
-def test_merge_items(unique_item_data):
+def test_merge_items(unique_item_strict):
     """Tests merging of multiple loose items."""
-    item1 = ItemLoose(**unique_item_data)
-    item2_data = unique_item_data.copy()
-    item2_data["title"] = "A different title"
-    item2 = ItemLoose(**item2_data)
+    item1 = unique_item_strict
+    item2 = item1.model_copy()
+    item2.title = "A different title"
 
     merged_item = ItemLoose.merge_instances([item1, item2])
     assert merged_item.title in [
         "A different title",
-        unique_item_data["title"],
+        item1.title,
     ], "Title should be one of the original titles"
-    assert (
-        str(merged_item.url) == unique_item_data["url"]
-    ), "URL should remain unchanged"
+    assert str(merged_item.url) == str(item1.url), "URL should remain unchanged"
 
 
-def test_date_published_parsing(unique_item_data):
+@pytest.mark.filterwarnings("ignore::UserWarning")
+@pytest.mark.parametrize(
+    "raw_date,expected_date",
+    [
+        ("2021-01-01", "2021-01-01"),
+        ("2021/01/01", "2021-01-01"),
+        ("2021-01-01T00:00:00", "2021-01-01"),
+        ("2021-01-01T00:00:00Z", "2021-01-01"),
+        ("May 1, 2021", "2021-05-01"),
+        ("MAR 1, 2021", "2021-03-01"),
+        ("1st of April, 2021", "2021-04-01"),
+    ],
+)
+def test_date_published_parsing(unique_item_strict, raw_date, expected_date):
     """Tests parsing of various date_published string formats."""
-    date_str = "2022-12-25"
-    unique_item_data["date_published"] = date_str
-    item = ItemLoose(**unique_item_data)
-    assert item.date_published.isoformat().startswith(
-        date_str
-    ), "The date_published should be correctly parsed"
+    unique_item_strict.date_published = raw_date
+    unique_item_strict.create()
+
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item.date_published.strftime("%Y-%m-%d") == expected_date
 
 
-def test_create_read_item():
-    item_data = {
-        "url": "https://example.com/",
-        "title": "Example Title",
-        "content": "<p>Example Content</p>",
-        "author": "Author Name",
-        "image_url": "https://example.com/image.jpg",
-        "domain": "example.com",
-        "excerpt": "Example excerpt",
-    }
-    item = ItemLoose(**item_data)
-    ItemLoose.create(item)
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_bad_date_published_parsing(unique_item_strict):
+    """Tests parsing of a bad date_published string."""
+    unique_item_strict.date_published = "bad date"
+    unique_item_strict.create()
 
-    read_item = ItemLoose.read(item.url_hash)
-    assert read_item
-    assert str(read_item.url) == item_data["url"]
+    with pytest.raises(ValueError) as e:
+        _ = ItemStrict.read(unique_item_strict.url_hash)
+    assert "Invalid date format" in str(e.value)
 
 
-def test_update_item():
-    item_data = {
-        "url": "https://example.com",
-        "title": "Original Title",
-    }
-    item = ItemLoose(**item_data)
-    ItemLoose.create(item)
-
-    update_data = {"title": "Updated Title"}
-    item.update(**update_data)
-
-    updated_item = ItemLoose.read(item.url_hash)
-    assert updated_item.title == update_data["title"]
+def test_create_read_item(unique_item_strict):
+    """Tests creating and reading an item."""
+    unique_item_strict.create()
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item.title == unique_item_strict.title
+    assert item.domain == unique_item_strict.domain
+    assert item.excerpt == unique_item_strict.excerpt
+    assert item.content == unique_item_strict.content
 
 
-def test_delete_item():
-    item_data = {
-        "url": "https://example.com",
-        "title": "Example Title",
-    }
-    item = ItemLoose(**item_data)
-    ItemLoose.create(item)
+def test_update_item(unique_item_strict):
+    """Tests updating an item."""
+    unique_item_strict.create()
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    item.title = "Updated title"
+    item.update()
 
-    non_deleted_item = ItemLoose.read(item.url_hash)
-    assert non_deleted_item.exists()
+    updated_item = ItemLoose.read(unique_item_strict.url_hash)
+    assert updated_item.title == "Updated title"
+
+
+def test_delete_item(unique_item_strict):
+    """Tests deleting an item."""
+    unique_item_strict.create()
+    item = ItemLoose.read(unique_item_strict.url_hash)
+
     assert item.exists()
-    assert non_deleted_item
-
     item.delete()
-
-    deleted_item = ItemLoose.read(item.url_hash)
     assert not item.exists()
-    assert not non_deleted_item.exists()
-    assert deleted_item is None
+
+
+def test_overwrite_error(unique_item_strict):
+    """Tests that overwriting an existing item raises an error."""
+    unique_item_strict.create()
+    with pytest.raises(Exception) as e:
+        unique_item_strict.create(overwrite=False)
+    assert "already exists" in str(
+        e.value
+    ), "Should not allow overwriting existing items"
+
+
+def test_read_nonexistent_item(unique_item_strict):
+    """Tests reading a nonexistent item."""
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item is None
+
+
+def test_relative_link_sanitization(unique_item_strict):
+    """Tests that relative links are sanitized."""
+    unique_item_strict.content = '<a href="/example">Example</a>'
+    unique_item_strict.create()
+
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item.content == f'<a href="{unique_item_strict.url}example">Example</a>'
+
+
+def test_abs_link_preservtion(unique_item_strict):
+    """Tests that relative links are sanitized."""
+    unique_item_strict.content = '<a href="https://google.com">Example</a>'
+    unique_item_strict.create()
+
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item.content == unique_item_strict.content
+
+
+def test_relative_img_sanitization(unique_item_strict):
+    """Tests that relative image links are sanitized."""
+    unique_item_strict.content = '<img src="/example.jpg">'
+    unique_item_strict.create()
+
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item.content == f'<img src="{unique_item_strict.url}example.jpg">'
