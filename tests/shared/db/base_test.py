@@ -15,4 +15,10 @@ def test_redis_con():
 
     with model.redis_con() as r:
         assert isinstance(r, redis.Redis)
-        # r.ping()
+        r.ping()
+
+
+def test_base_create_raises_not_implemented_error():
+    model = BlinderBaseModel()
+    with pytest.raises(NotImplementedError):
+        model.create()
