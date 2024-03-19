@@ -11,6 +11,7 @@ from src.shared.config import config
 from fixtures.category import unique_category  # noqa
 from fixtures.item import unique_item_strict  # noqa
 from fixtures.feed import unique_feed  # noqa
+from fixtures.user import unique_user, unique_user_w_password, unique_super_user  # noqa
 
 client = docker.from_env()
 

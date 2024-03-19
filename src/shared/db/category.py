@@ -1,11 +1,11 @@
 from pydantic import StringConstraints
 from typing import List
 import hashlib
+from typing_extensions import Annotated
 
 from .base import BlinderBaseModel
 from .item import ItemStrict
 from .feed import Feed
-from typing_extensions import Annotated
 
 
 class Category(BlinderBaseModel):

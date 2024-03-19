@@ -6,7 +6,6 @@ from src.shared.db.item import ItemStrict
 
 @pytest.fixture(scope="function")
 def unique_item_strict(unique_category):
-    """Generates unique category data for each test, assuming a Redis connection fixture."""
     item = ItemStrict(
         url="http://example.com",
         author="Example author",
