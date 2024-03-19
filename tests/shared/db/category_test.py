@@ -3,6 +3,30 @@ import pytest
 from src.shared.db.category import Category
 
 
+def test_key(unique_category):
+    """Tests the key property."""
+    assert (
+        unique_category.key
+        == f"USER:{unique_category.user_hash}:CATEGORY:{unique_category.name_hash}"
+    )
+
+
+def test_items_key(unique_category):
+    """Tests the items_key property."""
+    assert (
+        unique_category.items_key
+        == f"USER:{unique_category.user_hash}:CATEGORY:{unique_category.name_hash}:ITEMS"
+    )
+
+
+def test_feeds_key(unique_category):
+    """Tests the feeds_key property."""
+    assert (
+        unique_category.feeds_key
+        == f"USER:{unique_category.user_hash}:CATEGORY:{unique_category.name_hash}:FEEDS"
+    )
+
+
 def test_category_creation(unique_category):
     """Tests creation of a category."""
     unique_category.create()
@@ -90,3 +114,24 @@ def test_feeds(unique_category, unique_feed):
     unique_category.delete_feed(unique_feed)
     assert unique_feed.name_hash not in unique_category.feed_hashes
     assert not unique_feed.exists()
+
+
+def test_delete_category_removes_feeds(unique_category, unique_feed):
+    """Tests that deleting a category removes its feeds."""
+    unique_category.create()
+    unique_category.add_feed(unique_feed)
+
+    with unique_category.redis_con() as r:
+        assert r.exists(unique_category.feeds_key)
+        assert not r.exists(unique_category.items_key)
+        assert r.exists(unique_category.key)
+        assert r.exists(unique_feed.key)
+
+    unique_category.delete()
+    assert not unique_feed.exists()
+    assert not unique_category.exists()
+    with unique_category.redis_con() as r:
+        assert not r.exists(unique_category.feeds_key)
+        assert not r.exists(unique_category.items_key)
+        assert not r.exists(unique_category.key)
+        assert not r.exists(unique_feed.key)

@@ -18,7 +18,11 @@ class Category(BlinderBaseModel):
 
     @property
     def items_key(self):
-        return f"{self.key}:CATEGORY:{self.name_hash}:ITEMS"
+        return f"{self.key}:ITEMS"
+
+    @property
+    def feeds_key(self):
+        return f"{self.key}:FEEDS"
 
     @property
     def name_hash(self):
@@ -27,7 +31,7 @@ class Category(BlinderBaseModel):
     @property
     def feed_hashes(self):
         with self.redis_con() as r:
-            return list(r.smembers(f"{self.key}:FEEDS"))
+            return list(r.smembers(f"{self.feeds_key}"))
 
     @property
     def feeds(self) -> List[Feed]:
@@ -55,14 +59,15 @@ class Category(BlinderBaseModel):
             # remove category from list of user's categories
             r.srem(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
 
-            # remove category from feed's lists of categories
-            feeds_key = f"{self.key}:FEEDS"
-            for feed_hash in r.smembers(feeds_key):
-                r.srem(
-                    f"USER:{self.user_hash}:FEED:{feed_hash}::CATEGORIES",
-                    self.name_hash,
+            # delete each feed then remove list
+            for feed_hash in self.feed_hashes:
+                feed = Feed.read(
+                    user_hash=self.user_hash,
+                    category_hash=self.name_hash,
+                    feed_hash=feed_hash,
                 )
-            r.delete(feeds_key)
+                feed.delete()
+            r.delete(self.feeds_key)
 
             # delete list of category items
             r.delete(f"{self.key}:ITEMS")
