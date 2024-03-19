@@ -75,3 +75,18 @@ def test_get_all_items(unique_category, unique_item_strict):
     unique_category.delete()
 
     assert not unique_category.exists()
+
+
+def test_feeds(unique_category, unique_feed):
+    """Tests adding and removing feeds from a category."""
+    unique_category.create()
+
+    unique_category.add_feed(unique_feed)
+    assert unique_feed.name_hash in unique_category.feed_hashes
+    assert len(unique_category.feed_hashes) == 1
+    assert unique_feed in unique_category.feeds
+    assert unique_feed.exists()
+
+    unique_category.delete_feed(unique_feed)
+    assert unique_feed.name_hash not in unique_category.feed_hashes
+    assert not unique_feed.exists()

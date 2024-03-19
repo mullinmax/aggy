@@ -24,6 +24,10 @@ class BlinderBaseModel(BaseModel):
     def create(self, overwrite=False):
         raise NotImplementedError()
 
+    def delete(self):
+        with self.redis_con() as r:
+            r.delete(self.key)
+
     @classmethod
     @contextmanager
     def redis_con(cls):

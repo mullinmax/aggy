@@ -48,6 +48,3 @@ def view_category(name_hash):
     return render_template(
         "view_category.html", category=category, feeds=feeds, items=items
     )
-    # except Exception as e:
-    #     logging.error(e)
-    #     return redirect(url_for('home.home'))

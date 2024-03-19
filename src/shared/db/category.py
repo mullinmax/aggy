@@ -4,6 +4,7 @@ import hashlib
 
 from .base import BlinderBaseModel
 from .item import ItemStrict
+from .feed import Feed
 from typing_extensions import Annotated
 
 
@@ -22,6 +23,22 @@ class Category(BlinderBaseModel):
     @property
     def name_hash(self):
         return hashlib.sha256(self.name.encode()).hexdigest()
+
+    @property
+    def feed_hashes(self):
+        with self.redis_con() as r:
+            return list(r.smembers(f"{self.key}:FEEDS"))
+
+    @property
+    def feeds(self) -> List[Feed]:
+        return [
+            Feed.read(
+                user_hash=self.user_hash,
+                category_hash=self.name_hash,
+                feed_hash=feed_hash,
+            )
+            for feed_hash in self.feed_hashes
+        ]
 
     def create(self):
         with self.redis_con() as r:
@@ -80,3 +97,16 @@ class Category(BlinderBaseModel):
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
         items = [i for i in items if i]
         return items
+
+    def add_feed(self, feed: Feed):
+        with self.redis_con() as r:
+            feed.user_hash = self.user_hash
+            feed.category_hash = self.name_hash
+            if not feed.exists():
+                feed.create()
+            r.sadd(f"{self.key}:FEEDS", feed.name_hash)
+
+    def delete_feed(self, feed: Feed):
+        with self.redis_con() as r:
+            feed.delete()
+            r.srem(f"{self.key}:FEEDS", feed.name_hash)
