@@ -144,9 +144,7 @@ class ItemLoose(ItemStrict):
 
         # Initialize the best instance with the first item's values
         best = cls(
-            url=items[
-                0
-            ].url,  # Assuming url is the same for all items, as it's the basis of comparison
+            url=items[0].url,
             author=items[0].author,
             date_published=items[0].date_published,
             title=items[0].title,
