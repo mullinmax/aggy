@@ -114,3 +114,24 @@ def test_created_time(unique_user):
     unique_user.delete()
     assert unique_user.created == created
     assert unique_user.updated > unique_user.created
+
+
+def test_two_users_password_check(unique_user):
+    assert not unique_user.exists()
+    unique_user.set_password("password")
+    unique_user.create()
+    assert unique_user.exists()
+
+    # make a new user
+    unique_user2 = User(
+        name="example_user2",
+    )
+    unique_user2.set_password("password2")
+    unique_user2.create()
+    assert unique_user2.exists()
+
+    # make sure passwords don't work for eachother
+    assert unique_user.check_password("password")
+    assert not unique_user.check_password("password2")
+    assert not unique_user2.check_password("password")
+    assert unique_user2.check_password("password2")
