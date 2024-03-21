@@ -98,9 +98,10 @@ def test_update_user(unique_user):
 
 
 def test_read_user_does_not_exist():
+    expected_name_hash = User(name="example_user").name_hash
     with pytest.raises(Exception) as e:
         User.read(name="example_user")
-    assert str(e.value) == "User with name example_user does not exist"
+    assert str(e.value) == f"User with name_hash {expected_name_hash} does not exist"
 
 
 def test_created_time(unique_user):

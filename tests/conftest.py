@@ -6,12 +6,14 @@ import time
 import warnings
 
 from src.shared.config import config
+from src.shared.db.base import db_init
 
 # fixtures
 from fixtures.category import unique_category  # noqa
 from fixtures.item import unique_item_strict  # noqa
 from fixtures.feed import unique_feed  # noqa
 from fixtures.user import unique_user  # noqa
+from src.shared.db.base import db_init  # noqa
 
 client = docker.from_env()
 
@@ -76,9 +78,11 @@ def redis_server():
             wait_for_redis_to_be_ready(redis_hostname)
             config.set("REDIS_PORT", 6379)
             config.set("REDIS_HOST", redis_hostname)
+            db_init(flush=True)
             yield redis_hostname
     else:
         # In CI/CD environments, assume Redis is already running and configured
         redis_host = config.get("REDIS_HOST")
         wait_for_redis_to_be_ready(redis_host, timeout=60)
+        db_init(flush=True)
         yield redis_host

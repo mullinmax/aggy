@@ -1,6 +1,5 @@
 import bcrypt
 from datetime import datetime
-import hashlib
 from pydantic import field_serializer
 from flask_login import UserMixin
 
@@ -16,11 +15,11 @@ class User(BlinderBaseModel):
 
     @property
     def key(self):
-        return f"USER:{self.name}"
+        return f"USER:{self.name_hash}"
 
     @property
     def name_hash(self):
-        return hashlib.sha256(self.name.encode()).hexdigest()
+        return self.__insecure_hash__(self.name)
 
     @classmethod
     def hash_password(cls, password: str):
@@ -68,14 +67,26 @@ class User(BlinderBaseModel):
         return self.key
 
     @classmethod
-    def read(cls, name: str):
+    def read(cls, name_hash=None, name=None):
+        if name_hash is None:
+            if name is None:
+                raise Exception("name or name_hash is required")
+            name_hash = User(name=name).name_hash
+
         with cls.redis_con() as r:
-            user_data = r.hgetall(f"USER:{name}")
+            user_data = r.hgetall(f"USER:{name_hash}")
 
         if not user_data:
-            raise Exception(f"User with name {name} does not exist")
+            raise Exception(f"User with name_hash {name_hash} does not exist")
 
         return cls(**user_data)
+
+    @classmethod
+    def read_all(cls):
+        with cls.redis_con() as r:
+            user_hashes = r.smembers("USERS")
+
+        return [cls.read(name_hash=name_hash) for name_hash in user_hashes]
 
     def update(self):
         with self.redis_con() as r:

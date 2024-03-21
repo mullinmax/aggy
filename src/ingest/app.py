@@ -6,6 +6,7 @@ import traceback
 from parse_feed import parse_feed
 from shared.config import config
 from shared.db.base import get_redis_con
+from shared.db.user import User
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -14,26 +15,11 @@ logging.basicConfig(
 
 def build_feed_to_ingest_list():
     logging.info("building FEED-KEYS-TO-INGEST list")
-    r = get_redis_con()
-    # read in each user
-    user_hashes = r.smembers("USERS")
-    for user_hash in user_hashes:
-        logging.info(f"collecting feeds from user: {user_hash}")
-        # read in each feed from each user
-        feed_hashes = r.smembers(f"USER:{user_hash}:FEEDS")
-        logging.info(f"user: {user_hash} feed_hashes: {feed_hashes}")
-        if len(feed_hashes) > 0:
-            target_time = (
-                datetime.now() + timedelta(seconds=config.get("FEED_INGESTION_PERIOD"))
-            ).timestamp()
-            r.zadd(
-                config.get("FEEDS_TO_INGEST_KEY"),
-                mapping={
-                    f"USER:{user_hash}:FEED:{feed_hash}": target_time
-                    for feed_hash in feed_hashes
-                },
-                lt=True,  # take the sooner of the values if a feed already exists
-            )
+    users = User.read_all()
+    for user in users:
+        for category in user.categories:
+            for feed in category.feeds:
+                feed.trigger_ingest(skip_line=False)
     logging.info("FEED-KEYS-TO-INGEST build complete")
 
 

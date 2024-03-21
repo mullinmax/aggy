@@ -9,6 +9,7 @@ from routes.feed import feed_bp
 import logging
 
 from shared.config import config
+from shared.db.base import db_init
 
 app = Flask(__name__)
 app.secret_key = config.get("BLINDER_SECRET_KEY")
@@ -25,55 +26,20 @@ app.register_blueprint(category_bp)
 app.register_blueprint(feed_bp)
 
 
-# @app.route("/reset-items")
-# def reset_items():
-#     try:
-#         from shared.db import r
-
-#         # delete all items
-#         all_items = r.keys("ITEM:*")
-#         for item in all_items:
-#             r.delete(item)
-#         app.logger.info(f"Deleted {len(all_items)} items")
-
-#         # clear out all feeds
-#         all_feed_items = r.keys("USER:*:FEED:*:ITEMS")
-#         app.logger.info(f"found {len(all_feed_items)} feeds")
-#         for feed_items in all_feed_items:
-#             app.logger.info(f"resetting {feed_items}")
-#             r.srem(*feed_items)
-#         app.logger.info(f"Reset {len(all_feed_items)} feeds")
-
-#         # clear out all categories
-#         all_category_items = r.keys("USER:*:CATEGORY:*:ITEMS")
-#         app.logger.info(f"found {len(all_category_items)} categories")
-#         for category_items in all_category_items:
-#             app.logger.info(f"resetting {category_items}")
-#             r.zremrangebyrank(category_items, 0, -1)
-#         app.logger.info(f"Reset {len(all_category_items)} categories")
-
-#         # set all feeds to be parsed now
-#         r.zunionstore(
-#             config.get("FEEDS_TO_INGEST_KEY"),
-#             keys={config.get("FEEDS_TO_INGEST_KEY"): 0},
-#         )
-
-#         # save db
-#         r.bgsave()
-#         return redirect(url_for("home.home"))
-#     except Exception as e:
-#         app.logger.error(e)
-#         return redirect(url_for("home.home"))
-
-
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def catch_all(path):
-    app.logger.error(f"rerouting unknown route to home: {path}")
+@app.errorhandler(404)
+def page_not_found(e):
+    app.logger.error("rerouting unknown route to home")
     return redirect(url_for("home.home"))
 
 
+@app.errorhandler(500)
+def internal_error(error):
+    app.logger.error(f"Internal server error: {error}")
+    return redirect(url_for("home.home")), 500
+
+
 if __name__ == "__main__":
+    db_init(flush=False)
     from waitress import serve
 
     serve(app, host="0.0.0.0", port=5000)

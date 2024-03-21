@@ -3,7 +3,6 @@ from datetime import datetime
 import dateparser
 from bleach import clean
 from typing import Optional, List
-import hashlib
 import html
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
@@ -24,8 +23,7 @@ class ItemBase(BlinderBaseModel):
 
     @property
     def url_hash(self):
-        encoded_str = str(self.url).encode("utf-8")
-        return hashlib.sha256(encoded_str).hexdigest()
+        return self.__insecure_hash__(str(self.url))
 
     def exists(self) -> bool:
         with self.redis_con() as r:

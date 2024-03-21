@@ -1,7 +1,5 @@
-bcrypt
 flask
 flask-login
 flask-wtf
 pydantic
-redis
 waitress

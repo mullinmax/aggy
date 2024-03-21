@@ -1,6 +1,5 @@
 from pydantic import StringConstraints
 from typing import List
-import hashlib
 from typing_extensions import Annotated
 
 from .base import BlinderBaseModel
@@ -27,12 +26,12 @@ class Category(BlinderBaseModel):
 
     @property
     def name_hash(self):
-        return hashlib.sha256(self.name.encode()).hexdigest()
+        return self.__insecure_hash__(self.name)
 
     @property
     def feed_hashes(self):
         with self.redis_con() as r:
-            return list(r.smembers(f"{self.feeds_key}"))
+            return list(r.smembers(self.feeds_key))
 
     @property
     def feeds(self) -> List[Feed]:

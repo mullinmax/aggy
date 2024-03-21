@@ -1,8 +1,10 @@
+bcrypt
 beautifulsoup4
 bleach
 dateparser
 docker
 flask
+flask-login
 pre-commit
 pydantic
 pytest

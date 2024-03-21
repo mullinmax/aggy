@@ -1,5 +1,4 @@
 from pydantic import StringConstraints, HttpUrl
-import hashlib
 
 from .base import BlinderBaseModel
 from ..config import config
@@ -15,7 +14,7 @@ class Feed(BlinderBaseModel):
 
     @property
     def name_hash(self):
-        return hashlib.sha256(self.name.encode()).hexdigest()
+        return self.__insecure_hash__(self.name)
 
     @property
     def key(self):
@@ -33,12 +32,14 @@ class Feed(BlinderBaseModel):
                 raise Exception(f"Cannot create duplicate feed {self.key}")
 
             (r.hset(self.key, mapping={"url": str(self.url), "name": self.name}),)
-            self.trigger_update()
+            self.trigger_ingest(skip_line=True)
         return
 
-    def trigger_update(self):
+    def trigger_ingest(self, skip_line=False):
         with self.redis_con() as r:
-            r.zadd(config.get("FEEDS_TO_INGEST_KEY"), mapping={self.key: 0})
+            r.zadd(
+                config.get("FEEDS_TO_INGEST_KEY"), mapping={self.key: 0}, lt=skip_line
+            )
 
     @classmethod
     def read(cls, user_hash, category_hash, feed_hash):
