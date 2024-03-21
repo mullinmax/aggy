@@ -104,6 +104,11 @@ class Category(BlinderBaseModel):
         items = [i for i in items if i]
         return items
 
+    def add_items(self, *items: ItemStrict):
+        with self.redis_con() as r:
+            for item in items:
+                r.zadd(self.items_key, {item.url_hash: 0})
+
     def add_feed(self, feed: Feed):
         with self.redis_con() as r:
             feed.user_hash = self.user_hash

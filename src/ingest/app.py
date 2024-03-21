@@ -5,7 +5,7 @@ import traceback
 
 from parse_feed import parse_feed
 from shared.config import config
-from shared import db
+from shared.db.base import get_redis_con
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -14,7 +14,7 @@ logging.basicConfig(
 
 def build_feed_to_ingest_list():
     logging.info("building FEED-KEYS-TO-INGEST list")
-    r = db.r
+    r = get_redis_con()
     # read in each user
     user_hashes = r.smembers("USERS")
     for user_hash in user_hashes:
@@ -38,7 +38,7 @@ def build_feed_to_ingest_list():
 
 
 def parse_next_feed():
-    r = db.r
+    r = get_redis_con()
     # get the lowest scoring (ie soonest required) feed from FEED-KEYS-TO-INGEST
     res = r.zmpop(1, [config.get("FEEDS_TO_INGEST_KEY")], min=True)[1][0]
     logging.info(f"result of poping min: {res}")
@@ -72,7 +72,7 @@ def parse_next_feed():
 
 
 if __name__ == "__main__":
-    r = db.r
+    r = get_redis_con()
     # executor = ThreadPoolExecutor(max_workers=INGEST_NUM_THREADS)
 
     # with ThreadPoolExecutor(max_workers=INGEST_NUM_THREADS) as executor:

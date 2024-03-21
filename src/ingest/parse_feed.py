@@ -5,7 +5,9 @@ import json
 from bs4 import BeautifulSoup
 
 from shared.config import config
-from shared.db import r, ItemLoose, ItemStrict, Feed
+from shared.db.item import ItemLoose, ItemStrict
+from shared.db.feed import Feed
+from shared.db.category import Category
 
 
 def extract_content(url):
@@ -54,28 +56,18 @@ def get_opengraph_metadata(url):
 def parse_feed(feed_key):
     logging.info(f"starting parsing feed with key: {feed_key}")
 
-    user_hash = feed_key.split(":FEED:")[0].replace("USER:", "")
-    feed_hash = feed_key.split(":FEED:")[1]
+    feed = Feed.read_by_key(feed_key)
+    parsed_feed = feedparser.parse(str(feed.url))
 
-    feed = Feed.read(user_hash=user_hash, feed_hash=feed_hash)
-    feed = feedparser.parse(str(feed.url))
-
-    # find all categories that the feed is a member of
-    category_hashes = r.smembers(f"USER:{user_hash}:FEED:{feed_hash}:CATEGORIES")
-    category_keys = [
-        f"USER:{user_hash}:CATEGORY:{category_hash}"
-        for category_hash in category_hashes
-    ]
-
-    url_hashes_to_link = []
-    for entry in feed.entries:
+    new_items = []
+    for entry in parsed_feed.entries:
         temp_item = ItemLoose(url=entry.link)
 
         # we're using hlen because we want to check that it exists and has some content
         # in the future we can setup preview refreshing when something isn't right by simply deleting the contents
         if temp_item.exists():
             logging.info(f"Item already exists in database: {temp_item.key}")
-            url_hashes_to_link.append(temp_item.url_hash)
+            new_items.append(temp_item.url_hash)
             continue
 
         extract_item = ItemLoose(**extract_content(entry.link), url=entry.link)
@@ -124,19 +116,8 @@ def parse_feed(feed_key):
             # TODO make sure we don't attempt this url over and over
 
         final_item.create()
+        new_items.append(final_item)
 
-        url_hashes_to_link.append(final_item.url_hash)
-
-    # TODO leverage redis pipeline to make this more efficient and less spammy
-    logging.info(f"Adding {len(url_hashes_to_link)} items to feed: {feed_key}")
-    if url_hashes_to_link:
-        r.sadd(f"{feed_key}:ITEMS", *url_hashes_to_link)
-        for category_key in category_keys:
-            r.zadd(
-                f"{category_key}:ITEMS",
-                {url_hash: 0 for url_hash in url_hashes_to_link},
-                nx=True,
-            )
-            logging.info(
-                f"Added {len(url_hashes_to_link)} items to category {category_key}"
-            )
+    feed.add_items(*new_items)
+    category = Category.read(user_hash=feed.user_hash, name_hash=feed.category_hash)
+    category.add_items(*new_items)

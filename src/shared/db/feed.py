@@ -4,6 +4,7 @@ import hashlib
 from .base import BlinderBaseModel
 from ..config import config
 from typing_extensions import Annotated
+from .item import ItemStrict
 
 
 class Feed(BlinderBaseModel):
@@ -22,6 +23,10 @@ class Feed(BlinderBaseModel):
             f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:FEED:{self.name_hash}"
         )
 
+    @property
+    def feed_items_key(self):
+        return f"{self.key}:ITEMS"
+
     def create(self):
         with self.redis_con() as r:
             if r.exists(self.key):
@@ -38,10 +43,23 @@ class Feed(BlinderBaseModel):
     @classmethod
     def read(cls, user_hash, category_hash, feed_hash):
         feed_key = f"USER:{user_hash}:CATEGORY:{category_hash}:FEED:{feed_hash}"
+        return cls.read_by_key(feed_key)
+
+    @classmethod
+    def read_by_key(cls, feed_key):
         with cls.redis_con() as r:
             if r.exists(feed_key):
                 feed_data = r.hgetall(feed_key)
+                _, user_hash, _, category_hash, _, feed_hash = feed_key.split(":")
                 return Feed(
                     user_hash=user_hash, category_hash=category_hash, **feed_data
                 )
         return None
+
+    def add_items(self, *items: ItemStrict):
+        with self.redis_con() as r:
+            r.sadd(self.feed_items_key, *map(lambda i: i.key, items))
+
+    def count_items(self):
+        with self.redis_con() as r:
+            return r.scard(self.feed_items_key)

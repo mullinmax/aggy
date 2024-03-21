@@ -4,12 +4,15 @@ from contextlib import contextmanager
 
 from ..config import config
 
-# r = redis.Redis(
-#     host=config.get("REDIS_HOST"),
-#     port=int(config.get("REDIS_PORT")),
-#     decode_responses=True,
-#     db=0,
-# )
+
+def get_redis_con():
+    r = redis.Redis(
+        host=config.get("REDIS_HOST"),
+        port=int(config.get("REDIS_PORT")),
+        decode_responses=True,
+        db=0,
+    )
+    return r
 
 
 class BlinderBaseModel(BaseModel):
@@ -32,11 +35,5 @@ class BlinderBaseModel(BaseModel):
     @contextmanager
     def redis_con(cls):
         """Context manager to handle Redis connections."""
-        # Use actual Redis configuration for non-testing scenarios
-        r = redis.Redis(
-            host=config.get("REDIS_HOST"),
-            port=int(config.get("REDIS_PORT")),
-            decode_responses=True,
-            db=0,
-        )
+        r = get_redis_con()
         yield r
