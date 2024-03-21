@@ -25,45 +25,45 @@ app.register_blueprint(category_bp)
 app.register_blueprint(feed_bp)
 
 
-@app.route("/reset-items")
-def reset_items():
-    try:
-        from shared.db import r
+# @app.route("/reset-items")
+# def reset_items():
+#     try:
+#         from shared.db import r
 
-        # delete all items
-        all_items = r.keys("ITEM:*")
-        for item in all_items:
-            r.delete(item)
-        app.logger.info(f"Deleted {len(all_items)} items")
+#         # delete all items
+#         all_items = r.keys("ITEM:*")
+#         for item in all_items:
+#             r.delete(item)
+#         app.logger.info(f"Deleted {len(all_items)} items")
 
-        # clear out all feeds
-        all_feed_items = r.keys("USER:*:FEED:*:ITEMS")
-        app.logger.info(f"found {len(all_feed_items)} feeds")
-        for feed_items in all_feed_items:
-            app.logger.info(f"resetting {feed_items}")
-            r.srem(*feed_items)
-        app.logger.info(f"Reset {len(all_feed_items)} feeds")
+#         # clear out all feeds
+#         all_feed_items = r.keys("USER:*:FEED:*:ITEMS")
+#         app.logger.info(f"found {len(all_feed_items)} feeds")
+#         for feed_items in all_feed_items:
+#             app.logger.info(f"resetting {feed_items}")
+#             r.srem(*feed_items)
+#         app.logger.info(f"Reset {len(all_feed_items)} feeds")
 
-        # clear out all categories
-        all_category_items = r.keys("USER:*:CATEGORY:*:ITEMS")
-        app.logger.info(f"found {len(all_category_items)} categories")
-        for category_items in all_category_items:
-            app.logger.info(f"resetting {category_items}")
-            r.zremrangebyrank(category_items, 0, -1)
-        app.logger.info(f"Reset {len(all_category_items)} categories")
+#         # clear out all categories
+#         all_category_items = r.keys("USER:*:CATEGORY:*:ITEMS")
+#         app.logger.info(f"found {len(all_category_items)} categories")
+#         for category_items in all_category_items:
+#             app.logger.info(f"resetting {category_items}")
+#             r.zremrangebyrank(category_items, 0, -1)
+#         app.logger.info(f"Reset {len(all_category_items)} categories")
 
-        # set all feeds to be parsed now
-        r.zunionstore(
-            config.get("FEEDS_TO_INGEST_KEY"),
-            keys={config.get("FEEDS_TO_INGEST_KEY"): 0},
-        )
+#         # set all feeds to be parsed now
+#         r.zunionstore(
+#             config.get("FEEDS_TO_INGEST_KEY"),
+#             keys={config.get("FEEDS_TO_INGEST_KEY"): 0},
+#         )
 
-        # save db
-        r.bgsave()
-        return redirect(url_for("home.home"))
-    except Exception as e:
-        app.logger.error(e)
-        return redirect(url_for("home.home"))
+#         # save db
+#         r.bgsave()
+#         return redirect(url_for("home.home"))
+#     except Exception as e:
+#         app.logger.error(e)
+#         return redirect(url_for("home.home"))
 
 
 @app.route("/", defaults={"path": ""})

@@ -2,7 +2,7 @@ from pydantic import StringConstraints, HttpUrl
 import hashlib
 
 from .base import BlinderBaseModel
-from src.shared.config import config
+from ..config import config
 from typing_extensions import Annotated
 
 

@@ -2,6 +2,7 @@ import bcrypt
 from datetime import datetime
 import hashlib
 from pydantic import field_serializer
+from flask_login import UserMixin
 
 from .base import BlinderBaseModel
 from .category import Category
@@ -62,6 +63,7 @@ class User(BlinderBaseModel):
             self.updated = self.created
 
             r.hset(self.key, mapping=self.model_dump())
+            r.sadd("USERS", self.name_hash)
 
         return self.key
 
@@ -93,6 +95,9 @@ class User(BlinderBaseModel):
             for category in self.categories:
                 category.delete()
 
+            # remove user from list of users
+            r.srem("USERS", self.name_hash)
+
             # delete self
             r.delete(self.key)
 
@@ -118,3 +123,14 @@ class User(BlinderBaseModel):
     @field_serializer("updated")
     def updated_at_to_str(updated: datetime):
         return updated.strftime("%Y-%m-%d %H:%M:%S")
+
+
+class FlaskUser(User, UserMixin):
+    @property
+    def id(self):
+        # Assuming you want to use the user's name as the unique identifier
+        return self.name
+
+    # defines the key for the user that flask-login uses
+    def get_id(self):
+        return self.name

@@ -8,6 +8,7 @@ from .item import ItemStrict
 from .feed import Feed
 
 
+# TODO write validation that ensures we are using hashes where we should be (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
 class Category(BlinderBaseModel):
     user_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]

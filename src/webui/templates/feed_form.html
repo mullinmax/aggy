@@ -8,14 +8,7 @@
         <label for="feedUrl">RSS Feed URL</label>
         <input type="url" class="form-control" id="feedUrl" name="feedUrl" required>
     </div>
-    <div class="form-group">
-        <label for="categories">Categories</label>
-        <select multiple class="form-control" id="categories" name="categories">
-            {% for category in all_categories %}
-                <option value="{{ category.name_hash }}">{{ category.name }}</option>
-            {% endfor %}
-        </select>
-    </div>
+    <input type="hidden" id="categoryHash" name="categoryHash" value="{{ category.name_hash }}">
     <button type="submit" class="btn btn-primary">Add Feed</button>
 </form>
 <script>

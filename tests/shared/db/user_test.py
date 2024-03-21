@@ -4,10 +4,14 @@ from src.shared.db.user import User
 
 
 def test_create_user(unique_user):
-    assert not unique_user.exists()
-    unique_user.set_password("password")
-    unique_user.create()
-    assert unique_user.exists()
+    with unique_user.redis_con() as r:
+        assert not unique_user.exists()
+        assert len(r.smembers("USERS")) == 0
+        unique_user.set_password("password")
+        unique_user.create()
+        assert unique_user.exists()
+        assert len(r.smembers("USERS")) == 1
+        assert r.smembers("USERS") == {unique_user.name_hash}
 
 
 def test_read_user(unique_user):
