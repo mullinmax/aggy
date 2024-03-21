@@ -82,7 +82,9 @@ class Category(BlinderBaseModel):
             category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{name_hash}")
 
         if category_data:
-            return Category(name_hash=name_hash, user_hash=user_hash, **category_data)
+            category_data["name_hash"] = name_hash
+            category_data["user_hash"] = user_hash
+            return Category(**category_data)
         else:
             raise Exception("Category does not exist")
 
