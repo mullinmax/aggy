@@ -38,7 +38,6 @@ def list_categories():
 @category_bp.route("/<name_hash>", methods=["GET"])
 @login_required
 def view_category(name_hash):
-    # try:
     user_hash = current_user.name_hash
     current_app.logger.info(f"Requested URL: {request.url}")
     current_app.logger.info(f"{user_hash=} {name_hash=}")

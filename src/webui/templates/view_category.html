@@ -59,7 +59,9 @@
             {% for item in items %}
                 <div class="col-md-6">
                     <div class="card mt-3">
-                        <img src="{{ item.image_url }}" class="card-img-top" alt="{{ item.title }}" onerror="this.style.display='none'">
+                        {% if item.image_url %}
+                            <img src="{{ item.image_url }}" class="img-fluid" alt="{{ item.title }}" onerror="this.style.display='none'">
+                        {% endif %}
                         <div class="card-body">
                             <h5 class="card-title">{{ item.title }}</h5>
                             <h6 class="card-subtitle mb-2 text-muted">{{ item.domain }} | {{ item.author }} | {{ item.date_published.strftime('%Y-%m-%d') }}</h6>
