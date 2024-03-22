@@ -18,9 +18,9 @@ def create_category():
     # Create and save the new category
     try:
         category = Category(user_hash=user_hash, name=category_name)
-        category_key = category.create()
+        category.create()
         return jsonify(
-            {"message": "Category created successfully", "category_key": category_key}
+            {"message": "Category created successfully", "category_key": category.key}
         ), 201
     except Exception as e:
         current_app.logger.info(str(e))

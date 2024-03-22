@@ -25,6 +25,37 @@ def test_read_user(unique_user):
     assert not user.check_password("wrong_password")
 
 
+def test_read_user_by_name(unique_user):
+    assert not unique_user.exists()
+    unique_user.set_password("password")
+    unique_user.create()
+    assert unique_user.exists()
+    user = User.read(name=unique_user.name)
+    assert user is not None
+    assert user.check_password("password")
+
+
+def test_read_all():
+    assert User.read_all() == []
+
+
+def test_read_all_with_users(unique_user):
+    assert not unique_user.exists()
+    unique_user.set_password("password")
+    unique_user.create()
+    assert unique_user.exists()
+    users = User.read_all()
+    assert len(users) == 1
+    assert users[0].name == unique_user.name
+    assert users[0].check_password("password")
+
+
+def test_read_user_no_name_or_hash():
+    with pytest.raises(Exception) as e:
+        User.read()
+    assert str(e.value) == "name or name_hash is required"
+
+
 def test_create_user_no_password(unique_user):
     assert not unique_user.exists()
     with pytest.raises(Exception) as e:
@@ -140,3 +171,13 @@ def test_two_users_password_check(unique_user):
     assert not unique_user.check_password("password2")
     assert not unique_user2.check_password("password")
     assert unique_user2.check_password("password2")
+
+
+def test_user_add_category(unique_user, unique_category):
+    assert not unique_user.exists()
+    unique_user.set_password("password")
+    unique_user.create()
+    assert unique_user.exists()
+    unique_category.user_hash = unique_user.name_hash
+    unique_user.add_category(unique_category)
+    assert unique_user.categories == [unique_category]

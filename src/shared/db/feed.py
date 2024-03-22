@@ -1,8 +1,9 @@
 from pydantic import StringConstraints, HttpUrl
+from typing_extensions import Annotated
+from typing import List
 
 from .base import BlinderBaseModel
 from ..config import config
-from typing_extensions import Annotated
 from .item import ItemStrict
 
 
@@ -25,6 +26,17 @@ class Feed(BlinderBaseModel):
     @property
     def feed_items_key(self):
         return f"{self.key}:ITEMS"
+
+    @property
+    def items(self) -> List[ItemStrict]:
+        items = []
+        with self.redis_con() as r:
+            for item_url_hash in r.smembers(self.feed_items_key):
+                try:
+                    items.append(ItemStrict.read(url_hash=item_url_hash))
+                except Exception:
+                    pass
+        return items
 
     def create(self):
         with self.redis_con() as r:
@@ -57,9 +69,12 @@ class Feed(BlinderBaseModel):
                 )
         return None
 
-    def add_items(self, *items: ItemStrict):
+    def add_items(self, items: ItemStrict):
         with self.redis_con() as r:
-            r.sadd(self.feed_items_key, *map(lambda i: i.key, items))
+            if isinstance(items, ItemStrict):
+                items = [items]
+            for item in items:
+                r.sadd(self.feed_items_key, item.url_hash)
 
     def count_items(self):
         with self.redis_con() as r:

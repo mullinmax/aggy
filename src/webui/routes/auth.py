@@ -6,9 +6,9 @@ from flask import (
     render_template,
     flash,
     jsonify,
+    current_app,
 )
 from flask_login import LoginManager, login_user, logout_user
-
 from shared.db.user import FlaskUser
 
 # Create a Blueprint for authentication
@@ -20,9 +20,9 @@ login_manager.login_view = "auth.login"
 
 
 @login_manager.user_loader
-def load_user(name):
+def load_user(name_hash):
     try:
-        return FlaskUser.read(name)
+        return FlaskUser.read(name_hash=name_hash)
     except Exception:
         return None
 
@@ -38,7 +38,7 @@ def login():
             return jsonify({"error": "Username and password are required"}), 400
 
         try:
-            user = FlaskUser.read(username)
+            user = FlaskUser.read(name=username)
         except Exception:
             return jsonify({"error": "User does not exist"}), 404
 
@@ -60,14 +60,17 @@ def register():
 
         # Check if username and password are provided
         if not username or not password:
+            current_app.logger.error("Username and password are required")
             return jsonify({"error": "Username and password are required"}), 400
 
         user = FlaskUser(name=username)
         if user.exists():
+            current_app.logger.error(f"User with name {username} already exists")
             return jsonify({"error": "User already exists"}), 400
 
         user.set_password(password)
         user.create()
+        current_app.logger.info(f"User {username} registered successfully")
         return jsonify({"message": "Registration successful! Please log in."}), 201
 
     # For GET request, render the registration form

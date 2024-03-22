@@ -1,6 +1,7 @@
 from pydantic import StringConstraints
-from typing import List
+from typing import List, Union
 from typing_extensions import Annotated
+from flask import current_app
 
 from .base import BlinderBaseModel
 from .item import ItemStrict
@@ -77,15 +78,16 @@ class Category(BlinderBaseModel):
 
     @classmethod
     def read(cls, user_hash, name_hash):
+        key = f"USER:{user_hash}:CATEGORY:{name_hash}"
         with cls.redis_con() as r:
-            category_data = r.hgetall(f"USER:{user_hash}:CATEGORY:{name_hash}")
+            category_data = r.hgetall(key)
 
         if category_data:
             category_data["name_hash"] = name_hash
             category_data["user_hash"] = user_hash
             return Category(**category_data)
         else:
-            raise Exception("Category does not exist")
+            raise Exception(f"Category does not exist: {key}")
 
     @classmethod
     def read_all(cls, user_hash) -> List["Category"]:
@@ -94,7 +96,12 @@ class Category(BlinderBaseModel):
 
         categories = []
         for name_hash in category_name_hashs:
-            categories.append(cls.read(user_hash, name_hash))
+            try:
+                categories.append(cls.read(user_hash=user_hash, name_hash=name_hash))
+            except Exception:
+                current_app.logger.error(
+                    f"Category with name_hash {name_hash} does not exist"
+                )
         return categories
 
     def get_all_items(self):
@@ -105,8 +112,10 @@ class Category(BlinderBaseModel):
         items = [i for i in items if i]
         return items
 
-    def add_items(self, *items: ItemStrict):
+    def add_items(self, items: Union[ItemStrict, List[ItemStrict]]):
         with self.redis_con() as r:
+            if isinstance(items, ItemStrict):
+                items = [items]
             for item in items:
                 r.zadd(self.items_key, {item.url_hash: 0})
 

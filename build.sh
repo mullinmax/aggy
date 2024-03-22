@@ -1,6 +1,8 @@
 #!/bin/bash
 # build.sh
 
+docker compose down
+
 echo "Building blinder shared image..."
 docker build -t blinder-shared:latest ./src/shared
 

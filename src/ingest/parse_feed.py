@@ -67,7 +67,7 @@ def parse_feed(feed_key):
         # in the future we can setup preview refreshing when something isn't right by simply deleting the contents
         if temp_item.exists():
             logging.info(f"Item already exists in database: {temp_item.key}")
-            new_items.append(temp_item.url_hash)
+            new_items.append(temp_item)
             continue
 
         extract_item = ItemLoose(**extract_content(entry.link), url=entry.link)
@@ -118,6 +118,6 @@ def parse_feed(feed_key):
         final_item.create()
         new_items.append(final_item)
 
-    feed.add_items(*new_items)
+    feed.add_items(new_items)
     category = Category.read(user_hash=feed.user_hash, name_hash=feed.category_hash)
-    category.add_items(*new_items)
+    category.add_items(new_items)

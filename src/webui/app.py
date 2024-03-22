@@ -1,4 +1,4 @@
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect, url_for, request
 from flask_wtf.csrf import CSRFProtect
 
 
@@ -38,8 +38,19 @@ def internal_error(error):
     return redirect(url_for("home.home")), 500
 
 
+@app.before_request
+def log_request_info():
+    app.logger.debug("Headers: %s", request.headers)
+    app.logger.debug("Body: %s", request.get_data())
+
+
 if __name__ == "__main__":
     db_init(flush=False)
     from waitress import serve
 
+    # TODO probably want this abel to be set in config
+    waitress_logger = logging.getLogger("waitress")
+    waitress_logger.setLevel(logging.INFO)
+
     serve(app, host="0.0.0.0", port=5000)
+    # app.run(host="0.0.0.0", port=5000)

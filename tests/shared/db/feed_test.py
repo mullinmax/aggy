@@ -35,3 +35,18 @@ def test_read_feed(unique_feed):
     assert (
         read_feed.category_hash == unique_feed.category_hash
     ), "Feed category_hash should match"
+
+
+def test_feed_add_items(unique_feed, unique_item_strict):
+    unique_feed.create()
+    unique_item_strict.create()
+    unique_feed.add_items(unique_item_strict)
+    assert unique_item_strict in unique_feed.items, "Item should be in feed items"
+
+
+def test_count_items(unique_feed, unique_item_strict):
+    unique_feed.create()
+    unique_item_strict.create()
+    assert unique_feed.count_items() == 0, "Should not count items in feed"
+    unique_feed.add_items(unique_item_strict)
+    assert unique_feed.count_items() == 1, "Should count items in feed"

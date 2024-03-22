@@ -86,6 +86,9 @@ class User(BlinderBaseModel):
         with cls.redis_con() as r:
             user_hashes = r.smembers("USERS")
 
+        if not user_hashes:
+            return []
+
         return [cls.read(name_hash=name_hash) for name_hash in user_hashes]
 
     def update(self):
@@ -139,9 +142,8 @@ class User(BlinderBaseModel):
 class FlaskUser(User, UserMixin):
     @property
     def id(self):
-        # Assuming you want to use the user's name as the unique identifier
-        return self.name
+        return self.name_hash
 
-    # defines the key for the user that flask-login uses
+    # # defines the key for the user that flask-login uses
     def get_id(self):
-        return self.name
+        return self.name_hash
