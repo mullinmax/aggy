@@ -13,41 +13,55 @@ services:
     volumes:
       - dev-blinder-db:/data
 
-  # https://github.com/HenryQW/mercury-parser-api
-  dev-blinder-extract:
-    image: wangqiru/mercury-parser-api
-    ports:
-      - 3000
+  # # https://github.com/HenryQW/mercury-parser-api
+  # dev-blinder-extract:
+  #   image: wangqiru/mercury-parser-api
+  #   ports:
+  #     - 3000
 
-  dev-blinder-ingest:
-    build: ./src/ingest
+  # dev-blinder-ingest:
+  #   build: ./src/ingest
+  #   ports:
+  #     - 9001
+  #   environment:
+  #     - REDIS_HOST=dev-blinder-db
+  #     - REDIS_PORT=6379
+  #     - EXTRACT_HOST=dev-blinder-extract
+  #     - EXTRACT_PORT=3000
+  #     - INGEST_NUM_THREADS=4
+  #   depends_on:
+  #     - dev-blinder-db
+  #     - dev-blinder-extract
+
+  # dev-blinder-webui:
+  #   build: ./src/webui
+  #   ports:
+  #     - 5000
+  #   environment:
+  #     - HOSTNAME=https://codehost.doze.dev
+  #     - REDIS_HOST=dev-blinder-db
+  #     - REDIS_PORT=6379
+  #     - INGEST_HOST=dev-blinder-ingest
+  #     - INGEST_PORT=9001
+  #     - BLINDER_SECRET_KEY=9ud98fhc9e7fh93ufhjd
+  #   labels:
+  #     - "traefik.http.routers.codehost.rule=Host(`codehost.doze.dev`)"
+  #     - "traefik.http.routers.codehost.service=codehost"
+  #     - "traefik.http.services.codehost.loadbalancer.server.port=5000"
+  #   depends_on:
+  #     - dev-blinder-db
+
+  dev-blinder-api:
+    build: ./src/api
     ports:
-      - 9001
+      - 8000
     environment:
       - REDIS_HOST=dev-blinder-db
       - REDIS_PORT=6379
-      - EXTRACT_HOST=dev-blinder-extract
-      - EXTRACT_PORT=3000
-      - INGEST_NUM_THREADS=4
-    depends_on:
-      - dev-blinder-db
-      - dev-blinder-extract
-
-  dev-blinder-webui:
-    build: ./src/webui
-    ports:
-      - 5000
-    environment:
-      - HOSTNAME=https://codehost.doze.dev
-      - REDIS_HOST=dev-blinder-db
-      - REDIS_PORT=6379
-      - INGEST_HOST=dev-blinder-ingest
-      - INGEST_PORT=9001
-      - BLINDER_SECRET_KEY=9ud98fhc9e7fh93ufhjd
     labels:
-      - "traefik.http.routers.codehost.rule=Host(`codehost.doze.dev`)"
-      - "traefik.http.routers.codehost.service=codehost"
-      - "traefik.http.services.codehost.loadbalancer.server.port=5000"
+      - "traefik.http.routers.codehostapi.rule=Host(`codehostapi.doze.dev`)"
+      - "traefik.http.routers.codehostapi.service=codehostapi"
+      - "traefik.http.services.codehostapi.loadbalancer.server.port=8000"
     depends_on:
       - dev-blinder-db
 
