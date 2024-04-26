@@ -1,2 +1,4 @@
 fastapi
+PyJWT
+python-multipart
 uvicorn
