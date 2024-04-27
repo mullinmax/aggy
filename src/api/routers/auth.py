@@ -44,7 +44,7 @@ def get_token(
     raise HTTPException(status_code=401, detail="Incorrect username or password")
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+def authenticate(token: str = Depends(oauth2_scheme)) -> User:
     try:
         payload = jwt.decode(
             token, config.get("JWT_SECRET"), algorithms=[config.get("JWT_ALGORITHM")]

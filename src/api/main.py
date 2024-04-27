@@ -1,21 +1,14 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 import uvicorn
 
-from routers.auth import auth_router, get_current_user
-from shared.db.user import User
+from routers.auth import auth_router
+from routers.category import category_router
+from routers.item import item_router
 
 app = FastAPI()
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
-
-
-@app.get("/")
-async def read_root(s: str):
-    return {"message": s}
-
-
-@app.get("/protected")
-async def read_protected(s: str, user: User = Depends(get_current_user)):
-    return {"message": s}
+app.include_router(category_router, prefix="/category", tags=["category"])
+app.include_router(item_router, prefix="/item", tags=["item"])
 
 
 if __name__ == "__main__":
