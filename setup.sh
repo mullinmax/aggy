@@ -2,6 +2,7 @@
 conda deactivate
 conda env remove -n blinder
 conda create -n blinder python=3.10
+conda activate blinder
 
 # install each requirements.txt in each src/* folder
 for d in src/*; do
