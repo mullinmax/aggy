@@ -8,6 +8,7 @@ from shared.db.user import User
 from response_models.category import CategoryResponse
 from response_models.feed import FeedResponse
 from response_models.item import ItemResponse
+from response_models.acknowledge import AcknowledgeResponse
 from routers.auth import authenticate
 
 category_router = APIRouter()
@@ -24,13 +25,17 @@ def create_category(name: str, user: User = Depends(authenticate)) -> CategoryRe
 
 
 # delete category
-@category_router.delete("/delete", summary="Delete a category", response_model=None)
+@category_router.delete(
+    "/delete",
+    summary="Delete a category",
+    response_model=AcknowledgeResponse,
+)
 def delete_category(
     category_name_hash: str, user: User = Depends(authenticate)
-) -> None:
+) -> AcknowledgeResponse:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
     cat.delete()
-    return
+    return AcknowledgeResponse()
 
 
 # get a category
@@ -71,22 +76,24 @@ def get_all_items(
 
 # get all feeds in a category
 @category_router.get(
-    "/get_all_feeds", summary="List all feeds in a category", response_model=List[str]
+    "/get_all_feeds",
+    summary="List all feeds in a category",
+    response_model=List[FeedResponse],
 )
 def get_all_feeds(
     category_name_hash: str, user: User = Depends(authenticate)
-) -> List[str]:
+) -> List[FeedResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
     return [FeedResponse.from_db_model(f) for f in cat.feeds]
 
 
 # add a feed to a category
 @category_router.post(
-    "/add_feed", summary="Add a feed to a category", response_model=None
+    "/add_feed", summary="Add a feed to a category", response_model=AcknowledgeResponse
 )
 def add_feed_to_category(
     category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
-) -> None:
+) -> AcknowledgeResponse:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
     feed = Feed.read(
         user_hash=user.name_hash,
@@ -94,16 +101,18 @@ def add_feed_to_category(
         name_hash=feed_name_hash,
     )
     cat.add_feed(feed)
-    return
+    return AcknowledgeResponse()
 
 
 # delete a feed from a category
 @category_router.delete(
-    "/delete_feed", summary="Delete a feed from a category", response_model=None
+    "/delete_feed",
+    summary="Delete a feed from a category",
+    response_model=AcknowledgeResponse,
 )
 def delete_feed_from_category(
     category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
-) -> None:
+) -> AcknowledgeResponse:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
     feed = Feed.read(
         user_hash=user.name_hash,
@@ -111,7 +120,7 @@ def delete_feed_from_category(
         name_hash=feed_name_hash,
     )
     cat.delete_feed(feed)
-    return
+    return AcknowledgeResponse
 
 
 # get all items in a feed

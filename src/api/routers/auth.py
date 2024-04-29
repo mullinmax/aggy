@@ -6,27 +6,30 @@ from datetime import datetime, timedelta
 
 from shared.db.user import User
 from shared.config import config
-
+from response_models.token import TokenResponse
+from response_models.acknowledge import AcknowledgeResponse
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 auth_router = APIRouter()
 
 
-@auth_router.post("/signup")
-def create_user(username: str, password: str):
+@auth_router.post(
+    "/signup", summary="Create a user", response_model=AcknowledgeResponse
+)
+def create_user(username: str, password: str) -> AcknowledgeResponse:
     user = User(name=username)
     if user.exists():
         raise HTTPException(status_code=400, detail="Username already registered")
     user.set_password(password)
     user.create()
-    return {"message": "User created"}
+    return AcknowledgeResponse()
 
 
-@auth_router.post("/login")
+@auth_router.post("/login", summary="Get a token", response_model=TokenResponse)
 def get_token(
     username: str = Form(...), password: str = Form(...), days_to_live: int = 7
-):
+) -> TokenResponse:
     try:
         user = User.read(name=username)
     except Exception:
@@ -40,7 +43,7 @@ def get_token(
         token = jwt.encode(
             to_encode, config.get("JWT_SECRET"), algorithm=config.get("JWT_ALGORITHM")
         )
-        return {"access_token": token, "token_type": "bearer"}
+        return TokenResponse(access_token=token, token_type="bearer")
     raise HTTPException(status_code=401, detail="Incorrect username or password")
 
 
