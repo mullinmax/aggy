@@ -1,0 +1,5 @@
+fastapi
+httpx # required for test client
+PyJWT
+python-multipart
+uvicorn

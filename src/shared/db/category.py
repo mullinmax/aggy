@@ -8,7 +8,8 @@ from .item import ItemStrict
 from .feed import Feed
 
 
-# TODO write validation that ensures we are using hashes where we should be (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
+# TODO write unit test that ensures we are using hashes where we should be
+# (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
 class Category(BlinderBaseModel):
     user_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
@@ -104,6 +105,19 @@ class Category(BlinderBaseModel):
                 )
         return categories
 
+    def add_feed(self, feed: Feed):
+        with self.redis_con() as r:
+            feed.user_hash = self.user_hash
+            feed.category_hash = self.name_hash
+            if not feed.exists():
+                feed.create()
+            r.sadd(f"{self.key}:FEEDS", feed.name_hash)
+
+    def delete_feed(self, feed: Feed):
+        with self.redis_con() as r:
+            feed.delete()
+            r.srem(f"{self.key}:FEEDS", feed.name_hash)
+
     def get_all_items(self):
         with self.redis_con() as r:
             url_hashes = r.zrange(self.items_key, 0, -1)
@@ -118,16 +132,3 @@ class Category(BlinderBaseModel):
                 items = [items]
             for item in items:
                 r.zadd(self.items_key, {item.url_hash: 0})
-
-    def add_feed(self, feed: Feed):
-        with self.redis_con() as r:
-            feed.user_hash = self.user_hash
-            feed.category_hash = self.name_hash
-            if not feed.exists():
-                feed.create()
-            r.sadd(f"{self.key}:FEEDS", feed.name_hash)
-
-    def delete_feed(self, feed: Feed):
-        with self.redis_con() as r:
-            feed.delete()
-            r.srem(f"{self.key}:FEEDS", feed.name_hash)
