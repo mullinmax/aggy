@@ -6,7 +6,7 @@ on:
     paths:
       - 'src/shared/**'
       - 'src/ingest/**'
-      - 'src/webui/**'
+      - 'src/api/**'
   release:
     types: [published]
 
@@ -64,7 +64,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: ['ingest', 'webui']
+        service: ['ingest', 'api']
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
