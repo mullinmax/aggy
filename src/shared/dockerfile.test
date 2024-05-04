@@ -1,0 +1,8 @@
+FROM python:3.11-slim as blinder-shared-test
+WORKDIR /src
+COPY . /src/shared/
+RUN pip install -r /src/shared/requirements.txt
+RUN touch /src/__init__.py
+
+# Run pytest when the container launches
+CMD ["pytest", "/src/shared/tests/"]

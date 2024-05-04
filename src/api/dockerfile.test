@@ -1,0 +1,12 @@
+ARG BASE_IMAGE=blinder-shared-test:latest
+FROM $BASE_IMAGE as base
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["python", "main.py"]

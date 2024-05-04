@@ -1,7 +1,7 @@
 # create or recreate conda environment called blinder with python version 3.10
 conda deactivate
 conda env remove -n blinder
-conda create -n blinder python=3.10
+conda create -n -y blinder python=3.10
 conda activate blinder
 
 # install each requirements.txt in each src/* folder
