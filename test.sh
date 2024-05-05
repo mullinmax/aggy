@@ -1,35 +1,39 @@
 #!/bin/bash
 
-# Start up all services in detached mode
-docker-compose -f docker-compose.test.yml up --build -d
+docker build -t blinder-shared-test:latest --file ./src/shared/dockerfile.test ./src/shared
 
-# Define the service name of your test container
-test_service_name="test-blinder-shared"
 
-# Wait for the test container to complete
-echo "Waiting for the test service to complete..."
-docker-compose -f docker-compose.test.yml wait $test_service_name
+# Define an array of Docker Compose files
+compose_files=("src/api/docker-compose.test.yml")
 
-# Retrieve the container ID directly from Docker, not through docker-compose
-container_id=$(docker ps -aqf "name=${test_service_name}")
+# Array to store exit codes
+exit_codes=()
 
-# Make sure we actually have a container ID
-if [ -z "$container_id" ]; then
-    echo "Failed to get container ID."
-    docker-compose -f docker-compose.test.yml down
+# Start each compose file in the background
+for file in "${compose_files[@]}"; do
+    echo "Starting tests with $file"
+    docker-compose -f $file up --build --abort-on-container-exit
+    # Capture the exit code immediately after docker-compose finishes
+    exit_codes+=($?)
+    docker-compose -f $file down
+done
+
+# Initialize an overall exit status
+overall_exit_status=0
+
+# Check exit codes from all containers
+for exit_code in "${exit_codes[@]}"; do
+    if [ "$exit_code" -ne 0 ]; then
+        echo "A test failed with exit code $exit_code"
+        overall_exit_status=1
+    fi
+done
+
+# Final decision based on the aggregated exit statuses
+if [ "$overall_exit_status" -ne 0 ]; then
+    echo "Some tests failed."
     exit 1
+else
+    echo "All tests passed successfully."
+    exit 0
 fi
-
-# Capture the exit code of the test service
-exit_code=$(docker inspect -f '{{ .State.ExitCode }}' $container_id)
-
-# Output logs from the test container
-echo "Test service exited with code $exit_code"
-echo "Outputting logs from the test container:"
-docker-compose -f docker-compose.test.yml logs $test_service_name
-
-# Stop and remove containers, networks, etc.
-docker-compose -f docker-compose.test.yml down
-
-# Exit with the captured exit code
-exit $exit_code

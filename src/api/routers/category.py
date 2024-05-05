@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends
 
 from typing import List
 
-from shared.db.category import Category
-from shared.db.feed import Feed
-from shared.db.user import User
+from db.category import Category
+from db.feed import Feed
+from db.user import User
 from response_models.category import CategoryResponse
 from response_models.feed import FeedResponse
 from response_models.item import ItemResponse

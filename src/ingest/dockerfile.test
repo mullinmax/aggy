@@ -5,8 +5,8 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /src/api
+COPY . /src/ingest
 
 EXPOSE 8000
 
-CMD ["pytest", "/src/api/tests/"]
+CMD ["pytest", "/src/ingest/tests/"]
