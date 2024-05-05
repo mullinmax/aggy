@@ -1,8 +1,5 @@
 #!/bin/bash
 
-docker build -t blinder-shared-test:latest --file ./src/shared/dockerfile.test ./src/shared
-
-
 # Define an array of Docker Compose files
 compose_files=("src/api/docker-compose.test.yml")
 
