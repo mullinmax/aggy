@@ -1,5 +1,10 @@
+bcrypt
+beautifulsoup4
+bleach
+dateparser
 fastapi
 httpx # required for test client
 PyJWT
 python-multipart
+redis
 uvicorn

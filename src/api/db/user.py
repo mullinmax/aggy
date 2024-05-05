@@ -1,7 +1,6 @@
 import bcrypt
 from datetime import datetime
 from pydantic import field_serializer
-from flask_login import UserMixin
 
 from .base import BlinderBaseModel
 from .category import Category
@@ -137,13 +136,3 @@ class User(BlinderBaseModel):
     @field_serializer("updated")
     def updated_at_to_str(updated: datetime):
         return updated.strftime("%Y-%m-%d %H:%M:%S")
-
-
-class FlaskUser(User, UserMixin):
-    @property
-    def id(self):
-        return self.name_hash
-
-    # # defines the key for the user that flask-login uses
-    def get_id(self):
-        return self.name_hash

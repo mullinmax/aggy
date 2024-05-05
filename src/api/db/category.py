@@ -1,7 +1,6 @@
 from pydantic import StringConstraints
 from typing import List, Union
 from typing_extensions import Annotated
-from flask import current_app
 
 from .base import BlinderBaseModel
 from .item import ItemStrict
@@ -100,9 +99,9 @@ class Category(BlinderBaseModel):
             try:
                 categories.append(cls.read(user_hash=user_hash, name_hash=name_hash))
             except Exception:
-                current_app.logger.error(
-                    f"Category with name_hash {name_hash} does not exist"
-                )
+                # TODO raise error msg here
+                pass
+
         return categories
 
     def add_feed(self, feed: Feed):

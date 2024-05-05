@@ -1,6 +1,6 @@
 from .base import BaseResponseModel
 
-from shared.db.category import Category
+from db.category import Category
 
 
 class CategoryResponse(BaseResponseModel):

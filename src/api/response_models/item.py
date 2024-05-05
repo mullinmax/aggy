@@ -4,7 +4,7 @@ from typing import Optional
 from pydantic import HttpUrl
 from .base import BaseResponseModel
 
-from shared.db.item import ItemLoose
+from db.item import ItemLoose
 
 
 class ItemResponse(BaseResponseModel):
