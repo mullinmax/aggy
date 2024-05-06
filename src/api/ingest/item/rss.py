@@ -1,0 +1,21 @@
+import feedparser
+
+from db.item import ItemLoose
+
+
+def ingest_rss_item(entry: feedparser.FeedParserDict) -> ItemLoose:
+    # TODO more advanced parsing of content
+    try:
+        entry_content = entry.get("content")[0]["value"]
+    except Exception:
+        entry_content = None
+
+    return ItemLoose(
+        url=entry.get("link"),
+        title=entry.get("title"),
+        content=entry_content,
+        author=entry.get("author"),
+        date_published=entry.get("published"),
+        domain=entry.get("link"),
+        excerpt=entry_content,
+    )

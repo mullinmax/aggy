@@ -137,6 +137,9 @@ class ItemLoose(ItemStrict):
 
     @classmethod
     def merge_instances(cls, items: List["ItemLoose"]) -> "ItemLoose":
+        # make sure all items are non-null
+        items = [item for item in items if item]
+
         if not items:
             raise ValueError("No items to merge")
 

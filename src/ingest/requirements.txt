@@ -1,8 +1,0 @@
-beautifulsoup4
-bleach
-croniter
-dateparser
-feedparser
-flask
-redis
-requests

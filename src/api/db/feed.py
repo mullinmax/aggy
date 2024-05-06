@@ -1,9 +1,10 @@
 from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
 from typing import List
+from datetime import datetime
 
+from constants import FEEDS_TO_INGEST_KEY, FEED_CHECK_INTERVAL_TIMEDELTA
 from .base import BlinderBaseModel
-from config import config
 from .item import ItemStrict
 
 
@@ -44,14 +45,22 @@ class Feed(BlinderBaseModel):
                 raise Exception(f"Cannot create duplicate feed {self.key}")
 
             (r.hset(self.key, mapping={"url": str(self.url), "name": self.name}),)
-            self.trigger_ingest(skip_line=True)
+            self.trigger_ingest(now=True)
         return
 
-    def trigger_ingest(self, skip_line=False):
+    def trigger_ingest(self, now=False):
+        # if the feed is not already in the list
+        # we're assuming it's over due to ingest
+        if now:
+            score = int(datetime.now().timestamp())
+        else:
+            score = datetime.now() + FEED_CHECK_INTERVAL_TIMEDELTA
+            score = int((score).timestamp())
+
         with self.redis_con() as r:
-            r.zadd(
-                config.get("FEEDS_TO_INGEST_KEY"), mapping={self.key: 0}, lt=skip_line
-            )
+            # lt=True means that if the feed is already in the list
+            # it will only be updated if the new score is lower
+            r.zadd(FEEDS_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
 
     @classmethod
     def read(cls, user_hash, category_hash, feed_hash):

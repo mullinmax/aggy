@@ -4,13 +4,7 @@ conda env remove -n blinder
 conda create -n -y blinder python=3.10
 conda activate blinder
 
-# install each requirements.txt in each src/* folder
-for d in src/*; do
-    if [ -d "$d" ]; then
-        echo "Installing requirements for $d..."
-        pip install -r $d/requirements.txt
-    fi
-done
+pip install -r src/api/requirements.txt
 
 # install pre-commit hooks
 pre-commit install
