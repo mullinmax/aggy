@@ -4,7 +4,7 @@ from db.item import ItemLoose
 
 
 def ingest_rss_item(entry: feedparser.FeedParserDict) -> ItemLoose:
-    # TODO more advanced parsing of content
+    # TODO more advanced parsing of content (like when there's more than 1 value)
     try:
         entry_content = entry.get("content")[0]["value"]
     except Exception:

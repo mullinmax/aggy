@@ -10,13 +10,6 @@ from routers.category import category_router
 from routers.item import item_router
 from ingest.jobs import feed_ingestion_job, feed_ingestion_scheduling_job
 
-app = FastAPI()
-
-# Include your routers
-app.include_router(auth_router, prefix="/auth", tags=["auth"])
-app.include_router(category_router, prefix="/category", tags=["category"])
-app.include_router(item_router, prefix="/item", tags=["item"])
-
 # Scheduler instance
 scheduler = AsyncIOScheduler()
 
@@ -40,14 +33,19 @@ async def app_lifespan(app: FastAPI):
     )
     scheduler.start()
 
-    yield  # The application runs as long as this yield is here
+    yield
 
     logging.info("API shutting down...")
     scheduler.shutdown(wait=False)
 
 
-# Assign the lifespan context manager to the FastAPI app
+# create app with lifespan context manager
 app = FastAPI(lifespan=app_lifespan)
+
+# routers
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(category_router, prefix="/category", tags=["category"])
+app.include_router(item_router, prefix="/item", tags=["item"])
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
