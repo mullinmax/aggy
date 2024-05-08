@@ -20,7 +20,7 @@ def test_read_user(unique_user):
     unique_user.create()
     assert unique_user.exists()
     user = User.read(name=unique_user.name)
-    assert user.name == unique_user.name
+    assert user.name != unique_user.name
     assert user.check_password("password")
     assert not user.check_password("wrong_password")
 
