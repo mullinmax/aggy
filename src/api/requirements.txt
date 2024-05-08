@@ -7,6 +7,8 @@ fastapi
 feedparser
 httpx
 PyJWT
+pytest
+pytest-cov
 python-multipart
 redis #TODO try aioredis
 requests

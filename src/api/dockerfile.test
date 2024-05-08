@@ -1,5 +1,5 @@
-ARG BASE_IMAGE=blinder-shared-test:latest
-FROM $BASE_IMAGE as base
+FROM python:3.11-alpine as blinder-api
+WORKDIR /src
 
 COPY requirements.txt .
 
@@ -9,4 +9,4 @@ COPY . /src/api
 
 EXPOSE 8000
 
-CMD ["pytest", "/src/api/tests/"]
+CMD pytest /src/api/tests/ --cov=/src/api --cov-report=xml:/coverage/coverage.xml && ls -la /coverage
