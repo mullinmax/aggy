@@ -30,7 +30,7 @@ class User(BlinderBaseModel):
 
     @property
     def category_hashes(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             return r.smembers(self.categories_key)
 
     @property
@@ -50,7 +50,7 @@ class User(BlinderBaseModel):
         )
 
     def create(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if self.hashed_password is None:
                 raise Exception("Password is required to create a user")
 
@@ -72,7 +72,7 @@ class User(BlinderBaseModel):
                 raise Exception("name or name_hash is required")
             name_hash = User(name=name).name_hash
 
-        with cls.redis_con() as r:
+        with cls.db_con() as r:
             user_data = r.hgetall(f"USER:{name_hash}")
 
         if not user_data:
@@ -82,7 +82,7 @@ class User(BlinderBaseModel):
 
     @classmethod
     def read_all(cls):
-        with cls.redis_con() as r:
+        with cls.db_con() as r:
             user_hashes = r.smembers("USERS")
 
         if not user_hashes:
@@ -91,7 +91,7 @@ class User(BlinderBaseModel):
         return [cls.read(name_hash=name_hash) for name_hash in user_hashes]
 
     def update(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if not self.exists():
                 raise Exception(f"User withname {self.name} does not exist")
 
@@ -103,7 +103,7 @@ class User(BlinderBaseModel):
             )
 
     def delete(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             # delete all categories
             for category in self.categories:
                 category.delete()
@@ -115,7 +115,7 @@ class User(BlinderBaseModel):
             r.delete(self.key)
 
     def add_category(self, category: Category):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if category.user_hash != self.name_hash:
                 raise Exception("Category does not belong to user")
             if not category.exists():
@@ -123,7 +123,7 @@ class User(BlinderBaseModel):
             r.sadd(self.categories_key, category.name_hash)
 
     def remove_category(self, category: Category):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             # get the category
             category.delete()
             # delete category

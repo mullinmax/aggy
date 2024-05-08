@@ -10,10 +10,10 @@ def test_key_property_raises_not_implemented_error():
         _ = model.key
 
 
-def test_redis_con():
+def test_db_con():
     model = BlinderBaseModel()
 
-    with model.redis_con() as r:
+    with model.db_con() as r:
         assert isinstance(r, redis.Redis)
         r.ping()
 

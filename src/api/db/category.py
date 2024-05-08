@@ -31,7 +31,7 @@ class Category(BlinderBaseModel):
 
     @property
     def feed_hashes(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             return list(r.smembers(self.feeds_key))
 
     @property
@@ -46,7 +46,7 @@ class Category(BlinderBaseModel):
         ]
 
     def create(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if self.exists():
                 raise Exception(f"Category with name {self.name} already exists")
 
@@ -56,7 +56,7 @@ class Category(BlinderBaseModel):
         return self.key
 
     def delete(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             # remove category from list of user's categories
             r.srem(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
 
@@ -79,7 +79,7 @@ class Category(BlinderBaseModel):
     @classmethod
     def read(cls, user_hash, name_hash):
         key = f"USER:{user_hash}:CATEGORY:{name_hash}"
-        with cls.redis_con() as r:
+        with cls.db_con() as r:
             category_data = r.hgetall(key)
 
         if category_data:
@@ -91,7 +91,7 @@ class Category(BlinderBaseModel):
 
     @classmethod
     def read_all(cls, user_hash) -> List["Category"]:
-        with cls.redis_con() as r:
+        with cls.db_con() as r:
             category_name_hashs = r.smembers(f"USER:{user_hash}:CATEGORIES")
 
         categories = []
@@ -105,7 +105,7 @@ class Category(BlinderBaseModel):
         return categories
 
     def add_feed(self, feed: Feed):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             feed.user_hash = self.user_hash
             feed.category_hash = self.name_hash
             if not feed.exists():
@@ -113,12 +113,12 @@ class Category(BlinderBaseModel):
             r.sadd(f"{self.key}:FEEDS", feed.name_hash)
 
     def delete_feed(self, feed: Feed):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             feed.delete()
             r.srem(f"{self.key}:FEEDS", feed.name_hash)
 
     def get_all_items(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             url_hashes = r.zrange(self.items_key, 0, -1)
 
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
@@ -126,7 +126,7 @@ class Category(BlinderBaseModel):
         return items
 
     def add_items(self, items: Union[ItemStrict, List[ItemStrict]]):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if isinstance(items, ItemStrict):
                 items = [items]
             for item in items:

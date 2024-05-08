@@ -6,7 +6,7 @@ from db.feed import Feed
 
 @pytest.fixture(scope="function")
 def unique_feed(unique_category):
-    """Generates unique category data for each test, assuming a Redis connection fixture."""
+    """Generates unique category data for each test"""
     feed = Feed(
         user_hash=uuid.uuid4().hex,
         category_hash=unique_category.name_hash,

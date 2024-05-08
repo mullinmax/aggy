@@ -1,6 +1,6 @@
 services:
   test-blinder-db:
-    image: "redis:latest"
+    image: valkey/valkey:7.2.5-alpine
     ports:
       - 6379
 
@@ -9,7 +9,7 @@ services:
       context: .
       dockerfile: dockerfile.test
     environment:
-      - REDIS_HOST=test-blinder-db
-      - REDIS_PORT=6379
+      - DB_HOST=test-blinder-db
+      - DB_PORT=6379
     depends_on:
       - test-blinder-db

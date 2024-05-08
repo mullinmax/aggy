@@ -4,7 +4,7 @@ from db.user import User
 
 
 def test_create_user(unique_user):
-    with unique_user.redis_con() as r:
+    with unique_user.db_con() as r:
         assert not unique_user.exists()
         assert len(r.smembers("USERS")) == 0
         unique_user.set_password("password")
