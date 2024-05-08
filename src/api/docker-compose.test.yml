@@ -13,5 +13,3 @@ services:
       - REDIS_PORT=6379
     depends_on:
       - test-blinder-db
-    volumes:
-      - ./coverage:/coverage

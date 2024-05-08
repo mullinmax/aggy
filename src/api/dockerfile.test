@@ -9,4 +9,4 @@ COPY . /src/api
 
 EXPOSE 8000
 
-CMD pytest /src/api/tests/ --cov=/src/api --cov-report=xml:/coverage/coverage.xml && ls -la /coverage
+CMD pytest /src/api/tests/

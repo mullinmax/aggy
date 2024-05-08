@@ -9,34 +9,26 @@ services:
   dev-blinder-db:
     image: "redis:latest"
     ports:
-      - 7524:6379
+      - 6379
     volumes:
       - dev-blinder-db:/data
+    # labels:
+    #   - "traefik.http.routers.codehostdb.rule=Host(`codehostdb.doze.dev`)"
+    #   - "traefik.http.routers.codehostdb.service=codehostdb"
+    #   - "traefik.http.services.codehostdb.loadbalancer.server.port=6379"
 
-  # # https://github.com/HenryQW/mercury-parser-api
-  # dev-blinder-extract:
-  #   image: wangqiru/mercury-parser-api
-  #   ports:
-  #     - 7525:3000
-
-  # dev-blinder-ingest:
-  #   build: ./src/ingest
-  #   ports:
-  #     - 7526:9001
-  #   environment:
-  #     - REDIS_HOST=dev-blinder-db
-  #     - REDIS_PORT=6379
-  #     - EXTRACT_HOST=dev-blinder-extract
-  #     - EXTRACT_PORT=3000
-  #     - INGEST_NUM_THREADS=4
-  #   depends_on:
-  #     - dev-blinder-db
-  #     - dev-blinder-extract
+  # https://github.com/HenryQW/mercury-parser-api
+  dev-blinder-extract:
+    image: wangqiru/mercury-parser-api
+    ports:
+      - 3000
 
   dev-blinder-api:
-    build: ./src/api
+    build:
+      context: .
+      dockerfile: dockerfile
     ports:
-      - 7356:8000
+      - 8000
     environment:
       - REDIS_HOST=dev-blinder-db
       - REDIS_PORT=6379
