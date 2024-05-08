@@ -10,12 +10,6 @@ services:
     image: "redis:latest"
     ports:
       - 6379
-    volumes:
-      - dev-blinder-db:/data
-    # labels:
-    #   - "traefik.http.routers.codehostdb.rule=Host(`codehostdb.doze.dev`)"
-    #   - "traefik.http.routers.codehostdb.service=codehostdb"
-    #   - "traefik.http.services.codehostdb.loadbalancer.server.port=6379"
 
   # https://github.com/HenryQW/mercury-parser-api
   dev-blinder-extract:
@@ -40,6 +34,3 @@ services:
       - "traefik.http.services.codehostapi.loadbalancer.server.port=8000"
     depends_on:
       - dev-blinder-db
-
-volumes:
-  dev-blinder-db:
