@@ -1,0 +1,36 @@
+# version: '3.8'
+
+networks:
+  default:
+    external: true
+    name: "traefik_default"
+
+services:
+  dev-blinder-db:
+    image: "redis:latest"
+    ports:
+      - 6379
+
+  # https://github.com/HenryQW/mercury-parser-api
+  dev-blinder-extract:
+    image: wangqiru/mercury-parser-api
+    ports:
+      - 3000
+
+  dev-blinder-api:
+    build:
+      context: .
+      dockerfile: dockerfile
+    ports:
+      - 8000
+    environment:
+      - REDIS_HOST=dev-blinder-db
+      - REDIS_PORT=6379
+      - JWT_ALGORITHM=HS256
+      - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
+    labels:
+      - "traefik.http.routers.codehostapi.rule=Host(`codehostapi.doze.dev`)"
+      - "traefik.http.routers.codehostapi.service=codehostapi"
+      - "traefik.http.services.codehostapi.loadbalancer.server.port=8000"
+    depends_on:
+      - dev-blinder-db

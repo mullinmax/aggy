@@ -1,4 +1,4 @@
-from shared.db.base import BlinderBaseModel
+from db.base import BlinderBaseModel
 
 
 class BaseResponseModel(BlinderBaseModel):

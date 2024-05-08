@@ -1,6 +1,6 @@
 from pydantic import HttpUrl
 
-from shared.db.feed import Feed
+from db.feed import Feed
 from .base import BaseResponseModel
 
 

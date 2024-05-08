@@ -1,5 +1,15 @@
+APScheduler < 4.*.*
+bcrypt
+beautifulsoup4
+bleach
+dateparser
 fastapi
-httpx # required for test client
+feedparser
+httpx
 PyJWT
+pytest
+pytest-cov
 python-multipart
+redis #TODO try aioredis
+requests
 uvicorn

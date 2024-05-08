@@ -4,8 +4,8 @@ from fastapi.security import OAuth2PasswordBearer
 import jwt
 from datetime import datetime, timedelta
 
-from shared.db.user import User
-from shared.config import config
+from db.user import User
+from config import config
 from response_models.token import TokenResponse
 from response_models.acknowledge import AcknowledgeResponse
 

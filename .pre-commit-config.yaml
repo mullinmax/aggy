@@ -20,11 +20,3 @@ repos:
     rev: v1.0.5
     hooks:
       - id: csslint
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: pytest --cov=./ --cov-report=xml:./coverage.xml
-        language: system
-        types: [python]
-        pass_filenames: false
