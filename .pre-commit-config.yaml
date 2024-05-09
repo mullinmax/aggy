@@ -7,7 +7,7 @@ repos:
       - id: check-ast
       - id: end-of-file-fixer
       - id: name-tests-test
-        exclude: ^fixtures/
+        exclude: ^src/api/tests/fixtures/
       - id: requirements-txt-fixer
       - id: trailing-whitespace
   - repo: https://github.com/astral-sh/ruff-pre-commit

@@ -3,7 +3,6 @@
 
 ## TODO
 - [x] test out valkey
-- [ ] test out aioredis package
 - [ ] pagination for any api returning list
 - [ ] user interactions (opens, up and down votes)
 - [ ] save preview image(s)
