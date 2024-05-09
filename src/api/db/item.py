@@ -26,19 +26,19 @@ class ItemBase(BlinderBaseModel):
         return self.__insecure_hash__(str(self.url))
 
     def exists(self) -> bool:
-        with self.redis_con() as r:
+        with self.db_con() as r:
             return r.strlen(self.key) > 0
 
     def create(self, overwrite=False):
         if not overwrite and self.exists():
             raise ValueError(f"Item with url_hash {self.key} already exists")
 
-        with self.redis_con() as r:
+        with self.db_con() as r:
             r.set(self.key, self.model_dump_json())
 
     @classmethod
     def read(cls, url_hash):
-        with cls.redis_con() as r:
+        with cls.db_con() as r:
             item_json = r.get(f"ITEM:{url_hash}")
 
         if item_json:
@@ -51,7 +51,7 @@ class ItemBase(BlinderBaseModel):
         self.create(overwrite=True)
 
     def delete(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             r.delete(self.key)
 
     @model_validator(mode="after")

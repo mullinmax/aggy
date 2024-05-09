@@ -33,7 +33,7 @@ def test_category_creation(unique_category):
     assert unique_category.exists()
 
     user_categories_key = f"USER:{unique_category.user_hash}:CATEGORIES"
-    with unique_category.redis_con() as r:
+    with unique_category.db_con() as r:
         all_user_categories = r.smembers(user_categories_key)
     assert unique_category.name_hash in all_user_categories
 
@@ -83,7 +83,7 @@ def test_get_all_items(unique_category, unique_item_strict):
 
     items = [unique_item_strict.model_copy() for i in range(3)]
 
-    with unique_category.redis_con() as r:
+    with unique_category.db_con() as r:
         for i, item in enumerate(items):
             item.url = f"http://example.com/{i}"
             item.create()
@@ -121,7 +121,7 @@ def test_delete_category_removes_feeds(unique_category, unique_feed):
     unique_category.create()
     unique_category.add_feed(unique_feed)
 
-    with unique_category.redis_con() as r:
+    with unique_category.db_con() as r:
         assert r.exists(unique_category.feeds_key)
         assert not r.exists(unique_category.items_key)
         assert r.exists(unique_category.key)
@@ -130,7 +130,7 @@ def test_delete_category_removes_feeds(unique_category, unique_feed):
     unique_category.delete()
     assert not unique_feed.exists()
     assert not unique_category.exists()
-    with unique_category.redis_con() as r:
+    with unique_category.db_con() as r:
         assert not r.exists(unique_category.feeds_key)
         assert not r.exists(unique_category.items_key)
         assert not r.exists(unique_category.key)

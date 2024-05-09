@@ -3,7 +3,6 @@ import os
 
 DEFAULT_CONFIG = {
     "FEED_CHECK_INTERVAL_MINUTES": 30,
-    "PYTEST_REDIS_DOCKER_NETWORK": "traefik_default",
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
 }

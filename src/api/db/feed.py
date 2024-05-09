@@ -31,7 +31,7 @@ class Feed(BlinderBaseModel):
     @property
     def items(self) -> List[ItemStrict]:
         items = []
-        with self.redis_con() as r:
+        with self.db_con() as r:
             for item_url_hash in r.smembers(self.feed_items_key):
                 try:
                     items.append(ItemStrict.read(url_hash=item_url_hash))
@@ -40,7 +40,7 @@ class Feed(BlinderBaseModel):
         return items
 
     def create(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if r.exists(self.key):
                 raise Exception(f"Cannot create duplicate feed {self.key}")
 
@@ -57,7 +57,7 @@ class Feed(BlinderBaseModel):
             score = datetime.now() + FEED_CHECK_INTERVAL_TIMEDELTA
             score = int((score).timestamp())
 
-        with self.redis_con() as r:
+        with self.db_con() as r:
             # lt=True means that if the feed is already in the list
             # it will only be updated if the new score is lower
             r.zadd(FEEDS_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
@@ -69,7 +69,7 @@ class Feed(BlinderBaseModel):
 
     @classmethod
     def read_by_key(cls, feed_key):
-        with cls.redis_con() as r:
+        with cls.db_con() as r:
             if r.exists(feed_key):
                 feed_data = r.hgetall(feed_key)
                 _, user_hash, _, category_hash, _, feed_hash = feed_key.split(":")
@@ -79,12 +79,12 @@ class Feed(BlinderBaseModel):
         return None
 
     def add_items(self, items: ItemStrict):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             if isinstance(items, ItemStrict):
                 items = [items]
             for item in items:
                 r.sadd(self.feed_items_key, item.url_hash)
 
     def count_items(self):
-        with self.redis_con() as r:
+        with self.db_con() as r:
             return r.scard(self.feed_items_key)

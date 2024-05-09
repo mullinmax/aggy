@@ -1,5 +1,5 @@
 from constants import FEEDS_TO_INGEST_KEY, FEED_CHECK_INTERVAL_TIMEDELTA
-from db.base import get_redis_con
+from db.base import get_db_con
 from db.feed import Feed
 from ingest.feed import ingest_feed
 import logging
@@ -17,7 +17,7 @@ def feed_ingestion_scheduling_job() -> None:
 
 
 def feed_ingestion_job() -> None:
-    r = get_redis_con()
+    r = get_db_con()
 
     if not r.exists(FEEDS_TO_INGEST_KEY):
         return
