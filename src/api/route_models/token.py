@@ -1,7 +1,7 @@
-from .base import BaseResponseModel
+from .base import BaseRouteModel
 
 
-class TokenResponse(BaseResponseModel):
+class TokenResponse(BaseRouteModel):
     access_token: str
     token_type: str
 

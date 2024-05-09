@@ -2,12 +2,12 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import HttpUrl
-from .base import BaseResponseModel
+from .base import BaseRouteModel
 
 from db.item import ItemLoose
 
 
-class ItemResponse(BaseResponseModel):
+class ItemResponse(BaseRouteModel):
     url: HttpUrl
     author: Optional[str] = None
     date_published: Optional[datetime] = None

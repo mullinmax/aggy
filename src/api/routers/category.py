@@ -5,10 +5,10 @@ from typing import List
 from db.category import Category
 from db.feed import Feed
 from db.user import User
-from response_models.category import CategoryResponse
-from response_models.feed import FeedResponse
-from response_models.item import ItemResponse
-from response_models.acknowledge import AcknowledgeResponse
+from route_models.category import CategoryResponse
+from route_models.feed import FeedResponse
+from route_models.item import ItemResponse
+from route_models.acknowledge import AcknowledgeResponse
 from routers.auth import authenticate
 
 category_router = APIRouter()

@@ -1,9 +1,9 @@
-from .base import BaseResponseModel
+from .base import BaseRouteModel
 
 from db.category import Category
 
 
-class CategoryResponse(BaseResponseModel):
+class CategoryResponse(BaseRouteModel):
     name: str
     name_hash: str
 
