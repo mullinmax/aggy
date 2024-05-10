@@ -20,7 +20,7 @@ def unique_category(unique_user: User) -> Category:
 
 
 @pytest.fixture(scope="function")
-def existing_category(unique_category: Category) -> Category:
+def existing_category(unique_category: Category, existing_user: User) -> Category:
     """Generates existing category data for each test, assuming a Redis connection fixture."""
-    unique_category.create()
+    existing_user.add_category(unique_category)
     yield unique_category
