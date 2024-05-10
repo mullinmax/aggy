@@ -58,6 +58,7 @@ def test_read_user_no_name_or_hash():
 
 def test_create_user_no_password(unique_user):
     assert not unique_user.exists()
+    unique_user.hashed_password = None
     with pytest.raises(Exception) as e:
         unique_user.create()
     assert str(e.value) == "Password is required to create a user"

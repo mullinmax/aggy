@@ -21,3 +21,9 @@ def unique_item_strict(unique_category):
 
     if item.exists():
         item.delete()
+
+
+@pytest.fixture(scope="function")
+def existing_item_strict(unique_item_strict):
+    unique_item_strict.create()
+    yield unique_item_strict
