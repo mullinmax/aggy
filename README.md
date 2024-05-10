@@ -3,8 +3,9 @@
 
 ## TODO
 - [x] test out valkey
-- [ ] pagination for any api returning list
+- [ ] route testing
 - [ ] user interactions (opens, up and down votes)
+- [ ] pagination for any api returning list
 - [ ] save preview image(s)
 - [ ] setup embeddings container
 - [ ] generate embeddings text
