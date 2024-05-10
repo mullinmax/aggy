@@ -30,7 +30,7 @@ def create_user(signup_user: AuthUser) -> AcknowledgeResponse:
 @auth_router.post("/login", summary="Get a token", response_model=TokenResponse)
 def get_token(auth_user: AuthUser) -> TokenResponse:
     try:
-        user = User.read(name=auth_user.name)
+        user = User.read(name=auth_user.username)
     except Exception:
         raise HTTPException(status_code=404, detail="User not found")
 
