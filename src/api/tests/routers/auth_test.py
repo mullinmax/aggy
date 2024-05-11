@@ -48,11 +48,11 @@ def test_get_token(client, unique_user):
     response = client.post(
         "/auth/login", json={"username": unique_user.name, "password": "password"}
     )
-    assert "access_token" in response.json()
-    assert len(response.json()["access_token"]) > 0
+    assert "token" in response.json()
+    assert len(response.json()["token"]) > 0
     assert "token_type" in response.json()
 
-    headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
+    headers = {"Authorization": f"Bearer {response.json()['token']}"}
 
     response = client.get("/auth/token_check", headers=headers)
     assert response.status_code == 200

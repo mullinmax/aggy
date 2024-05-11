@@ -19,9 +19,9 @@ category_router = APIRouter()
     "/create", summary="Create a category", response_model=CategoryResponse
 )
 def create_category(name: str, user: User = Depends(authenticate)) -> CategoryResponse:
-    cat = Category(user_hash=user.name_hash, name=name)
-    cat.create()
-    return CategoryResponse.from_db_model(cat)
+    category = Category(user_hash=user.name_hash, name=name)
+    category.create()
+    return CategoryResponse.from_db_model(category)
 
 
 # delete category

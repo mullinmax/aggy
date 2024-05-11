@@ -42,7 +42,7 @@ def get_token(auth_user: AuthUser) -> TokenResponse:
         token = jwt.encode(
             to_encode, config.get("JWT_SECRET"), algorithm=config.get("JWT_ALGORITHM")
         )
-        return TokenResponse(access_token=token, token_type="bearer")
+        return TokenResponse(token=token, token_type="bearer")
     raise HTTPException(status_code=401, detail="Incorrect username or password")
 
 

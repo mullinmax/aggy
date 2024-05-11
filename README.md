@@ -4,6 +4,7 @@
 ## TODO
 - [x] test out valkey
 - [ ] route testing
+- [ ] move tests dir to separate folder from source code
 - [ ] user interactions (opens, up and down votes)
 - [ ] pagination for any api returning list
 - [ ] save preview image(s)
