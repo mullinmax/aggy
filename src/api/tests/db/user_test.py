@@ -78,30 +78,22 @@ def test_delete_user_with_categories(existing_user, existing_category):
     assert not existing_category.exists()
 
 
-# TODO continue adopting existing fixtures belwo
-def test_remove_category_from_user(unique_user, unique_category):
-    assert not unique_user.exists()
-    unique_user.set_password("password")
-    unique_user.create()
-    assert unique_user.exists()
-    unique_category.user_hash = unique_user.name_hash
-    unique_category.create()
-    unique_user.add_category(unique_category)
-    assert unique_user.categories == [unique_category]
-    unique_user.remove_category(unique_category)
-    assert unique_user.categories == []
-    assert not unique_category.exists()
+def test_remove_category_from_user(existing_user, existing_category):
+    assert existing_user.categories == [existing_category]
+    existing_user.remove_category(existing_category)
+    assert existing_user.categories == []
+    assert not existing_category.exists()
 
 
-def test_update_user(unique_user):
-    assert not unique_user.exists()
-    unique_user.set_password("password")
-    unique_user.create()
-    assert unique_user.exists()
-    unique_user.set_password("new_password")
-    unique_user.update()
-    user = User.read(name=unique_user.name)
-    assert user.name == unique_user.name
+def test_update_user(existing_user):
+    assert not existing_user.check_password("new_password")
+    assert existing_user.check_password("password")
+
+    existing_user.set_password("new_password")
+    existing_user.update()
+    user = User.read(name=existing_user.name)
+
+    assert user.name == existing_user.name
     assert user.check_password("new_password")
     assert not user.check_password("password")
 
@@ -113,32 +105,24 @@ def test_read_user_does_not_exist():
     assert str(e.value) == f"User with name_hash {expected_name_hash} does not exist"
 
 
-def test_two_users_password_check(unique_user):
-    assert not unique_user.exists()
-    unique_user.set_password("password")
-    unique_user.create()
-    assert unique_user.exists()
-
+def test_two_users_password_check(existing_user):
     # make a new user
-    unique_user2 = User(
+    unique_user = User(
         name="example_user2",
     )
-    unique_user2.set_password("password2")
-    unique_user2.create()
-    assert unique_user2.exists()
-
-    # make sure passwords don't work for eachother
-    assert unique_user.check_password("password")
-    assert not unique_user.check_password("password2")
-    assert not unique_user2.check_password("password")
-    assert unique_user2.check_password("password2")
-
-
-def test_user_add_category(unique_user, unique_category):
-    assert not unique_user.exists()
-    unique_user.set_password("password")
+    unique_user.set_password("password2")
     unique_user.create()
     assert unique_user.exists()
-    unique_category.user_hash = unique_user.name_hash
-    unique_user.add_category(unique_category)
-    assert unique_user.categories == [unique_category]
+
+    # make sure passwords don't work for eachother
+    assert existing_user.check_password("password")
+    assert not existing_user.check_password("password2")
+    assert not unique_user.check_password("password")
+    assert unique_user.check_password("password2")
+
+
+def test_user_add_category(existing_user, unique_category):
+    unique_category.user_hash = existing_user.name_hash
+    existing_user.add_category(unique_category)
+    assert existing_user.categories == [unique_category]
+    assert unique_category.exists()
