@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from typing import List
 
@@ -34,6 +34,10 @@ def delete_category(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> AcknowledgeResponse:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
+
+    if cat is None or not cat.exists():
+        raise HTTPException(status_code=404, detail="Category not found")
+
     cat.delete()
     return AcknowledgeResponse()
 
