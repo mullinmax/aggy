@@ -2,10 +2,12 @@ import pytest
 import uuid
 
 from db.feed import Feed
+from db.category import Category
+from db.user import User
 
 
 @pytest.fixture(scope="function")
-def unique_feed(unique_category, unique_user) -> Feed:
+def unique_feed(unique_category: Category, unique_user: User) -> Feed:
     """Generates unique category data for each test"""
     feed = Feed(
         user_hash=unique_user.name_hash,
@@ -21,7 +23,7 @@ def unique_feed(unique_category, unique_user) -> Feed:
 
 
 @pytest.fixture(scope="function")
-def existing_feed(unique_feed: Feed) -> Feed:
+def existing_feed(unique_feed: Feed, existing_category: Category) -> Feed:
     """Generates existing category data for each test"""
-    unique_feed.create()
+    existing_category.add_feed(unique_feed)
     yield unique_feed
