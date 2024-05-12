@@ -48,6 +48,11 @@ class Feed(BlinderBaseModel):
             self.trigger_ingest(now=True)
         return
 
+    def delete(self):
+        with self.db_con() as r:
+            r.delete(self.key)
+            r.delete(self.feed_items_key)
+
     def trigger_ingest(self, now=False):
         # if the feed is not already in the list
         # we're assuming it's over due to ingest
@@ -65,7 +70,12 @@ class Feed(BlinderBaseModel):
     @classmethod
     def read(cls, user_hash, category_hash, feed_hash):
         feed_key = f"USER:{user_hash}:CATEGORY:{category_hash}:FEED:{feed_hash}"
-        return cls.read_by_key(feed_key)
+        feed = cls.read_by_key(feed_key)
+
+        if feed:
+            return feed
+
+        raise ValueError("Feed not found")
 
     @classmethod
     def read_by_key(cls, feed_key):

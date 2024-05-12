@@ -27,18 +27,14 @@ def test_feeds_key(unique_category):
     )
 
 
-def test_category_creation(unique_category):
+def test_category_creation(existing_user, existing_category):
     """Tests creation of a category."""
-    unique_category.create()
-    assert unique_category.exists()
+    assert existing_category.exists()
 
-    user_categories_key = f"USER:{unique_category.user_hash}:CATEGORIES"
-    with unique_category.db_con() as r:
-        all_user_categories = r.smembers(user_categories_key)
-    assert unique_category.name_hash in all_user_categories
+    assert existing_category in existing_user.categories
 
-    unique_category.delete()
-    assert not unique_category.exists()
+    existing_category.delete()
+    assert not existing_category.exists()
 
 
 def test_category_duplicate_creation(unique_category):
@@ -77,7 +73,7 @@ def test_category_read_all(unique_category):
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
-def test_get_all_items(unique_category, unique_item_strict):
+def test_get_items(unique_category, unique_item_strict):
     """Tests getting all items for a category."""
     unique_category.create()
 
@@ -89,7 +85,7 @@ def test_get_all_items(unique_category, unique_item_strict):
             item.create()
             r.zadd(unique_category.items_key, {item.url_hash: i})
 
-    act_items = unique_category.get_all_items()
+    act_items = unique_category.items
     assert len(act_items) == 3, "Should get all items for a category"
     for item in act_items:
         assert item.url_hash in [

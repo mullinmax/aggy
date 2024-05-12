@@ -18,10 +18,6 @@ class Category(BlinderBaseModel):
         return f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
 
     @property
-    def items_key(self):
-        return f"{self.key}:ITEMS"
-
-    @property
     def feeds_key(self):
         return f"{self.key}:FEEDS"
 
@@ -45,6 +41,19 @@ class Category(BlinderBaseModel):
             for feed_hash in self.feed_hashes
         ]
 
+    @property
+    def items_key(self):
+        return f"{self.key}:ITEMS"
+
+    @property
+    def items(self) -> List[ItemStrict]:
+        with self.db_con() as r:
+            url_hashes = r.zrange(self.items_key, 0, -1)
+
+        items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
+        items = [i for i in items if i]
+        return items
+
     def create(self):
         with self.db_con() as r:
             if self.exists():
@@ -62,12 +71,16 @@ class Category(BlinderBaseModel):
 
             # delete each feed then remove list
             for feed_hash in self.feed_hashes:
-                feed = Feed.read(
-                    user_hash=self.user_hash,
-                    category_hash=self.name_hash,
-                    feed_hash=feed_hash,
-                )
-                feed.delete()
+                try:
+                    feed = Feed.read(
+                        user_hash=self.user_hash,
+                        category_hash=self.name_hash,
+                        feed_hash=feed_hash,
+                    )
+                    feed.delete()
+                except ValueError:
+                    # feed does not exist
+                    pass
             r.delete(self.feeds_key)
 
             # delete list of category items
@@ -116,14 +129,6 @@ class Category(BlinderBaseModel):
         with self.db_con() as r:
             feed.delete()
             r.srem(f"{self.key}:FEEDS", feed.name_hash)
-
-    def get_all_items(self):
-        with self.db_con() as r:
-            url_hashes = r.zrange(self.items_key, 0, -1)
-
-        items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
-        items = [i for i in items if i]
-        return items
 
     def add_items(self, items: Union[ItemStrict, List[ItemStrict]]):
         with self.db_con() as r:
