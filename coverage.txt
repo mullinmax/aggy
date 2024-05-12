@@ -1,0 +1,65 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.10, pytest-7.4.3, pluggy-1.0.0
+rootdir: /config/workspace/blinderdev
+plugins: anyio-4.3.0, cov-5.0.0
+collected 76 items
+
+src/api/tests/db/base_test.py ...                                        [  3%]
+src/api/tests/db/category_test.py ..........                             [ 17%]
+src/api/tests/db/feed_test.py .....                                      [ 23%]
+src/api/tests/db/item_test.py .....................                      [ 51%]
+src/api/tests/db/user_test.py ...............                            [ 71%]
+src/api/tests/routers/auth_test.py ............                          [ 86%]
+src/api/tests/routers/category_test.py ..........                        [100%]
+
+---------- coverage: platform linux, python 3.10.10-final-0 ----------
+Name                                     Stmts   Miss  Cover   Missing
+----------------------------------------------------------------------
+src/api/config.py                           26      4    85%   35-38, 44
+src/api/constants.py                         4      0   100%
+src/api/db/__init__.py                       0      0   100%
+src/api/db/base.py                          39      3    92%   39-40, 51
+src/api/db/category.py                      92      2    98%   114-116
+src/api/db/feed.py                          73      4    95%   38-39, 62-63
+src/api/db/item.py                         129      7    95%   50, 107, 122, 144, 193, 198, 210
+src/api/db/user.py                          78      2    97%   89, 111
+src/api/ingest/feed.py                      35     26    26%   12-48
+src/api/ingest/item/mercury.py              16     10    38%   10-29
+src/api/ingest/item/open_graph.py            9      5    44%   8-20
+src/api/ingest/item/rss.py                   8      5    38%   8-13
+src/api/ingest/jobs.py                      32     23    28%   12-16, 20-46
+src/api/main.py                             27      9    67%   19-39, 51-52
+src/api/route_models/acknowledge.py          4      0   100%
+src/api/route_models/auth_user.py           11      3    73%   10, 13, 16
+src/api/route_models/base.py                 5      1    80%   7
+src/api/route_models/category.py             9      0   100%
+src/api/route_models/feed.py                12      1    92%   16
+src/api/route_models/item.py                17      0   100%
+src/api/route_models/token.py                5      0   100%
+src/api/routers/auth.py                     47      5    89%   56-57, 61-62, 65
+src/api/routers/category.py                 63     15    76%   25, 98-99, 109-116, 128-135, 145-148
+src/api/routers/item.py                      2      0   100%
+src/api/tests/__init__.py                    0      0   100%
+src/api/tests/conftest.py                    8      0   100%
+src/api/tests/db/__init__.py                 0      0   100%
+src/api/tests/db/base_test.py               16      0   100%
+src/api/tests/db/category_test.py           72      0   100%
+src/api/tests/db/feed_test.py               31      0   100%
+src/api/tests/db/item_test.py               68      0   100%
+src/api/tests/db/user_test.py               90      0   100%
+src/api/tests/fixtures/__init__.py           0      0   100%
+src/api/tests/fixtures/category.py          14      0   100%
+src/api/tests/fixtures/client.py             6      0   100%
+src/api/tests/fixtures/feed.py              15      0   100%
+src/api/tests/fixtures/item.py              15      0   100%
+src/api/tests/fixtures/token.py              7      0   100%
+src/api/tests/fixtures/user.py              14      0   100%
+src/api/tests/routers/auth_test.py          64      0   100%
+src/api/tests/routers/category_test.py      51      0   100%
+src/api/tests/utils.py                      13      1    92%   19
+----------------------------------------------------------------------
+TOTAL                                     1227    126    90%
+Coverage XML written to file coverage.xml
+
+
+============================= 76 passed in 36.87s ==============================

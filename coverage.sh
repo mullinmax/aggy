@@ -12,5 +12,5 @@ sleep 5
 
 echo "Database is ready - running tests now"
 
-pytest src/api/tests --cov=src/api --cov-report=xml:coverage.xml
+pytest src/api/tests --cov=src/api --cov-report=xml:coverage.xml --cov-report=term-missing
 docker-compose -f $compose_file down
