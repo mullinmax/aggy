@@ -1,5 +1,40 @@
+# python stuff
 **.pyc
 coverage.xml
 .coverage
 .ruff_cache/**
 **/.pytest_cache/**
+
+#JavaScript
+**/node_modules/
+
+# Expo
+src/react/assets/blinder/.expo/
+blinder/src/react/dist/
+blinder/src/react/web-build/
+
+# Native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
