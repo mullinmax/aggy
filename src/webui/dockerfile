@@ -1,0 +1,26 @@
+# Use the official Node.js image as the base image
+FROM node:22
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the package.json and package-lock.json files from the react/assets directory
+COPY react/assets/package*.json ./react/assets/
+
+# Install the dependencies
+RUN cd react/assets && npm install
+
+# Copy the rest of the application code
+COPY . .
+
+# Build the React app
+RUN cd react/assets && npm run build
+
+# Expose the port the app runs on
+EXPOSE 8080
+
+# Start the Nginx server to serve the built files
+FROM nginx:alpine
+COPY --from=0 /app/react/assets/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

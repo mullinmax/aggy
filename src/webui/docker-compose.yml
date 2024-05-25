@@ -1,0 +1,18 @@
+# version: '3.8'
+
+networks:
+  default:
+    external: true
+    name: "traefik_default"
+
+services:
+  dev-blinder-webui:
+    build:
+      context: .
+      dockerfile: dockerfile
+    environment:
+      - BLINDER_API_URL=http://codehostapi.doze.dev
+    labels:
+      - "traefik.http.routers.blinderdevwebui.rule=Host(`devblinder.doze.dev`)"
+      - "traefik.http.routers.blinderdevwebui.service=blinderdevwebui"
+      - "traefik.http.services.blinderdevwebui.loadbalancer.server.port=80"

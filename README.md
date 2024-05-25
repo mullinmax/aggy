@@ -3,6 +3,9 @@
 
 ## TODO
 - [x] test out valkey
+- [ ] move todo items to github issues
+- [ ] build docker container for webui
+- [ ] setup main instance of webui and API
 - [ ] route testing
 - [ ] move tests dir to separate folder from source code
 - [ ] add license
