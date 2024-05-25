@@ -3,9 +3,6 @@ name: Build and Publish Docker Images
 on:
   push:
     branches: ['main']
-    paths:
-      - 'src/api/**'
-      - 'src/webui/**'
   release:
     types: [published]
 
