@@ -1,7 +1,11 @@
+# python stuff
 **.pyc
 coverage.xml
 .coverage
 .ruff_cache/**
+**/.pytest_cache/**
+
+#JavaScript
 **/node_modules/
 
 # Expo

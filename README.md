@@ -1,16 +1,23 @@
 # blinder
 
 
-
 ## TODO
-- [ ] pagination
-- [ ] user opens, up and down votes
-- [ ] break image collection into seperate microservice
-- [ ] create embeddings microservice for text/images
-- [ ] create microservice for training models on embeddings and user data
-- [ ] find most relevant image on a website using embeddings?
+- [x] test out valkey
+- [ ] route testing
+- [ ] move tests dir to separate folder from source code
+- [ ] add license
+- [ ] user interactions (opens, up and down votes)
+- [ ] pagination for any api returning list
+- [ ] save preview image(s)
+- [ ] setup embeddings container
+- [ ] generate embeddings text
+- [ ] generate embeddings for images
+- [ ] train models on user data + embeddings
+- [ ] use embeddings to help decide which image would be the best preview image
 - [ ] fix reddit albums getting very low res thumbnails
 - [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
+- [ ] Add RSS bridge (or similar) to docker compose setup (use this to template rss feeds?)
+- [ ] API for templated rss feeds
 
 
 

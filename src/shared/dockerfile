@@ -1,4 +1,0 @@
-FROM python:3.11-slim as blinder-shared
-WORKDIR /app
-COPY . /app/shared/
-RUN pip install -r /app/shared/requirements.txt
