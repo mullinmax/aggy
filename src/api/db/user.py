@@ -1,6 +1,4 @@
 import bcrypt
-from datetime import datetime
-from pydantic import field_serializer
 
 from .base import BlinderBaseModel
 from .category import Category
@@ -9,8 +7,6 @@ from .category import Category
 class User(BlinderBaseModel):
     name: str
     hashed_password: str = None
-    created: datetime = datetime.now()
-    updated: datetime = datetime.now()
 
     @property
     def key(self):
@@ -57,9 +53,6 @@ class User(BlinderBaseModel):
             if self.exists():
                 raise Exception(f"User with name {self.name} already exists")
 
-            self.created = max(self.created, self.updated)
-            self.updated = self.created
-
             r.hset(self.key, mapping=self.model_dump())
             r.sadd("USERS", self.name_hash)
 
@@ -95,8 +88,6 @@ class User(BlinderBaseModel):
             if not self.exists():
                 raise Exception(f"User withname {self.name} does not exist")
 
-            self.updated = datetime.now()
-
             r.hset(
                 self.key,
                 mapping=self.model_dump(),
@@ -128,11 +119,3 @@ class User(BlinderBaseModel):
             category.delete()
             # delete category
             r.srem(self.categories_key, category.name_hash)
-
-    @field_serializer("created")
-    def created_at_to_str(created: datetime):
-        return created.strftime("%Y-%m-%d %H:%M:%S")
-
-    @field_serializer("updated")
-    def updated_at_to_str(updated: datetime):
-        return updated.strftime("%Y-%m-%d %H:%M:%S")

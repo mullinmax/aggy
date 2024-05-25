@@ -84,32 +84,27 @@ def test_create_read_item(unique_item_strict):
     assert item.content == unique_item_strict.content
 
 
-def test_update_item(unique_item_strict):
+def test_update_item(existing_item_strict):
     """Tests updating an item."""
-    unique_item_strict.create()
-    item = ItemLoose.read(unique_item_strict.url_hash)
+    item = ItemLoose.read(existing_item_strict.url_hash)
     item.title = "Updated title"
     item.update()
 
-    updated_item = ItemLoose.read(unique_item_strict.url_hash)
+    updated_item = ItemLoose.read(existing_item_strict.url_hash)
     assert updated_item.title == "Updated title"
 
 
-def test_delete_item(unique_item_strict):
+def test_delete_item(existing_item_strict):
     """Tests deleting an item."""
-    unique_item_strict.create()
-    item = ItemLoose.read(unique_item_strict.url_hash)
-
-    assert item.exists()
-    item.delete()
-    assert not item.exists()
+    assert existing_item_strict.exists()
+    existing_item_strict.delete()
+    assert not existing_item_strict.exists()
 
 
-def test_overwrite_error(unique_item_strict):
+def test_overwrite_error(existing_item_strict):
     """Tests that overwriting an existing item raises an error."""
-    unique_item_strict.create()
     with pytest.raises(Exception) as e:
-        unique_item_strict.create(overwrite=False)
+        existing_item_strict.create(overwrite=False)
     assert "already exists" in str(
         e.value
     ), "Should not allow overwriting existing items"

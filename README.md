@@ -3,9 +3,11 @@
 
 ## TODO
 - [x] test out valkey
-- [ ] test out aioredis package
-- [ ] pagination for any api returning list
+- [ ] route testing
+- [ ] move tests dir to separate folder from source code
+- [ ] add license
 - [ ] user interactions (opens, up and down votes)
+- [ ] pagination for any api returning list
 - [ ] save preview image(s)
 - [ ] setup embeddings container
 - [ ] generate embeddings text

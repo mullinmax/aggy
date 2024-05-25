@@ -1,17 +1,30 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from typing import List
 
 from db.category import Category
 from db.feed import Feed
 from db.user import User
-from response_models.category import CategoryResponse
-from response_models.feed import FeedResponse
-from response_models.item import ItemResponse
-from response_models.acknowledge import AcknowledgeResponse
+from route_models.category import CategoryResponse
+from route_models.feed import FeedResponse
+from route_models.item import ItemResponse
+from route_models.acknowledge import AcknowledgeResponse
 from routers.auth import authenticate
 
 category_router = APIRouter()
+
+
+def get_category_by_name_hash(user_hash: str, name_hash: str) -> Category:
+    cat = None
+    try:
+        cat = Category.read(user_hash=user_hash, name_hash=name_hash)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Category not found")
+
+    if cat is None or not cat.exists():
+        raise HTTPException(status_code=500, detail="Category not found")
+
+    return cat
 
 
 # create category
@@ -19,9 +32,9 @@ category_router = APIRouter()
     "/create", summary="Create a category", response_model=CategoryResponse
 )
 def create_category(name: str, user: User = Depends(authenticate)) -> CategoryResponse:
-    cat = Category(user_hash=user.name_hash, name=name)
-    cat.create()
-    return CategoryResponse.from_db_model(cat)
+    category = Category(user_hash=user.name_hash, name=name)
+    category.create()
+    return CategoryResponse.from_db_model(category)
 
 
 # delete category
@@ -33,7 +46,7 @@ def create_category(name: str, user: User = Depends(authenticate)) -> CategoryRe
 def delete_category(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> AcknowledgeResponse:
-    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
+    cat = get_category_by_name_hash(user.name_hash, category_name_hash)
     cat.delete()
     return AcknowledgeResponse()
 
@@ -43,7 +56,7 @@ def delete_category(
 def get_category(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> CategoryResponse:
-    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
+    cat = get_category_by_name_hash(user.name_hash, category_name_hash)
     return CategoryResponse.from_db_model(cat)
 
 
@@ -54,8 +67,7 @@ def get_category(
     response_model=List[CategoryResponse],
 )
 def get_categories(user: User = Depends(authenticate)) -> List[CategoryResponse]:
-    cats = Category.read_all(user_hash=user.name_hash)
-    return [CategoryResponse.from_db_model(c) for c in cats]
+    return [CategoryResponse.from_db_model(c) for c in user.categories]
 
 
 # get all items in a category
@@ -63,11 +75,11 @@ def get_categories(user: User = Depends(authenticate)) -> List[CategoryResponse]
 # TODO pagination
 # TODO filter method (read, unread, etc.)
 @category_router.get(
-    "/get_all_items",
+    "/items",
     summary="List all items in a category",
     response_model=List[ItemResponse],
 )
-def get_all_items(
+def get_category_items(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> List[ItemResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)

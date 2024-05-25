@@ -1,10 +1,10 @@
 from pydantic import HttpUrl
 
 from db.feed import Feed
-from .base import BaseResponseModel
+from .base import BaseRouteModel
 
 
-class FeedResponse(BaseResponseModel):
+class FeedResponse(BaseRouteModel):
     name: str
     name_hash: str
     feed_url: HttpUrl
