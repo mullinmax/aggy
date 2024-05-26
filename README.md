@@ -24,7 +24,6 @@
 - [ ] API for templated rss feeds
 
 
-
 ### Database Design
 
 ```mermaid
