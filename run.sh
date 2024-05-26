@@ -6,7 +6,7 @@ if [ -z "$DEV_NAME" ]; then
   exit 1
 fi
 
-compose_file="src/api/docker-compose.yml"
+compose_file="docker-compose.yml"
 
 echo "Stopping and removing containers for $DEV_NAME..."
 docker-compose -f $compose_file down
