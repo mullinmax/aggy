@@ -3,9 +3,10 @@
 
 ## TODO
 - [x] test out valkey
+- [x] build docker container for webui
+- [x] setup main instance of webui and API
+- [x] setup script to allow locally running the webui within docker container with api
 - [ ] move todo items to github issues
-- [ ] build docker container for webui
-- [ ] setup main instance of webui and API
 - [ ] route testing
 - [ ] move tests dir to separate folder from source code
 - [ ] add license
@@ -21,7 +22,6 @@
 - [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
 - [ ] Add RSS bridge (or similar) to docker compose setup (use this to template rss feeds?)
 - [ ] API for templated rss feeds
-
 
 
 ### Database Design

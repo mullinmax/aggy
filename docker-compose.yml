@@ -1,0 +1,52 @@
+version: '3.8'
+
+networks:
+  default:
+    external: true
+    name: "traefik_default"
+
+services:
+  blinder-db:
+    container_name: "${DEV_NAME}-blinder-db"
+    image: valkey/valkey:7.2.5-alpine
+    ports:
+      - 6379
+
+  blinder-extract:
+    container_name: "${DEV_NAME}-blinder-extract"
+    image: wangqiru/mercury-parser-api
+    ports:
+      - 3000
+
+  blinder-api:
+    container_name: "${DEV_NAME}-blinder-api"
+    build:
+      context: ./src/api
+      dockerfile: dockerfile
+    ports:
+      - 8000
+    environment:
+      - DB_HOST=${DEV_NAME}-blinder-db
+      - DB_PORT=6379
+      - JWT_ALGORITHM=HS256
+      - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
+    labels:
+      - "traefik.http.routers.${DEV_NAME}blinderapi.rule=Host(`${DEV_NAME}blinderapi.doze.dev`)"
+      - "traefik.http.routers.${DEV_NAME}blinderapi.service=${DEV_NAME}blinderapi"
+      - "traefik.http.services.${DEV_NAME}blinderapi.loadbalancer.server.port=8000"
+    depends_on:
+      - blinder-db
+
+  blinder-webui:
+    container_name: "${DEV_NAME}-blinder-webui"
+    build:
+      context: ./src/webui
+      dockerfile: dockerfile
+    environment:
+      - BLINDER_API_URL=http://${DEV_NAME}blinderapi.doze.dev
+    labels:
+      - "traefik.http.routers.${DEV_NAME}blinder.rule=Host(`${DEV_NAME}blinder.doze.dev`)"
+      - "traefik.http.routers.${DEV_NAME}blinder.service=${DEV_NAME}blinder"
+      - "traefik.http.services.${DEV_NAME}blinder.loadbalancer.server.port=80"
+    depends_on:
+      - blinder-api
