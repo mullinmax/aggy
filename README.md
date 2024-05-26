@@ -6,12 +6,12 @@
 - [x] build docker container for webui
 - [x] setup main instance of webui and API
 - [x] setup script to allow locally running the webui within docker container with api
-- [ ] move todo items to github issues
-- [ ] route testing
+- [x] move todo items to github issues
+- [x] route testing
 - [ ] move tests dir to separate folder from source code
-- [ ] add license
+- [x] add license
 - [ ] user interactions (opens, up and down votes)
-- [ ] pagination for any api returning list
+- [x] pagination for any api returning list
 - [ ] save preview image(s)
 - [ ] setup embeddings container
 - [ ] generate embeddings text
