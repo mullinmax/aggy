@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
 from db.category import Category
-from db.feed import Feed
 from db.user import User
 from route_models.category import CategoryResponse
 from route_models.feed import FeedResponse
@@ -62,11 +61,12 @@ def get_category(
 
 # get all categories
 @category_router.get(
-    "/get_all",
-    summary="Get all categories a user has created",
+    "/list",
+    summary="List categories a user has created",
     response_model=List[CategoryResponse],
 )
-def get_categories(user: User = Depends(authenticate)) -> List[CategoryResponse]:
+def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse]:
+    # TODO add list of feeds in each category in the response
     return [CategoryResponse.from_db_model(c) for c in user.categories]
 
 
@@ -88,7 +88,7 @@ def get_category_items(
 
 # get all feeds in a category
 @category_router.get(
-    "/get_all_feeds",
+    "/list_feeds",
     summary="List all feeds in a category",
     response_model=List[FeedResponse],
 )
@@ -99,54 +99,4 @@ def get_all_feeds(
     return [FeedResponse.from_db_model(f) for f in cat.feeds]
 
 
-# add a feed to a category
-@category_router.post(
-    "/add_feed", summary="Add a feed to a category", response_model=AcknowledgeResponse
-)
-def add_feed_to_category(
-    category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
-) -> AcknowledgeResponse:
-    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
-    feed = Feed.read(
-        user_hash=user.name_hash,
-        category_hash=category_name_hash,
-        name_hash=feed_name_hash,
-    )
-    cat.add_feed(feed)
-    return AcknowledgeResponse()
-
-
-# delete a feed from a category
-@category_router.delete(
-    "/delete_feed",
-    summary="Delete a feed from a category",
-    response_model=AcknowledgeResponse,
-)
-def delete_feed_from_category(
-    category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
-) -> AcknowledgeResponse:
-    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
-    feed = Feed.read(
-        user_hash=user.name_hash,
-        category_hash=category_name_hash,
-        name_hash=feed_name_hash,
-    )
-    cat.delete_feed(feed)
-    return AcknowledgeResponse
-
-
-# get all items in a feed
-@category_router.post(
-    "/items", summary="Get all items in a feed", response_model=List[ItemResponse]
-)
-def get_items(
-    category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
-) -> List[ItemResponse]:
-    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
-    feed = cat.read_feed(name_hash=feed_name_hash)
-    items = feed.get_all_items()
-    return [ItemResponse.from_db_model(i) for i in items]
-
-
 # TODO search items in a category
-# TODO get item's feed that produced it
