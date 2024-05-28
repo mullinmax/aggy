@@ -84,9 +84,9 @@ def test_get_nonexistent_category(client, existing_user, token):
     assert response.json() == {"detail": "Category not found"}
 
 
-def test_get_all_categories(client, existing_user, existing_category, token):
+def test_list_categories(client, existing_user, existing_category, token):
     args = build_api_request_args(
-        path="/category/get_all",
+        path="/category/list",
         token=token,
     )
 
@@ -101,9 +101,9 @@ def test_get_all_categories(client, existing_user, existing_category, token):
     ]
 
 
-def test_get_all_categories_no_categories(client, existing_user, token):
+def test_list_categories_no_categories(client, existing_user, token):
     args = build_api_request_args(
-        path="/category/get_all",
+        path="/category/list",
         token=token,
     )
 
@@ -113,9 +113,9 @@ def test_get_all_categories_no_categories(client, existing_user, token):
     assert response.json() == []
 
 
-def test_get_all_categories_no_token(client):
+def test_list_categories_no_token(client):
     args = build_api_request_args(
-        path="/category/get_all",
+        path="/category/list",
     )
 
     response = client.get(**args)
