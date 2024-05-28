@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from typing import List
 
@@ -19,7 +19,7 @@ feed_router = APIRouter()
 )
 def create_feed(
     category_name_hash: str,
-    feed_name_hash: str,
+    feed_name: str,
     feed_url: str,
     user: User = Depends(authenticate),
 ) -> AcknowledgeResponse:
@@ -27,7 +27,7 @@ def create_feed(
     feed = Feed(
         user_hash=user.name_hash,
         category_hash=category_name_hash,
-        name=feed_name_hash,
+        name=feed_name,
         url=feed_url,
     )
     cat.add_feed(feed)
@@ -40,13 +40,16 @@ def create_feed(
 def get_items(
     category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
 ) -> List[ItemResponse]:
-    feed = Feed.read(
-        user_hash=user.name_hash,
-        category_hash=category_name_hash,
-        name_hash=feed_name_hash,
-    )
-    items = feed.get_all_items()
-    return [ItemResponse.from_db_model(i) for i in items]
+    try:
+        feed = Feed.read(
+            user_hash=user.name_hash,
+            category_hash=category_name_hash,
+            feed_hash=feed_name_hash,
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    return [ItemResponse.from_db_model(i) for i in feed.items]
 
 
 @feed_router.delete(
@@ -61,7 +64,7 @@ def delete_feed(
     feed = Feed.read(
         user_hash=user.name_hash,
         category_hash=category_name_hash,
-        name_hash=feed_name_hash,
+        feed_hash=feed_name_hash,
     )
     cat.delete_feed(feed)
     return AcknowledgeResponse
