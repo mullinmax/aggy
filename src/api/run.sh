@@ -1,5 +1,5 @@
 #!/bin/bash
-compose_file="src/api/docker-compose.yml"
+compose_file="docker-compose.yml"
 
 echo "Stopping and removing containers..."
 docker-compose -f $compose_file down
