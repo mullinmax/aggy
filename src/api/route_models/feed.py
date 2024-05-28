@@ -8,7 +8,6 @@ class FeedResponse(BaseRouteModel):
     name: str
     name_hash: str
     feed_url: HttpUrl
-    feed_description: str
     feed_category: str
 
     @classmethod
@@ -17,6 +16,5 @@ class FeedResponse(BaseRouteModel):
             name=db_model.name,
             name_hash=db_model.name_hash,
             feed_url=db_model.url,
-            feed_description=db_model.description,
             feed_category=db_model.category_hash,
         )

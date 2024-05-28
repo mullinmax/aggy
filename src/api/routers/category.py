@@ -20,9 +20,6 @@ def get_category_by_name_hash(user_hash: str, name_hash: str) -> Category:
     except Exception:
         raise HTTPException(status_code=500, detail="Category not found")
 
-    if cat is None or not cat.exists():
-        raise HTTPException(status_code=500, detail="Category not found")
-
     return cat
 
 
@@ -70,6 +67,19 @@ def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse
     return [CategoryResponse.from_db_model(c) for c in user.categories]
 
 
+# get all feeds in a category
+@category_router.get(
+    "/list_feeds",
+    summary="List all feeds in a category",
+    response_model=List[FeedResponse],
+)
+def list_feeds(
+    category_name_hash: str, user: User = Depends(authenticate)
+) -> List[FeedResponse]:
+    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
+    return [FeedResponse.from_db_model(f) for f in cat.feeds]
+
+
 # get all items in a category
 # TODO sort method (best, worst, newest, oldest, previous favorites, etc.)
 # TODO pagination
@@ -84,19 +94,6 @@ def get_category_items(
 ) -> List[ItemResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
     return [ItemResponse.from_db_model(i) for i in cat.items]
-
-
-# get all feeds in a category
-@category_router.get(
-    "/list_feeds",
-    summary="List all feeds in a category",
-    response_model=List[FeedResponse],
-)
-def get_all_feeds(
-    category_name_hash: str, user: User = Depends(authenticate)
-) -> List[FeedResponse]:
-    cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
-    return [FeedResponse.from_db_model(f) for f in cat.feeds]
 
 
 # TODO search items in a category

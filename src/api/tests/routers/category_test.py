@@ -124,6 +124,26 @@ def test_list_categories_no_token(client):
     assert response.json() == {"detail": "Not authenticated"}
 
 
+def test_list_feeds(client, existing_user, existing_category, existing_feed, token):
+    args = build_api_request_args(
+        path="/category/list_feeds",
+        params={"category_name_hash": existing_category.name_hash},
+        token=token,
+    )
+
+    response = client.get(**args)
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "name": existing_feed.name,
+            "name_hash": existing_feed.name_hash,
+            "feed_url": str(existing_feed.url),
+            "feed_category": existing_feed.category_hash,
+        }
+    ]
+
+
 def test_get_all_items(
     client, existing_user, existing_category, existing_feed, existing_item_strict, token
 ):
