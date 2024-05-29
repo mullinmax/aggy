@@ -85,7 +85,7 @@ def test_get_items(unique_category, unique_item_strict):
             item.create()
             r.zadd(unique_category.items_key, {item.url_hash: i})
 
-    act_items = unique_category.items
+    act_items = unique_category.query_items()
     assert len(act_items) == 3, "Should get all items for a category"
     for item in act_items:
         assert item.url_hash in [

@@ -1,4 +1,5 @@
 from tests.utils import build_api_request_args
+from pydantic import HttpUrl
 
 
 def test_create_category(client, unique_category, existing_user, token):
@@ -158,3 +159,32 @@ def test_get_all_items(
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["url"] == str(existing_item_strict.url)
+
+
+def test_get_some_items(
+    client, existing_user, existing_category, existing_feed, unique_item_strict, token
+):
+    new_items = [unique_item_strict.model_copy() for i in range(10)]
+    for i, item in enumerate(new_items):
+        item.url = HttpUrl(f"http://example.com/{i}/")
+        item.create()
+        existing_category.add_items(item)
+        #  multiply by 8 to differenciate between index and score
+        existing_category.set_items_scores({item.url_hash: 8 * i})
+
+    args = build_api_request_args(
+        path="/category/items",
+        params={
+            "category_name_hash": existing_category.name_hash,
+            "start": 2,
+            "end": 3,
+        },
+        token=token,
+    )
+
+    response = client.get(**args)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+    assert response.json()[0]["url"] == "http://example.com/2/"
+    assert response.json()[1]["url"] == "http://example.com/3/"

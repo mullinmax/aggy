@@ -11,6 +11,7 @@ from .base import BlinderBaseModel
 from typing_extensions import Annotated
 
 
+# TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
 class ItemBase(BlinderBaseModel):
     url: HttpUrl
     author: Optional[str] = None
