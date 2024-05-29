@@ -90,7 +90,7 @@ class Category(BlinderBaseModel):
             r.delete(self.key)
 
     @classmethod
-    def read(cls, user_hash, name_hash):
+    def read(cls, user_hash, name_hash) -> "Category":
         key = f"USER:{user_hash}:CATEGORY:{name_hash}"
         with cls.db_con() as r:
             category_data = r.hgetall(key)

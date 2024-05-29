@@ -84,9 +84,9 @@ def test_get_nonexistent_category(client, existing_user, token):
     assert response.json() == {"detail": "Category not found"}
 
 
-def test_get_all_categories(client, existing_user, existing_category, token):
+def test_list_categories(client, existing_user, existing_category, token):
     args = build_api_request_args(
-        path="/category/get_all",
+        path="/category/list",
         token=token,
     )
 
@@ -101,9 +101,9 @@ def test_get_all_categories(client, existing_user, existing_category, token):
     ]
 
 
-def test_get_all_categories_no_categories(client, existing_user, token):
+def test_list_categories_no_categories(client, existing_user, token):
     args = build_api_request_args(
-        path="/category/get_all",
+        path="/category/list",
         token=token,
     )
 
@@ -113,15 +113,35 @@ def test_get_all_categories_no_categories(client, existing_user, token):
     assert response.json() == []
 
 
-def test_get_all_categories_no_token(client):
+def test_list_categories_no_token(client):
     args = build_api_request_args(
-        path="/category/get_all",
+        path="/category/list",
     )
 
     response = client.get(**args)
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Not authenticated"}
+
+
+def test_list_feeds(client, existing_user, existing_category, existing_feed, token):
+    args = build_api_request_args(
+        path="/category/list_feeds",
+        params={"category_name_hash": existing_category.name_hash},
+        token=token,
+    )
+
+    response = client.get(**args)
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "name": existing_feed.name,
+            "name_hash": existing_feed.name_hash,
+            "feed_url": str(existing_feed.url),
+            "feed_category": existing_feed.category_hash,
+        }
+    ]
 
 
 def test_get_all_items(

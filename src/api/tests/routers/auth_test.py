@@ -1,5 +1,6 @@
 import jwt
 from config import config
+from unittest.mock import patch
 
 
 def test_create_user(client, unique_user):
@@ -129,3 +130,50 @@ def test_get_token_expired(client, unique_user):
 
     response = client.get("/auth/token_check", headers=headers)
     assert response.status_code == 401
+
+
+def test_token_check_invalid_token(client, unique_user):
+    headers = {"Authorization": "Bearer invalid_token"}
+    response = client.get("/auth/token_check", headers=headers)
+    assert response.status_code == 401
+
+
+def test_token_check_deleted_user(client, existing_user):
+    response = client.post(
+        "/auth/login", json={"username": existing_user.name, "password": "password"}
+    )
+    assert "token" in response.json()
+    assert len(response.json()["token"]) > 0
+    assert "token_type" in response.json()
+
+    headers = {"Authorization": f"Bearer {response.json()['token']}"}
+
+    response = client.get("/auth/token_check", headers=headers)
+    assert response.status_code == 200
+
+    existing_user.delete()
+
+    response = client.get("/auth/token_check", headers=headers)
+    assert response.status_code == 404
+
+
+def test_token_check_deleted_user_weird_read(client, existing_user):
+    # ensures that if read doesn't raise an exception, the token_check will still return a 404
+    response = client.post(
+        "/auth/login", json={"username": existing_user.name, "password": "password"}
+    )
+    assert "token" in response.json()
+    assert len(response.json()["token"]) > 0
+    assert "token_type" in response.json()
+
+    headers = {"Authorization": f"Bearer {response.json()['token']}"}
+
+    response = client.get("/auth/token_check", headers=headers)
+    assert response.status_code == 200
+
+    # mock the User.read class member function to return None
+    with patch("db.user.User.read") as mock_read:
+        mock_read.return_value = None
+
+        response = client.get("/auth/token_check", headers=headers)
+        assert response.status_code == 404
