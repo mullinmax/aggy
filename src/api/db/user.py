@@ -59,7 +59,7 @@ class User(BlinderBaseModel):
         return self.key
 
     @classmethod
-    def read(cls, name_hash=None, name=None):
+    def read(cls, name_hash=None, name=None) -> "User":
         if name_hash is None:
             if name is None:
                 raise Exception("name or name_hash is required")
@@ -74,7 +74,7 @@ class User(BlinderBaseModel):
         return cls(**user_data)
 
     @classmethod
-    def read_all(cls):
+    def read_all(cls) -> list["User"]:
         with cls.db_con() as r:
             user_hashes = r.smembers("USERS")
 
