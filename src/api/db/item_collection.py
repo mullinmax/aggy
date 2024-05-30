@@ -38,6 +38,6 @@ class ItemCollection(BlinderBaseModel):
             for item in items:
                 r.zrem(self.items_key, item.url_hash)
 
-    def count(self) -> int:
+    def count_items(self) -> int:
         with self.db_con() as r:
             return r.zcard(self.items_key)

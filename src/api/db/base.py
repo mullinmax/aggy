@@ -44,6 +44,10 @@ class BlinderBaseModel(BaseModel):
     def db_con(cls):
         yield get_db_con()
 
+    # enable truthiness for objects if len is defined and sometimes 0
+    def __bool__(self):
+        return True
+
 
 def db_init(flush=False):
     with get_db_con() as r:

@@ -52,7 +52,7 @@ def test_category_read(unique_category):
     read_category = Category.read(
         user_hash=unique_category.user_hash, name_hash=unique_category.name_hash
     )
-    assert read_category, "Category should be readable"
+    assert read_category is not None, "Category should be readable"
     assert read_category.name == unique_category.name, "Category name should match"
 
 
