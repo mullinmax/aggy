@@ -69,11 +69,11 @@ def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse
 
 # get all feeds in a category
 @category_router.get(
-    "/list_feeds",
+    "/feeds",
     summary="List all feeds in a category",
     response_model=List[FeedResponse],
 )
-def list_feeds(
+def feeds(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> List[FeedResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)

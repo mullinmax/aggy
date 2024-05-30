@@ -125,9 +125,9 @@ def test_list_categories_no_token(client):
     assert response.json() == {"detail": "Not authenticated"}
 
 
-def test_list_feeds(client, existing_user, existing_category, existing_feed, token):
+def test_feeds(client, existing_user, existing_category, existing_feed, token):
     args = build_api_request_args(
-        path="/category/list_feeds",
+        path="/category/feeds",
         params={"category_name_hash": existing_category.name_hash},
         token=token,
     )
