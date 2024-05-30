@@ -38,7 +38,11 @@ def create_feed(
     "/items", summary="Get all items in a feed", response_model=List[ItemResponse]
 )
 def get_items(
-    category_name_hash: str, feed_name_hash: str, user: User = Depends(authenticate)
+    category_name_hash: str,
+    feed_name_hash: str,
+    start: int = 0,
+    end: int = -1,
+    user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     try:
         feed = Feed.read(
@@ -46,10 +50,10 @@ def get_items(
             category_hash=category_name_hash,
             feed_hash=feed_name_hash,
         )
+        items = feed.query_items(start=start, end=end)
+        return [ItemResponse.from_db_model(item) for item in items]
     except Exception:
         raise HTTPException(status_code=404, detail="Feed not found")
-
-    return [ItemResponse.from_db_model(i) for i in feed.items]
 
 
 @feed_router.delete(

@@ -69,11 +69,11 @@ def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse
 
 # get all feeds in a category
 @category_router.get(
-    "/list_feeds",
+    "/feeds",
     summary="List all feeds in a category",
     response_model=List[FeedResponse],
 )
-def list_feeds(
+def feeds(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> List[FeedResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
@@ -82,7 +82,6 @@ def list_feeds(
 
 # get all items in a category
 # TODO sort method (best, worst, newest, oldest, previous favorites, etc.)
-# TODO pagination
 # TODO filter method (read, unread, etc.)
 @category_router.get(
     "/items",
@@ -90,10 +89,15 @@ def list_feeds(
     response_model=List[ItemResponse],
 )
 def get_category_items(
-    category_name_hash: str, user: User = Depends(authenticate)
+    category_name_hash: str,
+    start: int = 0,
+    end: int = -1,
+    user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
-    return [ItemResponse.from_db_model(i) for i in cat.items]
+    return [
+        ItemResponse.from_db_model(i) for i in cat.query_items(start=start, end=end)
+    ]
 
 
 # TODO search items in a category

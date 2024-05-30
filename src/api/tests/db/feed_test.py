@@ -40,8 +40,10 @@ def test_read_feed(unique_feed):
 def test_feed_add_items(unique_feed, unique_item_strict):
     unique_feed.create()
     unique_item_strict.create()
-    unique_feed.add_items(unique_item_strict)
-    assert unique_item_strict in unique_feed.items, "Item should be in feed items"
+    unique_feed.add_items(items=[unique_item_strict])
+    assert (
+        unique_item_strict in unique_feed.query_items()
+    ), "Item should be in feed items"
 
 
 def test_count_items(unique_feed, unique_item_strict):

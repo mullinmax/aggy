@@ -77,7 +77,6 @@ def test_feed_with_items(
     response = client.get(**args)
 
     assert response.status_code == 200
-    print(response.json())
     item_json = response.json()[0]
     assert item_json["title"] == existing_item_strict.title
     assert item_json["url"] == str(existing_item_strict.url)
@@ -94,7 +93,6 @@ def test_delete_feed(client, existing_user, existing_category, existing_feed, to
     )
 
     response = client.delete(**args)
-    print(response.json())
     assert response.status_code == 200
     assert response.json() == {"message": "success"}
 
@@ -109,7 +107,5 @@ def test_delete_feed(client, existing_user, existing_category, existing_feed, to
     )
 
     response = client.get(**args)
-    print(response.json())
-    print("category name hash:", existing_category.name_hash)
     assert response.status_code == 404
     assert response.json() == {"detail": "Feed not found"}

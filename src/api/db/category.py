@@ -1,15 +1,14 @@
 from pydantic import StringConstraints
-from typing import List, Union
+from typing import List
 from typing_extensions import Annotated
 
-from .base import BlinderBaseModel
-from .item import ItemStrict
+from .item_collection import ItemCollection
 from .feed import Feed
 
 
 # TODO write unit test that ensures we are using hashes where we should be
 # (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
-class Category(BlinderBaseModel):
+class Category(ItemCollection):
     user_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
 
@@ -44,15 +43,6 @@ class Category(BlinderBaseModel):
     @property
     def items_key(self):
         return f"{self.key}:ITEMS"
-
-    @property
-    def items(self) -> List[ItemStrict]:
-        with self.db_con() as r:
-            url_hashes = r.zrange(self.items_key, 0, -1)
-
-        items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
-        items = [i for i in items if i]
-        return items
 
     def create(self):
         with self.db_con() as r:
@@ -129,10 +119,3 @@ class Category(BlinderBaseModel):
         with self.db_con() as r:
             feed.delete()
             r.srem(f"{self.key}:FEEDS", feed.name_hash)
-
-    def add_items(self, items: Union[ItemStrict, List[ItemStrict]]):
-        with self.db_con() as r:
-            if isinstance(items, ItemStrict):
-                items = [items]
-            for item in items:
-                r.zadd(self.items_key, {item.url_hash: 0})
