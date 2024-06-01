@@ -27,8 +27,10 @@ def get_category_by_name_hash(user_hash: str, name_hash: str) -> Category:
 @category_router.post(
     "/create", summary="Create a category", response_model=CategoryResponse
 )
-def create_category(name: str, user: User = Depends(authenticate)) -> CategoryResponse:
-    category = Category(user_hash=user.name_hash, name=name)
+def create_category(
+    category_name: str, user: User = Depends(authenticate)
+) -> CategoryResponse:
+    category = Category(user_hash=user.name_hash, name=category_name)
     category.create()
     return CategoryResponse.from_db_model(category)
 
