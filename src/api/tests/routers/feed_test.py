@@ -78,8 +78,8 @@ def test_feed_with_items(
 
     assert response.status_code == 200
     item_json = response.json()[0]
-    assert item_json["title"] == existing_item_strict.title
-    assert item_json["url"] == str(existing_item_strict.url)
+    assert item_json["item_title"] == existing_item_strict.title
+    assert item_json["item_url"] == str(existing_item_strict.url)
 
 
 def test_delete_feed(client, existing_user, existing_category, existing_feed, token):
