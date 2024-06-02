@@ -15,6 +15,12 @@ services:
     ports:
       - 3000
 
+  dev-blinder-rss-bridge:
+    image: rssbridge/rss-bridge:latest
+    restart: unless-stopped
+    ports:
+      - 80
+
   dev-blinder-api:
     build:
       context: .
@@ -24,6 +30,8 @@ services:
     environment:
       - DB_HOST=dev-blinder-db
       - DB_PORT=6379
+      - RSS_BRIDGE_HOST=dev-blinder-rss-bridge
+      - RSS_BRIDGE_PORT=80
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
     labels:

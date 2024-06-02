@@ -10,7 +10,7 @@ from routers.auth import auth_router
 from routers.category import category_router
 from routers.feed import feed_router
 from routers.item import item_router
-from ingest.jobs import feed_ingestion_job, feed_ingestion_scheduling_job
+from ingest.jobs import feed_ingestion_scheduling_job, rss_bridge_get_templates_job
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
@@ -26,11 +26,19 @@ async def app_lifespan(app: FastAPI):
         id="feed_ingestion_scheduling_job",
         replace_existing=False,
     )
+    # scheduler.add_job(
+    #     func=feed_ingestion_job,
+    #     trigger="interval",
+    #     seconds=5,  # TODO: make this configurable
+    #     id="feed_ingestion_job",
+    #     replace_existing=False,
+    # )
     scheduler.add_job(
-        func=feed_ingestion_job,
+        func=rss_bridge_get_templates_job,
         trigger="interval",
-        seconds=5,  # TODO: make this configurable
-        id="feed_ingestion_job",
+        # seconds=60 * 60 * 12,
+        seconds=20,
+        id="rss_bridge_get_templates_job",
         replace_existing=False,
     )
     scheduler.start()
