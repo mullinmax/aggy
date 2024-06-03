@@ -10,7 +10,8 @@ from routers.auth import auth_router
 from routers.category import category_router
 from routers.feed import feed_router
 from routers.item import item_router
-from ingest.jobs import feed_ingestion_scheduling_job, rss_bridge_get_templates_job
+from ingest.jobs import feed_ingestion_scheduling_job  # , feed_ingestion_job
+from bridge.jobs import rss_bridge_get_templates_job
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
