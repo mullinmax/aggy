@@ -57,13 +57,13 @@ app = FastAPI(lifespan=app_lifespan)
 
 # routers
 app.include_router(admin_router, tags=["admin"])
-app.include_router(auth_router, prefix="/auth", tags=["auth"])
-app.include_router(category_router, prefix="/category", tags=["category"])
+app.include_router(auth_router, prefix="/auth", tags=["authentication"])
+app.include_router(category_router, prefix="/category", tags=["categories"])
 app.include_router(
-    feed_template_router, prefix="/feed_template", tags=["feed_template"]
+    feed_template_router, prefix="/feed_template", tags=["feed templates"]
 )
-app.include_router(feed_router, prefix="/feed", tags=["feed"])
-app.include_router(item_router, prefix="/item", tags=["item"])
+app.include_router(feed_router, prefix="/feed", tags=["feeds"])
+app.include_router(item_router, prefix="/item", tags=["items"])
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
