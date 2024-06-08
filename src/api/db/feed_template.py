@@ -1,9 +1,9 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import HttpUrl
 from typing import Dict, Any, Optional, List
-from db.base import get_db_con
+from db.base import BlinderBaseModel
 
 
-class FeedTemplateParameter(BaseModel):
+class FeedTemplateParameter(BlinderBaseModel):
     name: str
     required: bool
     type: str
@@ -13,34 +13,43 @@ class FeedTemplateParameter(BaseModel):
     options: Optional[Dict[str, str]] = None
 
 
-class FeedTemplate(BaseModel):
+class FeedTemplate(BlinderBaseModel):
     name: str
     uri: HttpUrl
     description: str
-    context: str
+    context: Optional[str] = None
     parameters: Dict[str, FeedTemplateParameter]
 
     @property
     def key(self):
-        return f"FEED_TEMPLATE:{self.name}"
+        return f"FEED_TEMPLATE:{self.name_hash}"
 
-    def save(self):
-        with get_db_con() as r:
+    @property
+    def name_hash(self):
+        return self.__insecure_hash__(self.user_friendly_name)
+
+    @property
+    def user_friendly_name(self):
+        if self.context:
+            return f"{self.name} ({self.context})"
+        return self.name
+
+    def create(self):
+        with self.db_con() as r:
             r.set(self.key, self.json())
 
     @classmethod
-    def get(cls, name: str):
-        key = f"FEED_TEMPLATE:{name}"
-        with get_db_con() as r:
-            data = r.get(key)
+    def read(cls, name_hash: str):
+        with cls.db_con() as r:
+            data = r.get(f"FEED_TEMPLATE:{name_hash}")
             if data:
                 return cls.parse_raw(data)
             return None
 
     @classmethod
-    def get_all(cls) -> List["FeedTemplate"]:
+    def read_all(cls) -> List["FeedTemplate"]:
         templates = []
-        with get_db_con() as r:
+        with cls.db_con() as r:
             keys = r.keys("FEED_TEMPLATE:*")
             for key in keys:
                 data = r.get(key)

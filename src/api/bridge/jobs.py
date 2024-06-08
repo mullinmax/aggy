@@ -1,7 +1,6 @@
 import logging
 import requests
 from bs4 import BeautifulSoup
-import json
 
 from config import config
 from db.feed_template import FeedTemplate, FeedTemplateParameter
@@ -81,45 +80,27 @@ def rss_bridge_get_templates_job() -> None:
             bridge_description = bridge.find("p", class_="description").text.strip()
 
             for form in bridge.find_all("form", class_="bridge-form"):
-                context_input = form.find("input", {"name": "context"})
-                if context_input is None:
-                    logging.warning(
-                        f"Context input not found in form for bridge: {bridge_name}"
-                    )
-                    continue
+                context = None
 
-                context = context_input["value"]
-                bridge_parameters = parse_parameters(form)
+                context_input = form.find("input", {"name": "context"})
+                if context_input is not None:
+                    context = context_input.get("value")
 
                 bridge_template = FeedTemplate(
-                    name=f"{bridge_name} ({context})",
+                    name=bridge_name,
                     uri=bridge_uri,
                     description=bridge_description,
                     context=context,
-                    parameters=bridge_parameters,
+                    parameters=parse_parameters(form),
                 )
 
-                bridge_template.save()
+                bridge_template.create()
                 bridge_list.append(bridge_template)
 
-        # Convert to JSON serializable format
-        bridge_list_serializable = [
-            {
-                "name": template.name,
-                "uri": str(template.uri),  # Convert HttpUrl to string
-                "description": template.description,
-                "context": template.context,
-                "parameters": {
-                    param_name: param.dict()
-                    for param_name, param in template.parameters.items()
-                },
-            }
-            for template in bridge_list
-        ]
+        for bridge in bridge_list:
+            logging.info(f"rss-ridge template created: {bridge.user_friendly_name}")
 
-        logging.info(
-            f"RSS bridge templates: {json.dumps(bridge_list_serializable, indent=4)}"
-        )
+        logging.info(f"Total rss-bridge templates created: {len(bridge_list)}")
 
     except Exception as e:
         logging.error(f"Failed to get RSS bridge templates: {e}")
