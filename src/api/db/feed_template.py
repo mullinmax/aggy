@@ -1,6 +1,9 @@
 from pydantic import HttpUrl
 from typing import Dict, Any, Optional, List
+
 from db.base import BlinderBaseModel
+from db.feed import Feed
+from config import config
 
 
 class FeedTemplateParameter(BlinderBaseModel):
@@ -15,10 +18,12 @@ class FeedTemplateParameter(BlinderBaseModel):
 
 class FeedTemplate(BlinderBaseModel):
     name: str
-    uri: HttpUrl
+    bridge_short_name: str
+    url: HttpUrl
     description: str
     context: Optional[str] = None
     parameters: Dict[str, FeedTemplateParameter]
+    bridge_short_name: Optional[str] = None
 
     @property
     def key(self):
@@ -33,6 +38,22 @@ class FeedTemplate(BlinderBaseModel):
         if self.context:
             return f"{self.name} ({self.context})"
         return self.name
+
+    @property
+    def create_rss_url(self, **kwargs) -> str:
+        url = f"http://{config.get('RSS_BRIDGE_HOST')}:{config.get('RSS_BRIDGE_PORT')}/?action=display&bridge={self.bridge_short_name}"
+
+        if self.context:
+            url += f"&context={self.context}"
+
+        for key, value in self.parameters.items():
+            if key in kwargs:
+                url += f"&{key}={kwargs[key]}"
+            else:
+                url += f"&{key}={value.default}"
+
+        url += "&format=Atom"
+        return url
 
     def create(self):
         with self.db_con() as r:
@@ -56,3 +77,13 @@ class FeedTemplate(BlinderBaseModel):
                 if data:
                     templates.append(cls.parse_raw(data))
         return templates
+
+    def create_feed(self, user_hash: str, category_hash: str, feed_name: str) -> Feed:
+        feed = Feed(
+            user_hash=user_hash,
+            category_hash=category_hash,
+            name=feed_name,
+            url=self.url,
+        )
+        feed.create()
+        return feed
