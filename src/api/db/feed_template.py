@@ -41,6 +41,7 @@ class FeedTemplate(BlinderBaseModel):
 
     @property
     def create_rss_url(self, **kwargs) -> str:
+        # TODO validate parameters
         url = f"http://{config.get('RSS_BRIDGE_HOST')}:{config.get('RSS_BRIDGE_PORT')}/?action=display&bridge={self.bridge_short_name}"
 
         if self.context:

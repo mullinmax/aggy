@@ -5,7 +5,7 @@ from typing import List
 from db.category import Category
 from db.user import User
 from route_models.category import CategoryResponse
-from route_models.feed import FeedResponse
+from route_models.feed import FeedRouteModel
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
 from routers.auth import authenticate
@@ -73,13 +73,13 @@ def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse
 @category_router.get(
     "/feeds",
     summary="List all feeds in a category",
-    response_model=List[FeedResponse],
+    response_model=List[FeedRouteModel],
 )
 def feeds(
     category_name_hash: str, user: User = Depends(authenticate)
-) -> List[FeedResponse]:
+) -> List[FeedRouteModel]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
-    return [FeedResponse.from_db_model(f) for f in cat.feeds]
+    return [FeedRouteModel.from_db_model(f) for f in cat.feeds]
 
 
 # get all items in a category
