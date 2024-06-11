@@ -7,20 +7,24 @@ from db.feed_template import FeedTemplate, FeedTemplateParameter
 @pytest.fixture(scope="function")
 def unique_feed_template() -> FeedTemplate:
     """Generates unique feed template data for each test"""
+
+    parameter = FeedTemplateParameter(
+        name="param_name",
+        required=True,
+        type="text",
+        default="default value",
+        example="example value",
+        title="title",
+        # options={"A": "a", "B": "b", "C": "c"},
+    )
+
     feed_template = FeedTemplate(
         name=f"Feed Template Name {uuid.uuid4()}",
         bridge_short_name="test",
-        context="test",
-        parameters={
-            "test": FeedTemplateParameter(
-                name="param_name",
-                required=True,
-                default="default value",
-                example="example value",
-                title="title",
-                options={"A": "a", "B": "b", "C": "c"},
-            )
-        },
+        url="http://example.com",
+        description="Description",
+        context="by user",
+        parameters=[parameter],
     )
 
     yield feed_template

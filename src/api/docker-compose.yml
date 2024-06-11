@@ -40,3 +40,4 @@ services:
       - "traefik.http.services.codehostapi.loadbalancer.server.port=8000"
     depends_on:
       - dev-blinder-db
+      - dev-blinder-rss-bridge

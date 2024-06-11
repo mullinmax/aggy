@@ -18,12 +18,11 @@ class FeedTemplateParameter(BlinderBaseModel):
 
 class FeedTemplate(BlinderBaseModel):
     name: str
-    bridge_short_name: str
+    bridge_short_name: Optional[str] = None
     url: HttpUrl
     description: str
     context: Optional[str] = None
-    parameters: Dict[str, FeedTemplateParameter]
-    bridge_short_name: Optional[str] = None
+    parameters: List[FeedTemplateParameter]
 
     @property
     def key(self):
@@ -58,14 +57,14 @@ class FeedTemplate(BlinderBaseModel):
 
     def create(self):
         with self.db_con() as r:
-            r.set(self.key, self.json())
+            r.set(self.key, self.model_dump_json())
 
     @classmethod
-    def read(cls, name_hash: str):
+    def read(cls, name_hash: str) -> Optional["FeedTemplate"]:
         with cls.db_con() as r:
             data = r.get(f"FEED_TEMPLATE:{name_hash}")
             if data:
-                return cls.parse_raw(data)
+                return cls.model_validate_json(data)
             return None
 
     @classmethod
@@ -74,9 +73,9 @@ class FeedTemplate(BlinderBaseModel):
         with cls.db_con() as r:
             keys = r.keys("FEED_TEMPLATE:*")
             for key in keys:
-                data = r.get(key)
-                if data:
-                    templates.append(cls.parse_raw(data))
+                template = cls.read(key.split(":")[1])
+                if template:
+                    templates.append(template)
         return templates
 
     def create_feed(self, user_hash: str, category_hash: str, feed_name: str) -> Feed:
