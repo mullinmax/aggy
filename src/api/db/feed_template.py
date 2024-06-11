@@ -9,9 +9,9 @@ from config import config
 class FeedTemplateParameter(BlinderBaseModel):
     name: str
     required: bool
-    type: str
+    type: str  # TODO: Enum
     default: Optional[Any] = None
-    placeholder: Optional[str] = None
+    example: Optional[str] = None
     title: Optional[str] = None
     options: Optional[Dict[str, str]] = None
 

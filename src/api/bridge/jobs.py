@@ -15,7 +15,7 @@ def parse_parameters(form):
                 "required": False,
                 "type": "text",
                 "default": "",
-                "placeholder": "",
+                "example": "",
                 "title": "",
             }
 
@@ -29,7 +29,7 @@ def parse_parameters(form):
                             "type": input_element.get("type", "text"),
                             "required": input_element.has_attr("required"),
                             "default": input_element.get("value", ""),
-                            "placeholder": input_element.get("placeholder", ""),
+                            "example": input_element.get("placeholder", ""),
                         }
                     )
                 elif input_element.name == "select":
