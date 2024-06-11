@@ -23,14 +23,12 @@ def test_list_all_templates(existing_feed_template):
     assert existing_feed_template.name_hash in [t.name_hash for t in feed_templates]
 
 
-def test_create_feed_from_template(existing_feed_template, existing_category):
-    feed_url = existing_feed_template.create_rss_url()
-    feed = existing_feed_template.create_feed(
-        user_hash=existing_feed_template.user_hash,
-        category_hash=existing_category.name_hash,
-        feed_name="Test Feed",
+def test_create_rss_url(existing_feed_template):
+    parameters = {"param_name": "value"}
+    rss_url = existing_feed_template.create_rss_url(**parameters)
+
+    # TODO This will have to change when we use url encoding correctly
+    assert (
+        rss_url
+        == "http://dev-blinder-rss-bridge:80/?action=display&bridge=test&context=by user&param_name=value&format=Atom"
     )
-    assert feed.url == feed_url
-    assert feed.exists() is True
-    feed.delete()
-    assert feed.exists() is False
