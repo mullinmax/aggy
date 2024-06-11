@@ -61,3 +61,4 @@ services:
       - "traefik.http.services.${DEV_NAME}blinder.loadbalancer.server.port=80"
     depends_on:
       - blinder-api
+#TODO setup traefik so api and web ui are on the same domain and subdomain
