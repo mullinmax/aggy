@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
-
-import jwt
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import datetime, timedelta
+import jwt
 
 from db.user import User
 from config import config
@@ -10,7 +9,7 @@ from route_models.token import TokenResponse
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.auth_user import AuthUser
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 auth_router = APIRouter()
 
@@ -27,14 +26,14 @@ def create_user(signup_user: AuthUser) -> AcknowledgeResponse:
     return AcknowledgeResponse(acknowledged=True)
 
 
-@auth_router.post("/login", summary="Get a token", response_model=TokenResponse)
-def get_token(auth_user: AuthUser) -> TokenResponse:
+@auth_router.post("/token", summary="Get a token", response_model=TokenResponse)
+def get_token(form_data: OAuth2PasswordRequestForm = Depends()) -> TokenResponse:
     try:
-        user = User.read(name=auth_user.username)
+        user = User.read(name=form_data.username)
     except Exception:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if user.check_password(password=auth_user.password):
+    if user.check_password(password=form_data.password):
         to_encode = {
             "user": user.name_hash,
             "exp": datetime.utcnow() + timedelta(days=7),  # TODO make this configurable
@@ -42,7 +41,7 @@ def get_token(auth_user: AuthUser) -> TokenResponse:
         token = jwt.encode(
             to_encode, config.get("JWT_SECRET"), algorithm=config.get("JWT_ALGORITHM")
         )
-        return TokenResponse(token=token, token_type="bearer")
+        return TokenResponse(access_token=token, token_type="bearer")
     raise HTTPException(status_code=401, detail="Incorrect username or password")
 
 
