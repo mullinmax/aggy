@@ -1,6 +1,7 @@
 from pydantic import HttpUrl
 from typing import Dict, Any, Optional, List
 from enum import Enum
+import urllib
 
 from db.base import BlinderBaseModel
 from config import config
@@ -43,23 +44,62 @@ class FeedTemplate(BlinderBaseModel):
             return f"{self.name} ({self.context})"
         return self.name
 
+    def validate_parameters(self, **kwargs) -> None:
+        validation_issues = []
+
+        for name, parameter in self.parameters.items():
+            if name in kwargs and kwargs[name] is not None:
+                if (
+                    parameter.options is not None
+                    and kwargs[name] not in parameter.options
+                ):
+                    validation_issues.append(
+                        f"Parameter {name} must be one of {list(parameter.options.keys())}"
+                    )
+            else:
+                if parameter.required or parameter.default is None:
+                    validation_issues.append(f"Parameter {name} is required")
+                elif (
+                    parameter.default is not None
+                    and parameter.default not in parameter.options
+                ):
+                    validation_issues.append(
+                        f"Parameter {name} must be one of {list(parameter.options.keys())}"
+                    )
+
+        for name, value in kwargs.items():
+            # all parameters must be defined in the template
+            if name not in self.parameters:
+                validation_issues.append(
+                    f"Parameter {name} is not defined in the template"
+                )
+
+        if validation_issues:
+            raise Exception(f"Validation issues: {validation_issues}")
+
     def create_rss_url(self, **kwargs) -> str:
-        # TODO validate parameters
-        # TODO use url encoding
-        url = f"http://{config.get('RSS_BRIDGE_HOST')}:{config.get('RSS_BRIDGE_PORT')}/?action=display&bridge={self.bridge_short_name}"
+        self.validate_parameters(**kwargs)
+
+        url_params = {
+            "action": "display",
+            "bridge": self.bridge_short_name,
+            "format": "Atom",
+        }
 
         if self.context:
-            url += f"&context={self.context}"
+            url_params["context"] = self.context
 
         for name, parameter in self.parameters.items():
             if name in kwargs:
-                url += f"&{name}={kwargs[name]}"
-            # TODO enforce required parameters
+                url_params[name] = kwargs[name]
             elif parameter.default is not None:
-                url += f"&{name}={parameter.default}"
+                url_params[name] = parameter.default
 
-        url += "&format=Atom"
-        return url
+        return "http://{host}:{port}/?{query}".format(
+            host=config.get("RSS_BRIDGE_HOST"),
+            port=config.get("RSS_BRIDGE_PORT"),
+            query=urllib.parse.urlencode(url_params),
+        )
 
     def create(self):
         with self.db_con() as r:

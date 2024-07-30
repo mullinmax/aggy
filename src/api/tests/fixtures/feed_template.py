@@ -16,10 +16,10 @@ def unique_feed_template() -> FeedTemplate:
         name="Parameter Name",
         required=True,
         type=FeedTemplateParameterType.text,
-        default="default_value",
+        default="value",
         example="example_value",
         title="title",
-        # options={"A": "a", "B": "b", "C": "c"},
+        options={"value": "Human Readable Value", "other_value": "Other Value"},
     )
 
     feed_template = FeedTemplate(

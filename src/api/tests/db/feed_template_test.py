@@ -1,3 +1,4 @@
+import pytest
 from db.feed_template import FeedTemplate
 
 
@@ -23,12 +24,37 @@ def test_list_all_templates(existing_feed_template):
     assert existing_feed_template.name_hash in [t.name_hash for t in feed_templates]
 
 
+@pytest.mark.parametrize(
+    "parameters, expected_issues",
+    [
+        ({}, ["Parameter parameter_name is required"]),
+        (
+            {"parameter_name": "invalid_value"},
+            ["Parameter parameter_name must be one of ['value', 'other_value']"],
+        ),
+        (
+            {"invalid_parameter": "value"},
+            [
+                "Parameter parameter_name is required",
+                "Parameter invalid_parameter is not defined in the template",
+            ],
+        ),
+    ],
+)
+def test_validate_unhappy_parameters(
+    parameters, expected_issues, existing_feed_template
+):
+    with pytest.raises(Exception) as e:
+        existing_feed_template.validate_parameters(**parameters)
+    assert str(e.value) == f"Validation issues: {expected_issues}"
+
+
 def test_create_rss_url(existing_feed_template):
-    parameters = {"param_name": "value"}
+    parameters = {"parameter_name": "value"}
     rss_url = existing_feed_template.create_rss_url(**parameters)
 
     # TODO This will have to change when we use url encoding correctly
     assert (
         rss_url
-        == "http://dev-blinder-rss-bridge:80/?action=display&bridge=test&context=by user&parameter_name=default_value&format=Atom"
+        == "http://dev-blinder-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
