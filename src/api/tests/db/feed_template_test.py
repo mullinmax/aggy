@@ -53,7 +53,6 @@ def test_create_rss_url(existing_feed_template):
     parameters = {"parameter_name": "value"}
     rss_url = existing_feed_template.create_rss_url(**parameters)
 
-    # TODO This will have to change when we use url encoding correctly
     assert (
         rss_url
         == "http://dev-blinder-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
