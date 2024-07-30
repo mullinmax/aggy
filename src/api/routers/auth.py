@@ -9,7 +9,7 @@ from route_models.token import TokenResponse
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.auth_user import AuthUser
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/form_login")
 
 auth_router = APIRouter()
 
@@ -17,7 +17,7 @@ auth_router = APIRouter()
 @auth_router.post(
     "/signup", summary="Create a user", response_model=AcknowledgeResponse
 )
-def create_user(signup_user: AuthUser) -> AcknowledgeResponse:
+def signup(signup_user: AuthUser) -> AcknowledgeResponse:
     user = User(name=signup_user.username)
     if user.exists():
         raise HTTPException(status_code=400, detail="Username already registered")
@@ -26,8 +26,15 @@ def create_user(signup_user: AuthUser) -> AcknowledgeResponse:
     return AcknowledgeResponse(acknowledged=True)
 
 
-@auth_router.post("/token", summary="Get a token", response_model=TokenResponse)
-def get_token(form_data: OAuth2PasswordRequestForm = Depends()) -> TokenResponse:
+@auth_router.post(
+    "/form_login", summary="Login via OAuth form", response_model=TokenResponse
+)
+def form_login(form_data: OAuth2PasswordRequestForm = Depends()) -> TokenResponse:
+    return login(AuthUser(username=form_data.username, password=form_data.password))
+
+
+@auth_router.post("/login", summary="Login with AuthUser", response_model=TokenResponse)
+def login(form_data: AuthUser) -> TokenResponse:
     try:
         user = User.read(name=form_data.username)
     except Exception:
