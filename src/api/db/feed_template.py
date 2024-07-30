@@ -1,14 +1,20 @@
 from pydantic import HttpUrl
 from typing import Dict, Any, Optional, List
+from enum import Enum
 
 from db.base import BlinderBaseModel
 from config import config
 
 
+class FeedTemplateParameterType(Enum):
+    text = "text"
+    select = "select"
+
+
 class FeedTemplateParameter(BlinderBaseModel):
     name: str
     required: bool
-    type: str  # TODO: Enum
+    type: FeedTemplateParameterType
     default: Optional[Any] = None
     example: Optional[str] = None
     title: Optional[str] = None

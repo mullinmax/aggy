@@ -1,7 +1,11 @@
 import pytest
 import uuid
 
-from db.feed_template import FeedTemplate, FeedTemplateParameter
+from db.feed_template import (
+    FeedTemplate,
+    FeedTemplateParameter,
+    FeedTemplateParameterType,
+)
 
 
 @pytest.fixture(scope="function")
@@ -11,7 +15,7 @@ def unique_feed_template() -> FeedTemplate:
     parameter = FeedTemplateParameter(
         name="Parameter Name",
         required=True,
-        type="text",
+        type=FeedTemplateParameterType.text,
         default="default_value",
         example="example_value",
         title="title",
