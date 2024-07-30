@@ -11,6 +11,6 @@ PyJWT
 pytest
 pytest-cov
 python-multipart
-redis #TODO try aioredis
+redis
 requests
 uvicorn

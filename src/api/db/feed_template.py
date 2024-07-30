@@ -10,6 +10,8 @@ from config import config
 class FeedTemplateParameterType(Enum):
     text = "text"
     select = "select"
+    checkbox = "checkbox"
+    number = "number"
 
 
 class FeedTemplateParameter(BlinderBaseModel):
