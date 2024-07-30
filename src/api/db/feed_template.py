@@ -21,7 +21,7 @@ class FeedTemplate(BlinderBaseModel):
     url: HttpUrl
     description: str
     context: Optional[str] = None
-    parameters: List[FeedTemplateParameter]
+    parameters: Dict[str, FeedTemplateParameter]
 
     @property
     def key(self):
