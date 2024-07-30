@@ -45,9 +45,8 @@ class FeedTemplate(BlinderBaseModel):
         if self.context:
             url += f"&context={self.context}"
 
-        for parameter in self.parameters:
-            name = parameter.name
-            if parameter.name in kwargs:
+        for name, parameter in self.parameters.items():
+            if name in kwargs:
                 url += f"&{name}={kwargs[name]}"
             # TODO enforce required parameters
             elif parameter.default is not None:

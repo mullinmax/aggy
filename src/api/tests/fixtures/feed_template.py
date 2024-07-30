@@ -9,11 +9,11 @@ def unique_feed_template() -> FeedTemplate:
     """Generates unique feed template data for each test"""
 
     parameter = FeedTemplateParameter(
-        name="param_name",
+        name="Parameter Name",
         required=True,
         type="text",
-        default="default value",
-        example="example value",
+        default="default_value",
+        example="example_value",
         title="title",
         # options={"A": "a", "B": "b", "C": "c"},
     )
@@ -24,7 +24,7 @@ def unique_feed_template() -> FeedTemplate:
         url="http://example.com",
         description="Description",
         context="by user",
-        parameters=[parameter],
+        parameters={"parameter_name": parameter},
     )
 
     yield feed_template
