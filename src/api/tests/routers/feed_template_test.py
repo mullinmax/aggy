@@ -52,5 +52,5 @@ def test_create_feed_from_template(
         res_data["feed_url"]
         == "http://dev-blinder-rss-bridge/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
-    assert new_feed.url == res_data["feed_url"]
+    assert str(new_feed.url) == res_data["feed_url"]
     assert res_data["feed_category"] == existing_category.name_hash
