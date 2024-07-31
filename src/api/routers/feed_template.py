@@ -5,6 +5,7 @@ from typing import Dict
 from db.feed_template import FeedTemplate
 from db.feed import Feed
 from route_models.feed import FeedRouteModel
+from route_models.feed_from_template import FeedFromTemplate
 from db.user import User
 from routers.auth import authenticate
 
@@ -41,25 +42,23 @@ def get_feed_template(
 @feed_template_router.post(
     "/create",
     summary="Create a feed from a template",
-    response_model=FeedTemplate,
+    response_model=FeedRouteModel,
 )
 def create_feed_from_template(
-    feed_template_name_hash: str,
-    category_hash: str,
-    feed_name: str,
-    parameters: Dict[str, str],
+    ff_template: FeedFromTemplate,
     user: User = Depends(authenticate),
 ) -> FeedRouteModel:
-    feed_template = FeedTemplate.read(name_hash=feed_template_name_hash)
+    # feed_template = FeedTemplate.read(name_hash=feed_template_name_hash)
+    feed_template = FeedTemplate.read(name_hash=ff_template.feed_template_name_hash)
 
     if not feed_template:
         raise HTTPException(status_code=404, detail="Feed template not found")
 
-    feed_url = feed_template.create_rss_url(**parameters)
+    feed_url = feed_template.create_rss_url(**ff_template.parameters)
     feed = Feed(
-        user_hash=user.user_hash,
-        category_hash=category_hash,
-        name=feed_name,
+        user_hash=user.name_hash,
+        category_hash=ff_template.category_hash,
+        name=ff_template.feed_name,
         url=feed_url,
     )
     feed.create()
