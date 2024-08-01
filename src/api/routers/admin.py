@@ -17,8 +17,8 @@ async def root():
 # route to get the current version of the API
 @admin_router.get("/version", response_model=Version)
 async def get_version():
-    version = config.get("BUILD_VERSION", "0.0.0-beta")
+    version = config.get("BUILD_VERSION", default="0.0.0-beta")
 
     # clean up the version string
-    version = re.search(r"(\d+\.\d+\.\d+)-?beta?", version).group(1)
+    version = re.search(r"(\d+\.\d+\.\d+(-beta)?)", version).group(1)
     return Version(version=version)
