@@ -8,6 +8,7 @@ from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
 
+# TODO maybe this belongs in the feed DB model
 def ingest_feed(feed: Feed) -> None:
     entries = feedparser.parse(str(feed.url)).entries
 

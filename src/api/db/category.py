@@ -99,11 +99,7 @@ class Category(ItemCollection):
 
         categories = []
         for name_hash in category_name_hashs:
-            try:
-                categories.append(cls.read(user_hash=user_hash, name_hash=name_hash))
-            except Exception:
-                # TODO raise error msg here
-                pass
+            categories.append(cls.read(user_hash=user_hash, name_hash=name_hash))
 
         return categories
 

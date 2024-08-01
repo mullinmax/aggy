@@ -1,0 +1,9 @@
+# Dockerfile for RSS-Bridge
+FROM rssbridge/rss-bridge:latest as blinder-bridge
+
+
+# remove all lines with enabled_bridges[] =
+RUN sed -i '/enabled_bridges\[\] =/d' /app/config.default.ini.php
+
+# add the enabled_bridges[] = * line after the [system] section
+RUN sed -i '/\[system\]/a enabled_bridges[] = "*" ' /app/config.default.ini.php

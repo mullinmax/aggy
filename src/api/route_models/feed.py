@@ -4,7 +4,7 @@ from db.feed import Feed
 from .base import BaseRouteModel
 
 
-class FeedResponse(BaseRouteModel):
+class FeedRouteModel(BaseRouteModel):
     feed_name: str
     feed_name_hash: str
     feed_url: HttpUrl
