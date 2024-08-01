@@ -64,6 +64,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args:
-            BASE_IMAGE: ${{ needs.build-and-push-shared.outputs.shared_image_tag }}
-            BUILD_VERSION: ${{ env.BUILD_VERSION }}
+          build-args: |
+            BASE_IMAGE=${{ needs.build-and-push-shared.outputs.shared_image_tag }}
+            BUILD_VERSION=${{ env.BUILD_VERSION }}
