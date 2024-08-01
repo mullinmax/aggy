@@ -9,6 +9,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /src/api
 
+# Set version
+ARG BUILD_VERSION=0.0.1
+ENV BUILD_VERSION=${BUILD_VERSION}
+
+
 EXPOSE 8000
 
 CMD python /src/api/main.py
