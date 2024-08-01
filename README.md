@@ -8,10 +8,10 @@
 - [x] setup script to allow locally running the webui within docker container with api
 - [x] move todo items to github issues
 - [x] route testing
-- [ ] move tests dir to separate folder from source code
 - [x] add license
-- [ ] user interactions (opens, up and down votes)
 - [x] pagination for any api returning list
+- [ ] move tests dir to separate folder from source code
+- [ ] user interactions (opens, up and down votes)
 - [ ] save preview image(s)
 - [ ] setup embeddings container
 - [ ] generate embeddings text
