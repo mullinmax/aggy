@@ -44,6 +44,18 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'release' }}
             type=raw,value=rc-${{ github.run_number }},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
+      - name: Determine build version
+        id: build-version
+        run: |
+          if [[ ${{ github.event_name }} == "release" ]]; then
+            if [[ ${{ github.event.release.prerelease }} == true ]]; then
+              echo "BUILD_VERSION=${{ github.event.release.tag_name }}-beta" >> $GITHUB_ENV
+            else
+              echo "BUILD_VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+            fi
+          else
+            echo "BUILD_VERSION=${{ github.sha }}" >> $GITHUB_ENV
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v2
         with:
@@ -52,4 +64,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: BASE_IMAGE=${{ needs.build-and-push-shared.outputs.shared_image_tag }}
+          build-args:
+            BASE_IMAGE: ${{ needs.build-and-push-shared.outputs.shared_image_tag }}
+            BUILD_VERSION: ${{ env.BUILD_VERSION }}
