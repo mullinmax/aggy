@@ -10,7 +10,6 @@
 - [x] route testing
 - [x] add license
 - [x] pagination for any api returning list
-- [ ] move tests dir to separate folder from source code
 - [ ] user interactions (opens, up and down votes)
 - [ ] save preview image(s)
 - [ ] setup embeddings container
