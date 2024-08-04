@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import confloat
+from typing import Optional
 
 from routers.auth import authenticate
 from db.item_state import ItemState
@@ -12,7 +14,7 @@ item_router = APIRouter()
 def set_state(
     category_hash: str,
     item_url_hash: str,
-    score: float = 0,
+    score: Optional[confloat(ge=-1, le=1)] = None,
     mark_as_read: bool = True,
     user: User = Depends(authenticate),
 ) -> None:

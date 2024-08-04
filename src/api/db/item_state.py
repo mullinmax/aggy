@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+from pydantic import confloat
 
 from .item import ItemLoose
 from .base import BlinderBaseModel
@@ -23,8 +24,8 @@ class ItemState(BlinderBaseModel):
     item_url_hash: str
     user_id: str
     category_hash: str
-    score: Optional[float] = None
-    score_date: Optional[datetime] = None
+    score: Optional[confloat(ge=-1, le=1)]
+    score_date: Optional[datetime]
     is_read: bool = None
 
     @property
@@ -61,13 +62,20 @@ class ItemState(BlinderBaseModel):
         return None
 
     @classmethod
-    def set_score(
-        cls, user_hash, category_hash, item_url_hash, score, mark_as_read
+    def set_state(
+        cls,
+        user_hash: str,
+        category_hash: str,
+        item_url_hash: str,
+        score: confloat(ge=-1, le=1) = None,
+        mark_as_read: bool = None,
     ) -> None:
         item_state = cls.read(user_hash, category_hash, item_url_hash)
 
-        item_state.score = score
-        item_state.is_read = mark_as_read
-        item_state.score_date = datetime.now()
+        if score is not None:
+            item_state.score = score
+            item_state.score_date = datetime.now()
+        if mark_as_read is not None:
+            item_state.is_read = mark_as_read
 
         item_state.update()
