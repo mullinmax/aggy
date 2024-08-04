@@ -30,7 +30,11 @@ def feed_ingestion_job() -> None:
     if scheduled_time > datetime.now() + timedelta(minutes=1):
         # replace the feed without altering it
         # take the sooner of the values if a feed already exists
-        r.zadd(FEEDS_TO_INGEST_KEY, mapping={feed_key: scheduled_time}, lt=True)
+        r.zadd(
+            FEEDS_TO_INGEST_KEY,
+            mapping={feed_key: int(scheduled_time.timestamp())},
+            lt=True,
+        )
         return
 
     try:

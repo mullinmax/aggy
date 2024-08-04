@@ -32,7 +32,7 @@ async def app_lifespan(app: FastAPI):
     scheduler.add_job(
         func=feed_ingestion_job,
         trigger="interval",
-        seconds=5,  # TODO: make this configurable
+        seconds=15,  # TODO: make this configurable
         id="feed_ingestion_job",
         replace_existing=False,
     )
