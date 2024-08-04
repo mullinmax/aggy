@@ -31,7 +31,8 @@ def create_category(
     category_name: str, user: User = Depends(authenticate)
 ) -> CategoryResponse:
     category = Category(user_hash=user.name_hash, name=category_name)
-    category.create()
+    if not category.exists():
+        category.create()
     return CategoryResponse.from_db_model(category)
 
 
