@@ -47,6 +47,9 @@ class FeedTemplate(BlinderBaseModel):
         return self.name
 
     def validate_parameters(self, **kwargs) -> None:
+        if kwargs is None:
+            kwargs = {}
+
         validation_issues = []
 
         for name, parameter in self.parameters.items():
@@ -63,6 +66,7 @@ class FeedTemplate(BlinderBaseModel):
                     validation_issues.append(f"Parameter {name} is required")
                 elif (
                     parameter.default is not None
+                    and parameter.options is not None
                     and parameter.default not in parameter.options
                 ):
                     validation_issues.append(
@@ -80,6 +84,9 @@ class FeedTemplate(BlinderBaseModel):
             raise Exception(f"Validation issues: {validation_issues}")
 
     def create_rss_url(self, **kwargs) -> str:
+        if kwargs is None:
+            kwargs = {}
+
         self.validate_parameters(**kwargs)
 
         url_params = {

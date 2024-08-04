@@ -30,6 +30,24 @@ def set_state(
     )
 
 
+@item_router.get("/get_state")
+def get_state(
+    category_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> ItemState:
+    item_state = ItemState.read(
+        user_hash=user.name_hash,
+        category_hash=category_hash,
+        item_url_hash=item_url_hash,
+    )
+
+    if not item_state:
+        raise HTTPException(status_code=404, detail="Item state not found")
+
+    return item_state
+
+
 # TODO downvote reasons:
 # Boring: 😐
 # Repetitive: 🔁

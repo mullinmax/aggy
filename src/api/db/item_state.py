@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from .db.item_loose import ItemLoose
+from .item import ItemLoose
 from .base import BlinderBaseModel
 
 # class ReservedVoteReasons(Enum):
