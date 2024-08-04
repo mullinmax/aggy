@@ -8,6 +8,7 @@ from db.item import ItemLoose
 
 
 class ItemResponse(BaseRouteModel):
+    item_hash: str
     item_url: HttpUrl
     item_author: Optional[str] = None
     item_date_published: Optional[datetime] = None
@@ -35,6 +36,7 @@ class ItemResponse(BaseRouteModel):
     @classmethod
     def from_db_model(cls, db_model: ItemLoose):
         return cls(
+            item_hash=db_model.url_hash,
             item_url=db_model.url,
             item_item_author=db_model.author,
             item_date_published=db_model.date_published,
