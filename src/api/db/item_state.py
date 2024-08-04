@@ -10,15 +10,19 @@ class VoteState(Enum):
     DOWN_VOTE = 2
 
 
-class VoteReason(Enum):
-    NO_REASON = 0
-    NOT_RELEVANT = 1
-    MISLEADING = 2
-    INACCURATE = 3
-    BIASED = 4
-    CLICKBAIT = 5
-    INAPPROPRIATE = 6
-    OTHER = 7
+# class ReservedVoteReasons(Enum):
+# leaving unimplemented for now, should allow arbitrary user-defined reasons (like tags)
+# For now a simple down vote is plenty
+#   REPETITIVE = 2 # 🔁
+#   NSFW = 3 # 🍑
+#   NSFL = 4 # 🤮
+#   SCARY = 5 # 🙈
+#   IRRELEVANT = 7 # 🤷
+#   OUTDATED = 9 # 🕰️
+#   LOW_QUALITY = 8 # 🗑️
+#   MISLEADING = 6 # 🤥
+#   OFFENSIVE = 10 # 🤡
+#   PROMOTIONAL = 11 # 📢
 
 
 class ItemState(BlinderBaseModel):
@@ -26,7 +30,6 @@ class ItemState(BlinderBaseModel):
     user_id: str
     category_hash: str
     vote: VoteState
-    vote_reason: VoteReason
     vote_date: datetime
     read: bool
 
