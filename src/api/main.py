@@ -65,6 +65,10 @@ app.include_router(
 app.include_router(feed_router, prefix="/feed", tags=["Feeds"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
 
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
