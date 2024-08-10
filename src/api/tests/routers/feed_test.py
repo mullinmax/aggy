@@ -1,7 +1,7 @@
 from tests.utils import build_api_request_args
 
 
-def test_create_feed(client, unique_feed, existing_user, existing_category, token):
+def test_create_feed(client, unique_feed, existing_category, token):
     args = build_api_request_args(
         path="/feed/create",
         params={
@@ -18,7 +18,7 @@ def test_create_feed(client, unique_feed, existing_user, existing_category, toke
     assert response.json() == {"message": "success"}
 
 
-def test_create_no_name(client, unique_feed, existing_user, existing_category, token):
+def test_create_no_name(client, unique_feed, existing_category, token):
     args = build_api_request_args(
         path="/feed/create",
         params={
@@ -32,7 +32,7 @@ def test_create_no_name(client, unique_feed, existing_user, existing_category, t
     assert response.status_code == 422
 
 
-def test_create_no_url(client, unique_feed, existing_user, existing_category, token):
+def test_create_no_url(client, unique_feed, existing_category, token):
     args = build_api_request_args(
         path="/feed/create",
         params={
@@ -47,7 +47,7 @@ def test_create_no_url(client, unique_feed, existing_user, existing_category, to
     assert response.status_code == 422
 
 
-def test_feed_no_items(client, existing_user, existing_category, existing_feed, token):
+def test_feed_no_items(client, existing_category, existing_feed, token):
     args = build_api_request_args(
         path="/feed/items",
         params={
@@ -63,7 +63,7 @@ def test_feed_no_items(client, existing_user, existing_category, existing_feed, 
 
 
 def test_feed_with_items(
-    client, existing_user, existing_category, existing_feed, existing_item_strict, token
+    client, existing_category, existing_feed, existing_item_strict, token
 ):
     args = build_api_request_args(
         path="/feed/items",
@@ -82,7 +82,7 @@ def test_feed_with_items(
     assert item_json["item_url"] == str(existing_item_strict.url)
 
 
-def test_delete_feed(client, existing_user, existing_category, existing_feed, token):
+def test_delete_feed(client, existing_category, existing_feed, token):
     args = build_api_request_args(
         path="/feed/delete",
         params={

@@ -12,7 +12,7 @@ from routers.category import category_router
 from routers.feed_template import feed_template_router
 from routers.feed import feed_router
 from routers.item import item_router
-from ingest.jobs import feed_ingestion_scheduling_job  # , feed_ingestion_job
+from ingest.jobs import feed_ingestion_scheduling_job, feed_ingestion_job
 from bridge.jobs import rss_bridge_get_templates_job
 
 # Scheduler instance
@@ -29,13 +29,13 @@ async def app_lifespan(app: FastAPI):
         id="feed_ingestion_scheduling_job",
         replace_existing=False,
     )
-    # scheduler.add_job(
-    #     func=feed_ingestion_job,
-    #     trigger="interval",
-    #     seconds=5,  # TODO: make this configurable
-    #     id="feed_ingestion_job",
-    #     replace_existing=False,
-    # )
+    scheduler.add_job(
+        func=feed_ingestion_job,
+        trigger="interval",
+        seconds=15,  # TODO: make this configurable
+        id="feed_ingestion_job",
+        replace_existing=False,
+    )
     scheduler.add_job(
         func=rss_bridge_get_templates_job,
         trigger="interval",
@@ -56,7 +56,7 @@ async def app_lifespan(app: FastAPI):
 app = FastAPI(lifespan=app_lifespan)
 
 # routers
-app.include_router(admin_router, tags=["admin"])
+app.include_router(admin_router, tags=["Admin"])
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(category_router, prefix="/category", tags=["Categories"])
 app.include_router(
@@ -65,6 +65,10 @@ app.include_router(
 app.include_router(feed_router, prefix="/feed", tags=["Feeds"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
 
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

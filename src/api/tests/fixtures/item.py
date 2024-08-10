@@ -7,7 +7,7 @@ from db.item import ItemStrict
 @pytest.fixture(scope="function")
 def unique_item_strict(unique_category):
     item = ItemStrict(
-        url="http://example.com",
+        url="http://example.com/",
         author="Example author",
         date_published=datetime.now(),
         image_url="http://example.com/image.jpg",

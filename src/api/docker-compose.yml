@@ -32,6 +32,8 @@ services:
       - DB_PORT=6379
       - RSS_BRIDGE_HOST=dev-blinder-rss-bridge
       - RSS_BRIDGE_PORT=80
+      - EXTRACT_HOST=dev-blinder-extract
+      - EXTRACT_PORT=3000
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
     labels:
