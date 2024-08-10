@@ -131,3 +131,20 @@ def test_delete_category_removes_feeds(unique_category, unique_feed):
         assert not r.exists(unique_category.items_key)
         assert not r.exists(unique_category.key)
         assert not r.exists(unique_feed.key)
+
+
+def test_remove_items(unique_category, unique_item_strict):
+    """Tests removing items from a category."""
+    unique_category.create()
+    unique_item_strict.create()
+    unique_category.add_items(unique_item_strict)
+
+    assert unique_item_strict in unique_category.query_items()
+
+    unique_category.remove_items(unique_item_strict)
+    assert unique_item_strict not in unique_category.query_items()
+    assert unique_item_strict.exists()
+
+    unique_category.delete()
+    assert not unique_category.exists()
+    assert unique_item_strict.exists()

@@ -3,6 +3,8 @@ from typing import Optional
 from pydantic import confloat
 
 from .item import ItemLoose
+from .user import User
+from .category import Category
 from .base import BlinderBaseModel
 
 # class ReservedVoteReasons(Enum):
@@ -22,7 +24,7 @@ from .base import BlinderBaseModel
 
 class ItemState(BlinderBaseModel):
     item_url_hash: str
-    user_id: str
+    user_hash: str
     category_hash: str
     score: Optional[confloat(ge=-1, le=1)]
     score_date: Optional[datetime]
@@ -34,14 +36,23 @@ class ItemState(BlinderBaseModel):
 
     def create(self) -> None:
         with self.db_con() as r:
-            # check item exists
-            item = ItemLoose.read(self.item_url_hash)
-            if not item:
+            # check user exists
+            User.read(self.user_hash)  # raises ValueError if user does not exist
+
+            # check category exists
+            category = Category.read(
+                user_hash=self.user_hash, name_hash=self.category_hash
+            )
+            if not category:
                 raise ValueError(
-                    f"Item with url_hash {self.item_url_hash} does not exist"
+                    f"Category with hash {self.category_hash} does not exist"
                 )
 
-            r.set(self.key, self.model_to_json())
+            item = ItemLoose.read(self.item_url_hash)
+            if not item:
+                raise ValueError(f"Item with hash {self.item_url_hash} does not exist")
+
+            r.set(self.key, self.json)
 
     def update(self) -> None:
         self.create()

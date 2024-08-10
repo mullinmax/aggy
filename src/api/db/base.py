@@ -22,6 +22,10 @@ class BlinderBaseModel(BaseModel):
     def key(self):
         raise NotImplementedError()
 
+    @property
+    def json(self):
+        return self.model_dump_json()
+
     @classmethod
     def __insecure_hash__(cls, txt: str):
         raw_hash = hashlib.blake2b(txt.encode(), digest_size=32).digest()
