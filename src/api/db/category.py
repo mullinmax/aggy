@@ -1,5 +1,5 @@
 from pydantic import StringConstraints
-from typing import List
+from typing import List, Optional
 from typing_extensions import Annotated
 
 from .item_collection import ItemCollection
@@ -80,7 +80,7 @@ class Category(ItemCollection):
             r.delete(self.key)
 
     @classmethod
-    def read(cls, user_hash, name_hash) -> "Category":
+    def read(cls, user_hash, name_hash) -> Optional["Category"]:
         key = f"USER:{user_hash}:CATEGORY:{name_hash}"
         with cls.db_con() as r:
             category_data = r.hgetall(key)
@@ -89,8 +89,8 @@ class Category(ItemCollection):
             category_data["name_hash"] = name_hash
             category_data["user_hash"] = user_hash
             return Category(**category_data)
-        else:
-            raise Exception(f"Category does not exist: {key}")
+
+        return None
 
     @classmethod
     def read_all(cls, user_hash) -> List["Category"]:

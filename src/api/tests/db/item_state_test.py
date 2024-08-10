@@ -49,7 +49,7 @@ def test_read_item_state(existing_item_state):
 
 
 @pytest.mark.parametrize(
-    "score,mark_as_read,expected_score,expected_mark_as_read",
+    "score,is_read,expected_score,expected_is_read",
     [
         (1, False, 1, False),
         (None, False, 0.5, False),
@@ -57,7 +57,7 @@ def test_read_item_state(existing_item_state):
     ],
 )
 def test_set_state(
-    existing_item_state, score, mark_as_read, expected_score, expected_mark_as_read
+    existing_item_state, score, is_read, expected_score, expected_is_read
 ):
     assert existing_item_state.is_read, "ItemState is_read should be True"
     assert existing_item_state.score == 0.5, "ItemState score should be 0.5"
@@ -67,7 +67,7 @@ def test_set_state(
         category_hash=existing_item_state.category_hash,
         item_url_hash=existing_item_state.item_url_hash,
         score=score,
-        mark_as_read=mark_as_read,
+        is_read=is_read,
     )
 
     read_item_state = ItemState.read(
@@ -76,9 +76,7 @@ def test_set_state(
         item_url_hash=existing_item_state.item_url_hash,
     )
 
-    assert (
-        read_item_state.is_read == expected_mark_as_read
-    ), "ItemState is_read should match"
+    assert read_item_state.is_read == expected_is_read, "ItemState is_read should match"
     assert read_item_state.score == expected_score, "ItemState score should match"
     if score is not None:
         assert (

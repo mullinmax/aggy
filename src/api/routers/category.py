@@ -14,11 +14,9 @@ category_router = APIRouter()
 
 
 def get_category_by_name_hash(user_hash: str, name_hash: str) -> Category:
-    cat = None
-    try:
-        cat = Category.read(user_hash=user_hash, name_hash=name_hash)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Category not found")
+    cat = Category.read(user_hash=user_hash, name_hash=name_hash)
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Category not found")
 
     return cat
 
@@ -46,8 +44,11 @@ def delete_category(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> AcknowledgeResponse:
     cat = get_category_by_name_hash(user.name_hash, category_name_hash)
-    cat.delete()
-    return AcknowledgeResponse()
+    if cat.exists():
+        cat.delete()
+        return AcknowledgeResponse()
+
+    raise HTTPException(status_code=404, detail="Category not found")
 
 
 # get a category
@@ -56,6 +57,10 @@ def get_category(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> CategoryResponse:
     cat = get_category_by_name_hash(user.name_hash, category_name_hash)
+
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+
     return CategoryResponse.from_db_model(cat)
 
 
@@ -67,7 +72,7 @@ def get_category(
 )
 def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse]:
     # TODO add list of feeds in each category in the response
-    return [CategoryResponse.from_db_model(c) for c in user.categories]
+    return [CategoryResponse.from_db_model(c) for c in user.categories if c is not None]
 
 
 # get all feeds in a category
@@ -80,6 +85,10 @@ def feeds(
     category_name_hash: str, user: User = Depends(authenticate)
 ) -> List[FeedRouteModel]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
+
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+
     return [FeedRouteModel.from_db_model(f) for f in cat.feeds]
 
 
@@ -98,6 +107,10 @@ def get_category_items(
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
+
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+
     return [
         ItemResponse.from_db_model(i) for i in cat.query_items(start=start, end=end)
     ]

@@ -15,11 +15,11 @@ def set_state(
     category_hash: str,
     item_url_hash: str,
     score: Optional[confloat(ge=-1, le=1)] = None,
-    mark_as_read: bool = True,
+    is_read: bool = True,
     user: User = Depends(authenticate),
 ) -> None:
     # check category exists
-    category = Category.read(user=user.name_hash, name_hash=category_hash)
+    category = Category.read(user_hash=user.name_hash, name_hash=category_hash)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
@@ -28,7 +28,7 @@ def set_state(
         category_hash=category_hash,
         item_url_hash=item_url_hash,
         score=score,
-        mark_as_read=mark_as_read,
+        is_read=is_read,
     )
 
 
@@ -50,7 +50,7 @@ def get_state(
     return item_state
 
 
-# TODO downvote reasons:
+# TODO downvote/hidden reasons:
 # Boring: 😐
 # Repetitive: 🔁
 # NSFW: 🍑

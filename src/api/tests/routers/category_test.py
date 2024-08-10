@@ -52,7 +52,7 @@ def test_delete_nonexistent_category(client, existing_user, token):
 
     response = client.delete(**args)
 
-    assert response.status_code == 500
+    assert response.status_code == 404
     assert response.json() == {"detail": "Category not found"}
 
 
@@ -81,7 +81,7 @@ def test_get_nonexistent_category(client, existing_user, token):
 
     response = client.get(**args)
 
-    assert response.status_code == 500
+    assert response.status_code == 404
     assert response.json() == {"detail": "Category not found"}
 
 
