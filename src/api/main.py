@@ -53,7 +53,7 @@ async def app_lifespan(app: FastAPI):
 
 
 # create app with lifespan context manager
-app = FastAPI(lifespan=app_lifespan)
+app = FastAPI(lifespan=app_lifespan, version=config.get("BUILD_VERSION"))
 
 # routers
 app.include_router(admin_router, tags=["Admin"])
