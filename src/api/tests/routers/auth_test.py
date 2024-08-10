@@ -177,3 +177,24 @@ def test_token_check_deleted_user_weird_read(client, existing_user):
 
         response = client.get("/auth/token_check", headers=headers)
         assert response.status_code == 404
+
+
+def test_form_login(client, unique_user):
+    response = client.post(
+        "/auth/signup", json={"username": unique_user.name, "password": "password"}
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        "/auth/form_login",
+        data={"username": unique_user.name, "password": "password"},
+    )
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+    assert len(response.json()["access_token"]) > 0
+    assert "token_type" in response.json()
+
+    headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    response = client.get("/auth/token_check", headers=headers)
+    assert response.status_code == 200
