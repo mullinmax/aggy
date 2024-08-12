@@ -27,8 +27,6 @@
 
 ```mermaid
 flowchart TB
-    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
-
     subgraph Legend
         direction LR
         set{{set}}
@@ -39,6 +37,8 @@ flowchart TB
         hash --linked by key-->string
         hash -.linked implicitly.-> sorted_set
     end
+
+    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
 
     subgraph User Space ALL keys prefixed with USER:username_hash:
         user>USER:username_hash]
@@ -67,15 +67,14 @@ flowchart TB
         feed --name--> feed_name
         feed -.-> items
 
-
+        category -.-> item_state[CATEGORY:hash:ITEM:hash:ITEM_STATE]
+        item -.-> item_state
     end
 
     items-->item
     category_items -.-> item
-    item[ITEM:url_hash]
+    item[ITEM:url_hash] --asd--> image_key
     image_key-->image[IMAGE:hash]
-    schema_version[SCHEMA_VERSION]
     users{{USERS}} --> user
-
+    feed_templates{{FEED_TEMPLATES}} --> feed_template[FEED_TEMPLATE:hash]
 ```
-#TODO update this to include feed templates

@@ -111,6 +111,9 @@ class FeedTemplate(BlinderBaseModel):
         with self.db_con() as r:
             r.set(self.key, self.json)
 
+            # add to list of all templates
+            r.sadd("FEED_TEMPLATES", self.name_hash)
+
     @classmethod
     def read(cls, name_hash: str) -> Optional["FeedTemplate"]:
         with cls.db_con() as r:
@@ -123,9 +126,9 @@ class FeedTemplate(BlinderBaseModel):
     def read_all(cls) -> List["FeedTemplate"]:
         templates = []
         with cls.db_con() as r:
-            keys = r.keys("FEED_TEMPLATE:*")
-            for key in keys:
-                template = cls.read(key.split(":")[1])
+            template_hashes = r.smembers("FEED_TEMPLATES")
+            for template_hash in template_hashes:
+                template = cls.read(template_hash)
                 if template:
                     templates.append(template)
         return templates
