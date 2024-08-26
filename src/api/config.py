@@ -6,6 +6,7 @@ DEFAULT_CONFIG = {
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
     "RSS_BRIDGE_PORT": 80,
+    "BUILD_VERSION": "0.0.0-beta",
 }
 
 
