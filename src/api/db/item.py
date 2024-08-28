@@ -20,7 +20,7 @@ class ItemBase(BlinderBaseModel):
     author: Optional[str] = None
     date_published: Optional[datetime] = None
     image_url: Optional[str] = None
-    embeddinds: Optional[Dict[List[float]]] = None
+    embeddinds: Optional[Dict[str, List[float]]] = None
 
     @property
     def key(self):
