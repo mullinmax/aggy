@@ -48,3 +48,6 @@ def feed_ingestion_job() -> None:
     next_process_time = scheduled_time + FEED_CHECK_INTERVAL_TIMEDELTA
     next_process_time = int(next_process_time.timestamp())
     r.zadd(FEEDS_TO_INGEST_KEY, mapping={feed_key: next_process_time}, lt=True)
+
+
+# TODO job to make sure embeddings model is downloaded

@@ -2,13 +2,16 @@ from pydantic import field_validator, StringConstraints, HttpUrl, model_validato
 from datetime import datetime
 import dateparser
 from bleach import clean
-from typing import Optional, List
+from typing import Optional, List, Dict
 import html
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
+from ollama import Client
+from httpx import BasicAuth
 
 from .base import BlinderBaseModel
 from typing_extensions import Annotated
+from config import config, ConfigError
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -17,6 +20,7 @@ class ItemBase(BlinderBaseModel):
     author: Optional[str] = None
     date_published: Optional[datetime] = None
     image_url: Optional[str] = None
+    embeddinds: Optional[Dict[List[float]]] = None
 
     @property
     def key(self):
@@ -121,6 +125,45 @@ class ItemBase(BlinderBaseModel):
                 str(html.unescape(v)), tags=[], attributes={}, strip=True
             ).strip()
         return v
+
+    def __str__(self):
+        non_printable = ["url_hash", "key", "embeddings"]
+        # all fields besides url_hash, key, and item_embeddings
+        print_attrs = [
+            f"{k.upper()} {getattr(self, k)}"
+            for k in self.__fields__.keys()
+            if k not in non_printable
+        ]
+        return "\n".join(print_attrs)
+
+    def add_embedding(self, model_name: str) -> None:
+        # check if config has embedding server
+        try:
+            ollama_host = config.get("OLLAMA_HOST")
+            ollama_port = config.get("OLLAMA_PORT")
+            ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
+        except ConfigError:
+            return  # embedding server not configured
+
+        # Initialize Ollama Client
+        ollama_args = {
+            "host": ollama_host,
+            "port": ollama_port,
+        }
+
+        auth_user = config.get("OLLAMA_USER", None)
+        auth_password = config.get("OLLAMA_PASSWORD", None)
+
+        if auth_user and auth_password:
+            ollama_args["auth"] = BasicAuth(username=auth_user, password=auth_password)
+
+        ollama = Client(**ollama_args)
+
+        # get the embedding
+        embedding = ollama.embeddings(model=ollama_embedding_model, prompt=str(self))
+
+        # add the embedding to self
+        self.embeddinds[ollama_embedding_model] = embedding
 
 
 class ItemStrict(ItemBase):

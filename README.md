@@ -48,7 +48,8 @@ flowchart TB
 
         categories([CATEGORIES])
         category>CATEGORY:uuid]
-        category_model[category model]
+        category_embeddings_model[category embeddings model]
+        category_name[category name]
         category_feeds{{CATEGORY:uuid:FEEDS}}
         category_items([CATEGORY:uuid:ITEMS])
         feed>CATEGORY:uuid:FEED:name_hash]
@@ -59,7 +60,8 @@ flowchart TB
 
         categories --> category
 
-        category --model--> category_model
+        category --embeddings model--> category_embeddings_model
+        category --name--> category_name
         category -.-> category_items
         category -.-> category_feeds
         category_feeds --> feed
@@ -67,14 +69,21 @@ flowchart TB
         feed --name--> feed_name
         feed -.-> items
 
-        category -.-> item_state[CATEGORY:hash:ITEM:hash:ITEM_STATE]
-        item -.-> item_state
+        items -.-> item_state[CATEGORY:hash:ITEM:hash:ITEM_STATE]
+
     end
 
-    items-->item
+    item[ITEM:url_hash]
+    item_embeddings>ITEM:url_hash:EMBEDDINGS]
+    item_embedding[item embedding]
+
+    items-.->item
+    item -.-> item_state
     category_items -.-> item
-    item[ITEM:url_hash] --asd--> image_key
-    image_key-->image[IMAGE:hash]
+    category_items -.-> item_embeddings
+    item_embeddings --model_name--> item_embedding
+    item -.-> item_embeddings
+    category_embeddings_model -.-> item_embedding
     users{{USERS}} --> user
     feed_templates{{FEED_TEMPLATES}} --> feed_template[FEED_TEMPLATE:hash]
 ```
