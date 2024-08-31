@@ -12,7 +12,7 @@ from routers.category import category_router
 from routers.feed_template import feed_template_router
 from routers.feed import feed_router
 from routers.item import item_router
-from ingest.rss_bridge import rss_bridge_get_templates_job
+from bridge.jobs import rss_bridge_get_templates_job
 from ingest.jobs import (
     feed_ingestion_scheduling_job,
     feed_ingestion_job,
