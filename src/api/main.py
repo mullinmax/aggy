@@ -12,6 +12,7 @@ from routers.category import category_router
 from routers.feed_template import feed_template_router
 from routers.feed import feed_router
 from routers.item import item_router
+from ingest.rss_bridge import rss_bridge_get_templates_job
 from ingest.jobs import (
     feed_ingestion_scheduling_job,
     feed_ingestion_job,
@@ -44,15 +45,15 @@ async def app_lifespan(app: FastAPI):
         next_run_time=datetime.now(),
     )
 
-    # # add scheduler job for downloading the rss bridge templates every 12 hours
-    # scheduler.add_job(
-    #     func=rss_bridge_get_templates_job,
-    #     trigger="interval",
-    #     seconds=60 * 60 * 12,
-    #     id="rss_bridge_get_templates_job",
-    #     replace_existing=False,
-    #     next_run_time=datetime.now()
-    # )
+    # add scheduler job for downloading the rss bridge templates every 12 hours
+    scheduler.add_job(
+        func=rss_bridge_get_templates_job,
+        trigger="interval",
+        seconds=60 * 60 * 12,
+        id="rss_bridge_get_templates_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+    )
 
     # add scheduler job for downloading the embedding model once at start up
     scheduler.add_job(
