@@ -1,11 +1,13 @@
-from constants import FEEDS_TO_INGEST_KEY, FEED_CHECK_INTERVAL_TIMEDELTA
-from db.base import get_db_con
-from db.feed import Feed
-from ingest.feed import ingest_feed
 import logging
 from datetime import datetime, timedelta
 
+from constants import FEEDS_TO_INGEST_KEY, FEED_READ_INTERVAL_TIMEDELTA
+from db.base import get_db_con
+from db.feed import Feed
+from ingest.feed import ingest_feed
 from db.user import User
+from utils import get_ollama_connection
+from config import config
 
 
 def feed_ingestion_scheduling_job() -> None:
@@ -45,9 +47,19 @@ def feed_ingestion_job() -> None:
         return
 
     # reschedule the feed for next go-round
-    next_process_time = scheduled_time + FEED_CHECK_INTERVAL_TIMEDELTA
+    next_process_time = scheduled_time + FEED_READ_INTERVAL_TIMEDELTA
     next_process_time = int(next_process_time.timestamp())
     r.zadd(FEEDS_TO_INGEST_KEY, mapping={feed_key: next_process_time}, lt=True)
 
 
-# TODO job to make sure embeddings model is downloaded
+def download_embedding_model_job() -> None:
+    embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
+
+    if embedding_model is None:
+        return
+
+    ollama = get_ollama_connection()
+
+    models = ollama.list()
+    if embedding_model not in models:
+        ollama.pull(embedding_model)

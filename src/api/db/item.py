@@ -6,12 +6,11 @@ from typing import Optional, List, Dict
 import html
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
-from ollama import Client
-from httpx import BasicAuth
 
+from config import config
 from .base import BlinderBaseModel
 from typing_extensions import Annotated
-from config import config, ConfigError
+from utils import get_ollama_connection
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -137,29 +136,11 @@ class ItemBase(BlinderBaseModel):
         return "\n".join(print_attrs)
 
     def add_embedding(self, model_name: str) -> None:
-        # check if config has embedding server
-        try:
-            ollama_host = config.get("OLLAMA_HOST")
-            ollama_port = config.get("OLLAMA_PORT")
-            ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
-        except ConfigError:
-            return  # embedding server not configured
-
-        # Initialize Ollama Client
-        ollama_args = {
-            "host": ollama_host,
-            "port": ollama_port,
-        }
-
-        auth_user = config.get("OLLAMA_USER", None)
-        auth_password = config.get("OLLAMA_PASSWORD", None)
-
-        if auth_user and auth_password:
-            ollama_args["auth"] = BasicAuth(username=auth_user, password=auth_password)
-
-        ollama = Client(**ollama_args)
+        # TODO write tests for this
+        ollama = get_ollama_connection()
 
         # get the embedding
+        ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
         embedding = ollama.embeddings(model=ollama_embedding_model, prompt=str(self))
 
         # add the embedding to self

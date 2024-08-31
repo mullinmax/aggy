@@ -1,7 +1,8 @@
 import os
 
 KNOWN_CONFIG_VALUES = [
-    "FEED_CHECK_INTERVAL_MINUTES",
+    "FEED_READ_INTERVAL_MINUTES",
+    "FEED_INGESTION_RUN_INTERVAL_SECONDS",
     "PYTEST_RUNTIME_TYPE",
     "JWT_ALGORITHM",
     "JWT_SECRET",
@@ -20,7 +21,8 @@ KNOWN_CONFIG_VALUES = [
 ]
 
 DEFAULT_CONFIG = {
-    "FEED_CHECK_INTERVAL_MINUTES": 30,
+    "FEED_READ_INTERVAL_MINUTES": 30,
+    "FEED_INGESTION_RUN_INTERVAL_SECONDS": 15,
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
     "OLLAMA_PORT": 11434,
@@ -58,7 +60,7 @@ class Config:
                 self.config[key] = env_value
             elif key in DEFAULT_CONFIG:
                 self.config[key] = DEFAULT_CONFIG[key]
-            elif default:
+            elif default is not None:
                 return default
             else:
                 raise ConfigError(

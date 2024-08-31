@@ -45,6 +45,7 @@ services:
       - EXTRACT_PORT=3000
       - OLLAMA_HOST=dev-blinder-ollama
       - OLLAMA_PORT=11434
+      - OLLAMA_EMBEDDING_MODEL=mxbai-embed-large:latest
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
     labels:
