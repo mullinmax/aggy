@@ -59,7 +59,7 @@ def test_create_rss_url(existing_feed_template):
 
     assert (
         rss_url
-        == "http://dev-blinder-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
+        == "http://dev-aggy-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
 
 
@@ -108,7 +108,7 @@ def test_create_rss_url_use_default_parameters(unique_feed_template):
     rss_url = unique_feed_template.create_rss_url()
     assert (
         rss_url
-        == "http://dev-blinder-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=default_value"
+        == "http://dev-aggy-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=default_value"
     )
 
 

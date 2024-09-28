@@ -1,10 +1,10 @@
 from typing import List, Union
 
-from .base import BlinderBaseModel
+from .base import AggyBaseModel
 from .item import ItemStrict
 
 
-class ItemCollection(BlinderBaseModel):
+class ItemCollection(AggyBaseModel):
     @property
     def items_key(self) -> str:
         raise NotImplementedError

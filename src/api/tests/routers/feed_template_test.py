@@ -49,7 +49,7 @@ def test_create_feed_from_template(
     assert res_data["feed_name_hash"] == new_feed.name_hash
     assert (
         res_data["feed_url"]
-        == "http://dev-blinder-rss-bridge/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
+        == "http://dev-aggy-rss-bridge/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
     assert str(new_feed.url) == res_data["feed_url"]
     assert res_data["feed_category"] == existing_category.name_hash

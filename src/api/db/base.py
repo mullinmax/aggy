@@ -18,7 +18,7 @@ def get_db_con():
     )
 
 
-class BlinderBaseModel(BaseModel):
+class AggyBaseModel(BaseModel):
     @property
     def key(self):
         raise NotImplementedError()

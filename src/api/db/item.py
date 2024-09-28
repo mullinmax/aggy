@@ -8,13 +8,13 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from config import config
-from .base import BlinderBaseModel
+from .base import AggyBaseModel
 from typing_extensions import Annotated
 from utils import get_ollama_connection
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
-class ItemBase(BlinderBaseModel):
+class ItemBase(AggyBaseModel):
     url: HttpUrl
     author: Optional[str] = None
     date_published: Optional[datetime] = None

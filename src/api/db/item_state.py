@@ -4,7 +4,7 @@ from pydantic import confloat
 from .item import ItemLoose
 from .user import User
 from .category import Category
-from .base import BlinderBaseModel
+from .base import AggyBaseModel
 
 # class ReservedVoteReasons(Enum):
 # leaving unimplemented for now, should allow arbitrary user-defined reasons (like tags)
@@ -21,7 +21,7 @@ from .base import BlinderBaseModel
 #   PROMOTIONAL = 11 # 📢
 
 
-class ItemState(BlinderBaseModel):
+class ItemState(AggyBaseModel):
     item_url_hash: str
     user_hash: str
     category_hash: str

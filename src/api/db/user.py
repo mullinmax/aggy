@@ -1,10 +1,10 @@
 import bcrypt
 
-from .base import BlinderBaseModel
+from .base import AggyBaseModel
 from .category import Category
 
 
-class User(BlinderBaseModel):
+class User(AggyBaseModel):
     name: str
     hashed_password: str = None
 
