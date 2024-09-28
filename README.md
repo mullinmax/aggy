@@ -1,4 +1,4 @@
-# aggy
+# Aggy 🐊
 
 
 ## TODO
