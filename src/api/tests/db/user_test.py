@@ -11,7 +11,7 @@ def test_create_user(unique_user):
         unique_user.create()
         assert unique_user.exists()
         assert len(r.smembers("USERS")) == 1
-        assert r.smembers("USERS") == {unique_user.name_hash}
+        assert unique_user.name_hash in r.smembers("USERS")
 
 
 def test_read_user(existing_user):

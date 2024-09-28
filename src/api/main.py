@@ -45,7 +45,7 @@ async def app_lifespan(app: FastAPI):
         next_run_time=datetime.now(),
     )
 
-    # add scheduler job for downloading the rss bridge templates every 12 hours
+    # add scheduler job for parsing the rss bridge templates every 12 hours
     scheduler.add_job(
         func=rss_bridge_get_templates_job,
         trigger="interval",
