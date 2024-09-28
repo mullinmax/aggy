@@ -31,7 +31,7 @@ class ItemState(BlinderBaseModel):
 
     @property
     def key(self) -> str:
-        return f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:ITEM_VOTE:{self.item_url_hash}"
+        return f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:ITEM:{self.item_url_hash}:ITEM_STATE"
 
     def create(self) -> None:
         with self.db_con() as r:
@@ -64,7 +64,7 @@ class ItemState(BlinderBaseModel):
     def read(cls, user_hash, category_hash, item_url_hash) -> "ItemState":
         with cls.db_con() as r:
             item_vote_json = r.get(
-                f"USER:{user_hash}:CATEGORY:{category_hash}:ITEM_VOTE:{item_url_hash}"
+                f"USER:{user_hash}:CATEGORY:{category_hash}:ITEM:{item_url_hash}:ITEM_STATE"
             )
 
         if item_vote_json:

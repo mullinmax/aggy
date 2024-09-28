@@ -27,8 +27,6 @@
 
 ```mermaid
 flowchart TB
-    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
-
     subgraph Legend
         direction LR
         set{{set}}
@@ -40,6 +38,8 @@ flowchart TB
         hash -.linked implicitly.-> sorted_set
     end
 
+    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
+
     subgraph User Space ALL keys prefixed with USER:username_hash:
         user>USER:username_hash]
         user--password--> password_hash[password hash]
@@ -48,7 +48,8 @@ flowchart TB
 
         categories([CATEGORIES])
         category>CATEGORY:uuid]
-        category_model[category model]
+        category_embeddings_model[category embeddings model]
+        category_name[category name]
         category_feeds{{CATEGORY:uuid:FEEDS}}
         category_items([CATEGORY:uuid:ITEMS])
         feed>CATEGORY:uuid:FEED:name_hash]
@@ -59,7 +60,8 @@ flowchart TB
 
         categories --> category
 
-        category --model--> category_model
+        category --embeddings model--> category_embeddings_model
+        category --name--> category_name
         category -.-> category_items
         category -.-> category_feeds
         category_feeds --> feed
@@ -67,15 +69,21 @@ flowchart TB
         feed --name--> feed_name
         feed -.-> items
 
+        items -.-> item_state[CATEGORY:hash:ITEM:hash:ITEM_STATE]
 
     end
 
-    items-->item
-    category_items -.-> item
     item[ITEM:url_hash]
-    image_key-->image[IMAGE:hash]
-    schema_version[SCHEMA_VERSION]
-    users{{USERS}} --> user
+    item_embeddings>ITEM:url_hash:EMBEDDINGS]
+    item_embedding[item embedding]
 
+    items-.->item
+    item -.-> item_state
+    category_items -.-> item
+    category_items -.-> item_embeddings
+    item_embeddings --model_name--> item_embedding
+    item -.-> item_embeddings
+    category_embeddings_model -.-> item_embedding
+    users{{USERS}} --> user
+    feed_templates{{FEED_TEMPLATES}} --> feed_template[FEED_TEMPLATE:hash]
 ```
-#TODO update this to include feed templates

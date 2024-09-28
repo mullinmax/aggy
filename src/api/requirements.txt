@@ -6,6 +6,7 @@ dateparser
 fastapi
 feedparser
 httpx
+ollama
 pre-commit
 PyJWT
 pytest

@@ -1,11 +1,33 @@
-# config_manager.py
 import os
 
+KNOWN_CONFIG_VALUES = [
+    "FEED_READ_INTERVAL_MINUTES",
+    "FEED_INGESTION_RUN_INTERVAL_SECONDS",
+    "PYTEST_RUNTIME_TYPE",
+    "JWT_ALGORITHM",
+    "JWT_SECRET",
+    "DB_HOST",
+    "DB_PORT",
+    "EXTRACT_HOST",
+    "EXTRACT_PORT",
+    "OLLAMA_HOST",
+    "OLLAMA_PORT",
+    "OLLAMA_USER",
+    "OLLAMA_PASSWORD",
+    "OLLAMA_EMBEDDING_MODEL",
+    "RSS_BRIDGE_HOST",
+    "RSS_BRIDGE_PORT",
+    "BUILD_VERSION",
+]
+
 DEFAULT_CONFIG = {
-    "FEED_CHECK_INTERVAL_MINUTES": 30,
+    "FEED_READ_INTERVAL_MINUTES": 30,
+    "FEED_INGESTION_RUN_INTERVAL_SECONDS": 15,
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
+    "OLLAMA_PORT": 11434,
     "RSS_BRIDGE_PORT": 80,
+    "BUILD_VERSION": "0.0.0-beta",
 }
 
 
@@ -27,18 +49,24 @@ class Config:
         self.config = {}
 
     def get(self, key, default=None):
+        if key not in KNOWN_CONFIG_VALUES:
+            raise ConfigError(
+                f"Tried to get unknown configuration key: '{key}'. Are you sure this is correct?"
+            )
+
         if key not in self.config:
             env_value = os.getenv(key)
             if env_value is not None:
                 self.config[key] = env_value
             elif key in DEFAULT_CONFIG:
                 self.config[key] = DEFAULT_CONFIG[key]
-            elif default:
+            elif default is not None:
                 return default
             else:
                 raise ConfigError(
-                    f"Configuration key '{key}' is not set and no default value provided."
+                    f"Tried to get unset known configuration key: '{key}' with no default value"
                 )
+
         return self.config[key]
 
     def set(self, key, value):

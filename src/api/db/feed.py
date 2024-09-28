@@ -2,7 +2,7 @@ from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
 from datetime import datetime
 
-from constants import FEEDS_TO_INGEST_KEY, FEED_CHECK_INTERVAL_TIMEDELTA
+from constants import FEEDS_TO_INGEST_KEY, FEED_READ_INTERVAL_TIMEDELTA
 from .item_collection import ItemCollection
 
 
@@ -46,7 +46,7 @@ class Feed(ItemCollection):
         if now:
             score = int(datetime.now().timestamp())
         else:
-            score = datetime.now() + FEED_CHECK_INTERVAL_TIMEDELTA
+            score = datetime.now() + FEED_READ_INTERVAL_TIMEDELTA
             score = int((score).timestamp())
 
         with self.db_con() as r:

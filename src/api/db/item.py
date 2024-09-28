@@ -2,13 +2,15 @@ from pydantic import field_validator, StringConstraints, HttpUrl, model_validato
 from datetime import datetime
 import dateparser
 from bleach import clean
-from typing import Optional, List
+from typing import Optional, List, Dict
 import html
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
+from config import config
 from .base import BlinderBaseModel
 from typing_extensions import Annotated
+from utils import get_ollama_connection
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -17,6 +19,7 @@ class ItemBase(BlinderBaseModel):
     author: Optional[str] = None
     date_published: Optional[datetime] = None
     image_url: Optional[str] = None
+    embeddinds: Optional[Dict[str, List[float]]] = None
 
     @property
     def key(self):
@@ -121,6 +124,27 @@ class ItemBase(BlinderBaseModel):
                 str(html.unescape(v)), tags=[], attributes={}, strip=True
             ).strip()
         return v
+
+    def __str__(self):
+        non_printable = ["url_hash", "key", "embeddings"]
+        # all fields besides url_hash, key, and item_embeddings
+        print_attrs = [
+            f"{k.upper()} {getattr(self, k)}"
+            for k in self.__fields__.keys()
+            if k not in non_printable
+        ]
+        return "\n".join(print_attrs)
+
+    def add_embedding(self, model_name: str) -> None:
+        # TODO write tests for this
+        ollama = get_ollama_connection()
+
+        # get the embedding
+        ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
+        embedding = ollama.embeddings(model=ollama_embedding_model, prompt=str(self))
+
+        # add the embedding to self
+        self.embeddinds[ollama_embedding_model] = embedding
 
 
 class ItemStrict(ItemBase):

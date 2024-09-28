@@ -37,6 +37,11 @@ def ingest_feed(feed: Feed) -> None:
             # TODO make sure we don't attempt this url over and over
 
         try:
+            final_item.add_embedding()
+        except Exception as e:
+            logging.error(f"Error adding embedding to item: {e}")
+
+        try:
             final_item.create()
         except Exception as e:
             logging.error(f"Error creating item: {e}")
