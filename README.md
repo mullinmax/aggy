@@ -1,55 +1,57 @@
 # Aggy 🐊
+**Your personal content curator.** A self-hostable, personalized content aggregator where **your preferences** are what matter most. Imagine your own private Reddit, but without the clutter, focused solely on what you care about.
 
-A self-hostable personalized content aggregator. It's like your own private reddit instance where the only vote that matters is yours.
+## Why Aggy?
 
-## Why use Aggy?
+Let’s say you’re fascinated by alligators. You hop between platforms to follow alligator-related creators and subreddits. Every once in a while, you see a post about crocodiles, Argh! Aggy solves this problem by bringing **all your content into one place** and sorting it based on how relevant it is to you. When you're in the mood for alligator facts, you won’t have to sift through crocodile content—Aggy does the filtering for you.
 
-Say you're into electric vehicles, but not general cars. You browse /r/mechanics but there's lots of popular posts in the subreddit that don't interest you. So you hop over to youtube and find a few videos you like but your favorite channels are posting lots of different content that isn't always your taste. Aggy is designed to solve this problem; it brings all your content into one place sorted by relevance to you. That means when you want EV-related content; you aren't sorting through the junk to find what you want.
+Aggy works for any type of content. Whether it’s specific animals, hobbies, news, or entertainment, Aggy curates your feed to match **your interests**.
 
 ## How does Aggy work?
 
-#### How does Aggy get all my content in one place?
+### Bringing all your content into one place
 
-Aggy curently supports:
-- RSS feeds with templates built on top of [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge)
+Aggy currently supports:
 
-Aggy will soon support:
-- Email (sign up for news letters with an Aggy email and skip the spam)
-- Podcasts (currently not searchable and only via RSS feeds)
+- **RSS feeds** via templates powered by [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge)
 
+Upcoming integrations:
 
-When Aggy gets a new item in a feed it builds out some basic metadata and decides how likely it is that you will want to see it.
+- **Email newsletters** (Sign up for your favorite newsletters using a custom Aggy email and filter out the noise)
+- **Podcasts** (Currently available only via RSS; direct search support is on the way)
 
-#### How does Aggy know what I like?
+When Aggy finds new content, it analyzes metadata and determines how relevant it is based on your past interactions, making sure the most meaningful content rises to the top.
 
-Aggy leverages [embeddings](https://stackoverflow.blog/2023/11/09/an-intuitive-introduction-to-text-embeddings/) to understand your content semantically. As you browse your content it learns what you like based on your clicks, likes, filters, and feedback.
+### Understanding your preferences
 
+Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide feedback, Aggy fine-tunes your feed so you get more of what you love without relying on generic algorithms or trends.
 
 ## Features
 
-### Available
+### Available now:
 
-- RSS feed support + predefined RSS feed templates
-- Embedding generation for text
+- **RSS feed support** with predefined templates for faster setup
+- **Embedding generation** for text to improve content relevance
 
-### Planned
+### In the works:
 
-- Automatically re-map URLs (i.e. youtube to [invidious](https://invidious.io/))
-- Embedding Generation for images
-- Train models on user feedback
-- Duplicate post recognition (detect when very similar content is posted in seperate places and take just the best)
-- Alternate sort orders (Best, Worst, Newest, Oldest)
-- Reccomendation report (Why am I seeing this?)
-- Semantic filters (Don't show me political content)
-- Blur or block NSFW images/content
+- **URL remapping** (e.g., YouTube to [Invidious](https://invidious.io/))
+- **Embedding generation for images**
+- **User feedback-based model training** (Aggy gets smarter with your input)
+- **Duplicate post detection** (Recognizes similar content across different sources and only shows the best)
+- **Alternate sorting options** (Best, Worst, Newest, Oldest)
+- **Recommendation transparency** (Learn why a piece of content was recommended to you)
+- **Semantic filters** (E.g., hide political content)
+- **NSFW content controls** (Blur or block inappropriate images)
 
 ## Contributing
 
-We don't have a contributing guide yet, maybe you could help us with that?
+We’re still working on a contribution guide, but if you have ideas, we’d love your help!
 
 ## License
 
-[./LICENSE](LICENSE (Apache 2.0))
+[Apache 2.0](./LICENSE)
+
 
 
 
