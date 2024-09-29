@@ -1,12 +1,15 @@
 {
-    "compilerOptions": {
-      "target": "es5",
-      "allowJs": true,
-      "jsx": "react",
-      "moduleResolution": "node",
-      "outDir": "./dist",
-      "strict": true,
-      "esModuleInterop": true
-    },
-    "include": ["src/**/*"]
-  }
+  "compilerOptions": {
+    "target": "es5",
+    "allowJs": true,
+    "jsx": "react",
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "typeRoots": ["./src/@types", "./node_modules/@types"]
+  },
+  "include": ["src/**/*", "src/custom.d.ts"]
+}

@@ -1,0 +1,23 @@
+.Login {
+  &-Button {
+    width: 5rem;
+    height: 2rem;
+    border: none;
+    background-color: rgb(52, 37, 119);
+    color: white;
+    font-weight: 600;
+    border-radius: 2rem;
+    cursor: pointer;
+    transition: all 0.3s;
+    &:hover,
+    &:focus {
+      color: rgb(52, 37, 119);
+      background-color: transparent;
+      border: 2px rgb(52, 37, 119) solid;
+      transition: all 0.3s;
+    }
+  }
+  .Sign-Up-Button {
+    width: 10rem;
+  }
+}

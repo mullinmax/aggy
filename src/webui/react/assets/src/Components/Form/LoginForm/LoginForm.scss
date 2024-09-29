@@ -1,0 +1,36 @@
+.Login-Form {
+  &-Container {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 2rem;
+  }
+  &-Input {
+    margin-bottom: 1.5rem;
+    // border-radius: 3px;
+    font-size: 1.5rem;
+    padding: 0.5rem;
+  }
+  &-Label {
+    display: none;
+    // margin-bottom: 1rem;
+  }
+  &-Submit {
+    width: 5rem;
+    height: 2rem;
+    border: none;
+    background-color: black;
+    color: white;
+    font-weight: 600;
+    border-radius: 2rem;
+    cursor: pointer;
+    transition: all 0.3s;
+    &:hover,
+    &:focus {
+      color: black;
+      background-color: transparent;
+      border: 2px black solid;
+      transition: all 0.3s;
+    }
+  }
+}

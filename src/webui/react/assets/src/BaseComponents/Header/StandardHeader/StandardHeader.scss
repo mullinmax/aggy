@@ -1,0 +1,17 @@
+.Header {
+  &-Container {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid black;
+  }
+  &-Logo {
+    svg {
+      width: 4rem;
+      height: 4rem;
+    }
+  }
+}
