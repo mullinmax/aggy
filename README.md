@@ -50,7 +50,7 @@ We’re still working on a contribution guide, but if you have ideas, we’d lov
 
 ## License
 
-[Apache 2.0](./LICENSE)
+[LICENSE (Apache 2.0)](./LICENSE)
 
 
 
