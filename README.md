@@ -49,7 +49,7 @@ We don't have a contributing guide yet, maybe you could help us with that?
 
 ## License
 
-[./LICENSE](LICENSE (Apache 2.0))
+[LICENSE (Apache 2.0)](./LICENSE)
 
 
 
