@@ -43,6 +43,15 @@ Aggy leverages [embeddings](https://stackoverflow.blog/2023/11/09/an-intuitive-i
 - Semantic filters (Don't show me political content)
 - Blur or block NSFW images/content
 
+## Contributing
+
+We don't have a contributing guide yet, maybe you could help us with that?
+
+## License
+
+[./LICENSE](LICENSE (Apache 2.0))
+
+
 
 
 
