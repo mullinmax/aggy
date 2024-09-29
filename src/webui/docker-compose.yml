@@ -4,13 +4,13 @@ networks:
     name: "traefik_default"
 
 services:
-  dev-blinder-webui:
+  dev-aggy-webui:
     build:
       context: .
       dockerfile: dockerfile
     environment:
-      - BLINDER_API_URL=http://codehostapi.doze.dev
+      - AGGY_API_URL=http://codehostapi.doze.dev
     labels:
-      - "traefik.http.routers.blinderdevwebui.rule=Host(`devblinder.doze.dev`)"
-      - "traefik.http.routers.blinderdevwebui.service=blinderdevwebui"
-      - "traefik.http.services.blinderdevwebui.loadbalancer.server.port=80"
+      - "traefik.http.routers.aggydevwebui.rule=Host(`devaggy.doze.dev`)"
+      - "traefik.http.routers.aggydevwebui.service=aggydevwebui"
+      - "traefik.http.services.aggydevwebui.loadbalancer.server.port=80"

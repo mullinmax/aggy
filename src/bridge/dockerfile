@@ -1,5 +1,5 @@
 # Dockerfile for RSS-Bridge
-FROM rssbridge/rss-bridge:latest as blinder-bridge
+FROM rssbridge/rss-bridge:latest as aggy-bridge
 
 
 # remove all lines with enabled_bridges[] =

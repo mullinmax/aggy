@@ -1,4 +1,4 @@
-APScheduler < 4.*.*
+APScheduler < 4
 bcrypt
 beautifulsoup4
 bleach

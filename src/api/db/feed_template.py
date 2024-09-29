@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 import urllib
 
-from db.base import BlinderBaseModel
+from db.base import AggyBaseModel
 from config import config
 
 
@@ -14,7 +14,7 @@ class FeedTemplateParameterType(Enum):
     number = "number"
 
 
-class FeedTemplateParameter(BlinderBaseModel):
+class FeedTemplateParameter(AggyBaseModel):
     name: str
     required: bool
     type: FeedTemplateParameterType
@@ -24,7 +24,7 @@ class FeedTemplateParameter(BlinderBaseModel):
     options: Optional[Dict[str, str]] = None
 
 
-class FeedTemplate(BlinderBaseModel):
+class FeedTemplate(AggyBaseModel):
     name: str
     bridge_short_name: Optional[str] = None
     url: HttpUrl

@@ -1,7 +1,7 @@
-from db.base import BlinderBaseModel
+from db.base import AggyBaseModel
 
 
-class BaseRouteModel(BlinderBaseModel):
+class BaseRouteModel(AggyBaseModel):
     @classmethod
     def from_db_model(cls, db_model):
         raise NotImplementedError
