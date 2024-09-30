@@ -22,14 +22,14 @@ def test_list_all_templates(client, existing_source_template, token):
 
 
 def test_create_source_from_template(
-    client, existing_source_template, existing_category, token, unique_source
+    client, existing_source_template, existing_feed, token, unique_source
 ):
     args = build_api_request_args(
         path="/source_template/create",
         token=token,
         data={
             "source_template_name_hash": existing_source_template.name_hash,
-            "category_hash": existing_category.name_hash,
+            "feed_hash": existing_feed.name_hash,
             "source_name": unique_source.name,
             "parameters": {"parameter_name": "value"},
         },
@@ -52,7 +52,7 @@ def test_create_source_from_template(
         == "http://dev-aggy-rss-bridge/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
     assert str(new_source.url) == res_data["source_url"]
-    assert res_data["source_category"] == existing_category.name_hash
+    assert res_data["source_feed"] == existing_feed.name_hash
 
 
 def test_get_source_template(client, existing_source_template, token):
@@ -87,14 +87,14 @@ def test_get_nonexistent_source_template(client, token):
 
 
 def create_source_with_nonexistent_template(
-    client, existing_category, token, unique_source
+    client, existing_feed, token, unique_source
 ):
     args = build_api_request_args(
         path="/source_template/create",
         token=token,
         data={
             "source_template_name_hash": "nonexistent_source_template",
-            "category_hash": existing_category.name_hash,
+            "feed_hash": existing_feed.name_hash,
             "source_name": unique_source.name,
             "parameters": {"parameter_name": "value"},
         },

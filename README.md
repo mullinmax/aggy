@@ -91,30 +91,30 @@ flowchart TB
         user--username--> username[username]
         user--key-->misc_user_settings[misc user settings]
 
-        categories([CATEGORIES])
-        category>CATEGORY:uuid]
-        category_embeddings_model[category embeddings model]
-        category_name[category name]
-        category_sources{{CATEGORY:uuid:SOURCES}}
-        category_items([CATEGORY:uuid:ITEMS])
-        source>CATEGORY:uuid:SOURCE:name_hash]
+        feeds([FEEDS])
+        feed>FEED:uuid]
+        feed_embeddings_model[feed embeddings model]
+        feed_name[feed name]
+        feed_sources{{FEED:uuid:SOURCES}}
+        feed_items([FEED:uuid:ITEMS])
+        source>FEED:uuid:SOURCE:name_hash]
         source_url[url]
         source_name[name]
         items([SOURCE:name_hash:ITEMS])
 
 
-        categories --> category
+        feeds --> feed
 
-        category --embeddings model--> category_embeddings_model
-        category --name--> category_name
-        category -.-> category_items
-        category -.-> category_sources
-        category_sources --> source
+        feed --embeddings model--> feed_embeddings_model
+        feed --name--> feed_name
+        feed -.-> feed_items
+        feed -.-> feed_sources
+        feed_sources --> source
         source --url--> source_url
         source --name--> source_name
         source -.-> items
 
-        items -.-> item_state[CATEGORY:hash:ITEM:hash:ITEM_STATE]
+        items -.-> item_state[FEED:hash:ITEM:hash:ITEM_STATE]
 
     end
 
@@ -124,11 +124,11 @@ flowchart TB
 
     items-.->item
     item -.-> item_state
-    category_items -.-> item
-    category_items -.-> item_embeddings
+    feed_items -.-> item
+    feed_items -.-> item_embeddings
     item_embeddings --model_name--> item_embedding
     item -.-> item_embeddings
-    category_embeddings_model -.-> item_embedding
+    feed_embeddings_model -.-> item_embedding
     users{{USERS}} --> user
     source_templates{{SOURCE_TEMPLATES}} --> source_template[SOURCE_TEMPLATE:hash]
 ```

@@ -63,26 +63,26 @@ def login(name, password) -> str:
     return response.json()["access_token"]
 
 
-# echo "Creating category..."
-# # Create a category
+# echo "Creating feed..."
+# # Create a feed
 # response=$(curl_request -X 'POST' \
-#   "https://codehostapi.doze.dev/category/create?category_name=$category" \
+#   "https://codehostapi.doze.dev/feed/create?feed_name=$feed" \
 #   -H 'accept: application/json' \
 #   -H "Authorization: Bearer $token" \
 #   -d '')
-# echo "Create category response: $response"
+# echo "Create feed response: $response"
 
 
-def create_category(token, category):
+def create_feed(token, feed):
     response = requests.post(
-        f"https://codehostapi.doze.dev/category/create?category_name={category}",
+        f"https://codehostapi.doze.dev/feed/create?feed_name={feed}",
         headers={
             "accept": "application/json",
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         },
     )
-    return response.json()["category_name_hash"]
+    return response.json()["feed_name_hash"]
 
 
 # echo "Listing all source templates..."
@@ -120,19 +120,19 @@ def get_template_details(token, source_template_hash):
 #   -H 'accept: application/json' \
 #   -H 'Content-Type: application/json' \
 #   -d '{
-#   "category_hash": "category_hash_456",
+#   "feed_hash": "feed_hash_456",
 #   "source_name": "Example Source Name",
 #   "source_template_name_hash": "example_hash_123",
 #   "parameters": {
 #     "parameter_name": "value"
 #   }
 # }'
-def create_source(token, category_hash, source_name, source_template_hash):
+def create_source(token, feed_hash, source_name, source_template_hash):
     response = requests.post(
         "https://codehostapi.doze.dev/source_template/create",
         headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
         json={
-            "category_hash": category_hash,
+            "feed_hash": feed_hash,
             "source_name": source_name,
             "source_template_name_hash": source_template_hash,
             "parameters": {},
@@ -144,7 +144,7 @@ def create_source(token, category_hash, source_name, source_template_hash):
 def main():
     create_user("user", "pass")
     token = login("user", "pass")
-    category_hash = create_category(token, "category")
+    feed_hash = create_feed(token, "feed")
     source_templates = list_all_source_templates(token)
     for source_template_hash, source_template_name in source_templates.items():
         template = get_template_details(token, source_template_hash)
@@ -163,11 +163,9 @@ def main():
         print("No suitable source template found.")
         return
 
-    print("Category hash:", category_hash)
+    print("Feed hash:", feed_hash)
     print("Selected source_template_hash:", source_template_hash)
-    source_name_hash = create_source(
-        token, category_hash, "source", source_template_hash
-    )
+    source_name_hash = create_source(token, feed_hash, "source", source_template_hash)
     print("Source name hash:", source_name_hash)
 
 

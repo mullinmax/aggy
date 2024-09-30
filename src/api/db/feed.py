@@ -8,13 +8,13 @@ from .source import Source
 
 # TODO write unit test that ensures we are using hashes where we should be
 # (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
-class Category(ItemCollection):
+class Feed(ItemCollection):
     user_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
 
     @property
     def key(self):
-        return f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
+        return f"USER:{self.user_hash}:FEED:{self.name_hash}"
 
     @property
     def sources_key(self):
@@ -34,7 +34,7 @@ class Category(ItemCollection):
         return [
             Source.read(
                 user_hash=self.user_hash,
-                category_hash=self.name_hash,
+                feed_hash=self.name_hash,
                 source_hash=source_hash,
             )
             for source_hash in self.source_hashes
@@ -47,24 +47,24 @@ class Category(ItemCollection):
     def create(self):
         with self.db_con() as r:
             if self.exists():
-                raise Exception(f"Category with name {self.name} already exists")
+                raise Exception(f"Feed with name {self.name} already exists")
 
             r.hset(self.key, mapping={"name": self.name})
-            r.sadd(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
+            r.sadd(f"USER:{self.user_hash}:FEEDS", self.name_hash)
 
         return self.key
 
     def delete(self):
         with self.db_con() as r:
-            # remove category from list of user's categories
-            r.srem(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
+            # remove feed from list of user's feeds
+            r.srem(f"USER:{self.user_hash}:FEEDS", self.name_hash)
 
             # delete each source then remove list
             for source_hash in self.source_hashes:
                 try:
                     source = Source.read(
                         user_hash=self.user_hash,
-                        category_hash=self.name_hash,
+                        feed_hash=self.name_hash,
                         source_hash=source_hash,
                     )
                     source.delete()
@@ -73,40 +73,40 @@ class Category(ItemCollection):
                     pass
             r.delete(self.sources_key)
 
-            # delete list of category items
+            # delete list of feed items
             r.delete(f"{self.key}:ITEMS")
 
             # delete self
             r.delete(self.key)
 
     @classmethod
-    def read(cls, user_hash, name_hash) -> Optional["Category"]:
-        key = f"USER:{user_hash}:CATEGORY:{name_hash}"
+    def read(cls, user_hash, name_hash) -> Optional["Feed"]:
+        key = f"USER:{user_hash}:FEED:{name_hash}"
         with cls.db_con() as r:
-            category_data = r.hgetall(key)
+            feed_data = r.hgetall(key)
 
-        if category_data:
-            category_data["name_hash"] = name_hash
-            category_data["user_hash"] = user_hash
-            return Category(**category_data)
+        if feed_data:
+            feed_data["name_hash"] = name_hash
+            feed_data["user_hash"] = user_hash
+            return Feed(**feed_data)
 
         return None
 
     @classmethod
-    def read_all(cls, user_hash) -> List["Category"]:
+    def read_all(cls, user_hash) -> List["Feed"]:
         with cls.db_con() as r:
-            category_name_hashs = r.smembers(f"USER:{user_hash}:CATEGORIES")
+            feed_name_hashs = r.smembers(f"USER:{user_hash}:FEEDS")
 
-        categories = []
-        for name_hash in category_name_hashs:
-            categories.append(cls.read(user_hash=user_hash, name_hash=name_hash))
+        feeds = []
+        for name_hash in feed_name_hashs:
+            feeds.append(cls.read(user_hash=user_hash, name_hash=name_hash))
 
-        return categories
+        return feeds
 
     def add_source(self, source: Source):
         with self.db_con() as r:
             source.user_hash = self.user_hash
-            source.category_hash = self.name_hash
+            source.feed_hash = self.name_hash
             if not source.exists():
                 source.create()
             r.sadd(f"{self.key}:SOURCES", source.name_hash)

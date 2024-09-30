@@ -2,16 +2,16 @@ import pytest
 import uuid
 
 from db.source import Source
-from db.category import Category
+from db.feed import Feed
 from db.user import User
 
 
 @pytest.fixture(scope="function")
-def unique_source(unique_category: Category, unique_user: User) -> Source:
+def unique_source(unique_feed: Feed, unique_user: User) -> Source:
     """Generates unique source data for each test"""
     source = Source(
         user_hash=unique_user.name_hash,
-        category_hash=unique_category.name_hash,
+        feed_hash=unique_feed.name_hash,
         name=f"Source Name {uuid.uuid4()}",
         url="http://example.com",
     )
@@ -23,7 +23,7 @@ def unique_source(unique_category: Category, unique_user: User) -> Source:
 
 
 @pytest.fixture(scope="function")
-def existing_source(unique_source: Source, existing_category: Category) -> Source:
+def existing_source(unique_source: Source, existing_feed: Feed) -> Source:
     """Generates existing source data for each test"""
-    existing_category.add_source(unique_source)
+    existing_feed.add_source(unique_source)
     yield unique_source

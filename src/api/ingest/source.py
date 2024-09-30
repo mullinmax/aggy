@@ -2,7 +2,7 @@ import logging
 import feedparser
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
-from db.category import Category
+from db.feed import Feed
 from ingest.item.rss import ingest_rss_item
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
@@ -50,5 +50,5 @@ def ingest_source(source: Source) -> None:
         items_to_link.append(final_item)
 
     source.add_items(items_to_link)
-    category = Category.read(user_hash=source.user_hash, name_hash=source.category_hash)
-    category.add_items(items_to_link)
+    feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
+    feed.add_items(items_to_link)
