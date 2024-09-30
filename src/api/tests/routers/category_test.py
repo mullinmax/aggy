@@ -125,9 +125,9 @@ def test_list_categories_no_token(client):
     assert response.json() == {"detail": "Not authenticated"}
 
 
-def test_feeds(client, existing_user, existing_category, existing_feed, token):
+def test_sources(client, existing_user, existing_category, existing_source, token):
     args = build_api_request_args(
-        path="/category/feeds",
+        path="/category/sources",
         params={"category_name_hash": existing_category.name_hash},
         token=token,
     )
@@ -137,16 +137,21 @@ def test_feeds(client, existing_user, existing_category, existing_feed, token):
     assert response.status_code == 200
     assert response.json() == [
         {
-            "feed_name": existing_feed.name,
-            "feed_name_hash": existing_feed.name_hash,
-            "feed_url": str(existing_feed.url),
-            "feed_category": existing_feed.category_hash,
+            "source_name": existing_source.name,
+            "source_name_hash": existing_source.name_hash,
+            "source_url": str(existing_source.url),
+            "source_category": existing_source.category_hash,
         }
     ]
 
 
 def test_get_all_items(
-    client, existing_user, existing_category, existing_feed, existing_item_strict, token
+    client,
+    existing_user,
+    existing_category,
+    existing_source,
+    existing_item_strict,
+    token,
 ):
     args = build_api_request_args(
         path="/category/items",
@@ -162,7 +167,7 @@ def test_get_all_items(
 
 
 def test_get_some_items(
-    client, existing_user, existing_category, existing_feed, unique_item_strict, token
+    client, existing_user, existing_category, existing_source, unique_item_strict, token
 ):
     new_items = [unique_item_strict.model_copy() for i in range(10)]
     for i, item in enumerate(new_items):

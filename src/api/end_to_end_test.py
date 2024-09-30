@@ -85,16 +85,16 @@ def create_category(token, category):
     return response.json()["category_name_hash"]
 
 
-# echo "Listing all feed templates..."
-# # List all feed templates
+# echo "Listing all source templates..."
+# # List all source templates
 # response=$(curl_request -X 'GET' \
-#   'https://codehostapi.doze.dev/feed_template/list_all' \
+#   'https://codehostapi.doze.dev/source_template/list_all' \
 #   -H 'accept: application/json' \
 #   -H "Authorization: Bearer $token")
-# echo "List all feed templates response: $response"
-def list_all_feed_templates(token):
+# echo "List all source templates response: $response"
+def list_all_source_templates(token):
     response = requests.get(
-        "https://codehostapi.doze.dev/feed_template/list_all",
+        "https://codehostapi.doze.dev/source_template/list_all",
         headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
     )
     return response.json()
@@ -102,39 +102,39 @@ def list_all_feed_templates(token):
 
 #   # Get template details
 #   response=$(curl_request -X 'GET' \
-#     "https://codehostapi.doze.dev/feed_template/get?name_hash=$feed_template_hash" \
+#     "https://codehostapi.doze.dev/source_template/get?name_hash=$source_template_hash" \
 #     -H 'accept: application/json' \
 #     -H "Authorization: Bearer $token")
 #   echo "Get template details response: $response"
-def get_template_details(token, feed_template_hash):
+def get_template_details(token, source_template_hash):
     response = requests.get(
-        f"https://codehostapi.doze.dev/feed_template/get?name_hash={feed_template_hash}",
+        f"https://codehostapi.doze.dev/source_template/get?name_hash={source_template_hash}",
         headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
     )
     return response.json()
 
 
-# create a feed from a template
+# create a source from a template
 # curl -X 'POST' \
-#   'https://codehostapi.doze.dev/feed_template/create' \
+#   'https://codehostapi.doze.dev/source_template/create' \
 #   -H 'accept: application/json' \
 #   -H 'Content-Type: application/json' \
 #   -d '{
 #   "category_hash": "category_hash_456",
-#   "feed_name": "Example Feed Name",
-#   "feed_template_name_hash": "example_hash_123",
+#   "source_name": "Example Source Name",
+#   "source_template_name_hash": "example_hash_123",
 #   "parameters": {
 #     "parameter_name": "value"
 #   }
 # }'
-def create_feed(token, category_hash, feed_name, feed_template_hash):
+def create_source(token, category_hash, source_name, source_template_hash):
     response = requests.post(
-        "https://codehostapi.doze.dev/feed_template/create",
+        "https://codehostapi.doze.dev/source_template/create",
         headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
         json={
             "category_hash": category_hash,
-            "feed_name": feed_name,
-            "feed_template_name_hash": feed_template_hash,
+            "source_name": source_name,
+            "source_template_name_hash": source_template_hash,
             "parameters": {},
         },
     )
@@ -145,9 +145,9 @@ def main():
     create_user("user", "pass")
     token = login("user", "pass")
     category_hash = create_category(token, "category")
-    feed_templates = list_all_feed_templates(token)
-    for feed_template_hash, feed_template_name in feed_templates.items():
-        template = get_template_details(token, feed_template_hash)
+    source_templates = list_all_source_templates(token)
+    for source_template_hash, source_template_name in source_templates.items():
+        template = get_template_details(token, source_template_hash)
         if (
             len(
                 [
@@ -160,13 +160,15 @@ def main():
         ):
             break
     else:
-        print("No suitable feed template found.")
+        print("No suitable source template found.")
         return
 
     print("Category hash:", category_hash)
-    print("Selected feed_template_hash:", feed_template_hash)
-    feed_name_hash = create_feed(token, category_hash, "feed", feed_template_hash)
-    print("Feed name hash:", feed_name_hash)
+    print("Selected source_template_hash:", source_template_hash)
+    source_name_hash = create_source(
+        token, category_hash, "source", source_template_hash
+    )
+    print("Source name hash:", source_name_hash)
 
 
 if __name__ == "__main__":

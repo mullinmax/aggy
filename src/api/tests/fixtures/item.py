@@ -24,8 +24,8 @@ def unique_item_strict(unique_category):
 
 
 @pytest.fixture(scope="function")
-def existing_item_strict(existing_feed, existing_category, unique_item_strict):
+def existing_item_strict(existing_source, existing_category, unique_item_strict):
     unique_item_strict.create()
-    existing_feed.add_items(unique_item_strict)
+    existing_source.add_items(unique_item_strict)
     existing_category.add_items(unique_item_strict)
     yield unique_item_strict

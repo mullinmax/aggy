@@ -1,55 +1,55 @@
 import logging
 from datetime import datetime, timedelta
 
-from constants import FEEDS_TO_INGEST_KEY, FEED_READ_INTERVAL_TIMEDELTA
+from constants import SOURCES_TO_INGEST_KEY, SOURCE_READ_INTERVAL_TIMEDELTA
 from db.base import get_db_con
-from db.feed import Feed
-from ingest.feed import ingest_feed
+from db.source import Source
+from ingest.source import ingest_source
 from db.user import User
 from utils import get_ollama_connection
 from config import config
 
 
-def feed_ingestion_scheduling_job() -> None:
+def source_ingestion_scheduling_job() -> None:
     users = User.read_all()
     for user in users:
         for category in user.categories:
-            for feed in category.feeds:
-                feed.trigger_ingest(now=False)
+            for source in category.sources:
+                source.trigger_ingest(now=False)
 
 
-def feed_ingestion_job() -> None:
+def source_ingestion_job() -> None:
     r = get_db_con()
 
-    if not r.exists(FEEDS_TO_INGEST_KEY):
+    if not r.exists(SOURCES_TO_INGEST_KEY):
         return
 
-    res = r.zmpop(1, [FEEDS_TO_INGEST_KEY], min=True)[1][0]
-    feed_key, scheduled_time = res
+    res = r.zmpop(1, [SOURCES_TO_INGEST_KEY], min=True)[1][0]
+    source_key, scheduled_time = res
     scheduled_time = datetime.fromtimestamp(int(scheduled_time))
 
-    # if the feed isn't due yet
+    # if the source isn't due yet
     if scheduled_time > datetime.now() + timedelta(minutes=1):
-        # replace the feed without altering it
-        # take the sooner of the values if a feed already exists
+        # replace the source without altering it
+        # take the sooner of the values if a source already exists
         r.zadd(
-            FEEDS_TO_INGEST_KEY,
-            mapping={feed_key: int(scheduled_time.timestamp())},
+            SOURCES_TO_INGEST_KEY,
+            mapping={source_key: int(scheduled_time.timestamp())},
             lt=True,
         )
         return
 
     try:
-        feed = Feed.read_by_key(feed_key=feed_key)
-        ingest_feed(feed=feed)
+        source = Source.read_by_key(source_key=source_key)
+        ingest_source(source=source)
     except Exception as e:
-        logging.error(f"Ingesting of feed {feed_key} failed: {e}")
+        logging.error(f"Ingesting of source {source_key} failed: {e}")
         return
 
-    # reschedule the feed for next go-round
-    next_process_time = scheduled_time + FEED_READ_INTERVAL_TIMEDELTA
+    # reschedule the source for next go-round
+    next_process_time = scheduled_time + SOURCE_READ_INTERVAL_TIMEDELTA
     next_process_time = int(next_process_time.timestamp())
-    r.zadd(FEEDS_TO_INGEST_KEY, mapping={feed_key: next_process_time}, lt=True)
+    r.zadd(SOURCES_TO_INGEST_KEY, mapping={source_key: next_process_time}, lt=True)
 
 
 def download_embedding_model_job() -> None:

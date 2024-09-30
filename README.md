@@ -13,7 +13,7 @@ Aggy works for any type of content. Whether it’s specific animals, hobbies, ne
 
 Aggy currently supports:
 
-- **RSS feeds** via templates powered by [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge)
+- **RSS sources** via templates powered by [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge)
 
 Upcoming integrations:
 
@@ -30,7 +30,7 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 
 ### Available now:
 
-- **RSS feed support** with predefined templates for faster setup
+- **RSS source support** with predefined templates for faster setup
 - **Embedding generation** for text to improve content relevance
 
 ### In the works:
@@ -43,6 +43,8 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 - **Recommendation transparency** (Learn why a piece of content was recommended to you)
 - **Semantic filters** (E.g., hide political content)
 - **NSFW content controls** (Blur or block inappropriate images)
+- **meta feeds** Combine one or more aggy feeds into a single feed
+- **export feed as rss** allow an aggy feed to be read by your favorite rss reader
 
 ## Contributing
 
@@ -64,8 +66,6 @@ We’re still working on a contribution guide, but if you have ideas, we’d lov
 - [ ] use embeddings to help decide which image would be the best preview image
 - [ ] fix reddit albums getting very low res thumbnails
 - [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
-- [ ] Add RSS bridge (or similar) to docker compose setup (use this to template rss feeds?)
-- [ ] API for templated rss feeds
 
 
 ### Database Design
@@ -83,7 +83,7 @@ flowchart TB
         hash -.linked implicitly.-> sorted_set
     end
 
-    feeds_to_ingest([FEED-KEYS-TO-INGEST]) --feed key--> feed
+    sources_to_ingest([SOURCE-KEYS-TO-INGEST]) --source key--> source
 
     subgraph User Space ALL keys prefixed with USER:username_hash:
         user>USER:username_hash]
@@ -95,12 +95,12 @@ flowchart TB
         category>CATEGORY:uuid]
         category_embeddings_model[category embeddings model]
         category_name[category name]
-        category_feeds{{CATEGORY:uuid:FEEDS}}
+        category_sources{{CATEGORY:uuid:SOURCES}}
         category_items([CATEGORY:uuid:ITEMS])
-        feed>CATEGORY:uuid:FEED:name_hash]
-        feed_url[url]
-        feed_name[name]
-        items([FEED:name_hash:ITEMS])
+        source>CATEGORY:uuid:SOURCE:name_hash]
+        source_url[url]
+        source_name[name]
+        items([SOURCE:name_hash:ITEMS])
 
 
         categories --> category
@@ -108,11 +108,11 @@ flowchart TB
         category --embeddings model--> category_embeddings_model
         category --name--> category_name
         category -.-> category_items
-        category -.-> category_feeds
-        category_feeds --> feed
-        feed --url--> feed_url
-        feed --name--> feed_name
-        feed -.-> items
+        category -.-> category_sources
+        category_sources --> source
+        source --url--> source_url
+        source --name--> source_name
+        source -.-> items
 
         items -.-> item_state[CATEGORY:hash:ITEM:hash:ITEM_STATE]
 
@@ -130,5 +130,5 @@ flowchart TB
     item -.-> item_embeddings
     category_embeddings_model -.-> item_embedding
     users{{USERS}} --> user
-    feed_templates{{FEED_TEMPLATES}} --> feed_template[FEED_TEMPLATE:hash]
+    source_templates{{SOURCE_TEMPLATES}} --> source_template[SOURCE_TEMPLATE:hash]
 ```

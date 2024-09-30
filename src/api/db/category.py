@@ -3,7 +3,7 @@ from typing import List, Optional
 from typing_extensions import Annotated
 
 from .item_collection import ItemCollection
-from .feed import Feed
+from .source import Source
 
 
 # TODO write unit test that ensures we are using hashes where we should be
@@ -17,27 +17,27 @@ class Category(ItemCollection):
         return f"USER:{self.user_hash}:CATEGORY:{self.name_hash}"
 
     @property
-    def feeds_key(self):
-        return f"{self.key}:FEEDS"
+    def sources_key(self):
+        return f"{self.key}:SOURCES"
 
     @property
     def name_hash(self):
         return self.__insecure_hash__(self.name)
 
     @property
-    def feed_hashes(self):
+    def source_hashes(self):
         with self.db_con() as r:
-            return list(r.smembers(self.feeds_key))
+            return list(r.smembers(self.sources_key))
 
     @property
-    def feeds(self) -> List[Feed]:
+    def sources(self) -> List[Source]:
         return [
-            Feed.read(
+            Source.read(
                 user_hash=self.user_hash,
                 category_hash=self.name_hash,
-                feed_hash=feed_hash,
+                source_hash=source_hash,
             )
-            for feed_hash in self.feed_hashes
+            for source_hash in self.source_hashes
         ]
 
     @property
@@ -59,19 +59,19 @@ class Category(ItemCollection):
             # remove category from list of user's categories
             r.srem(f"USER:{self.user_hash}:CATEGORIES", self.name_hash)
 
-            # delete each feed then remove list
-            for feed_hash in self.feed_hashes:
+            # delete each source then remove list
+            for source_hash in self.source_hashes:
                 try:
-                    feed = Feed.read(
+                    source = Source.read(
                         user_hash=self.user_hash,
                         category_hash=self.name_hash,
-                        feed_hash=feed_hash,
+                        source_hash=source_hash,
                     )
-                    feed.delete()
+                    source.delete()
                 except ValueError:
-                    # feed does not exist
+                    # source does not exist
                     pass
-            r.delete(self.feeds_key)
+            r.delete(self.sources_key)
 
             # delete list of category items
             r.delete(f"{self.key}:ITEMS")
@@ -103,15 +103,15 @@ class Category(ItemCollection):
 
         return categories
 
-    def add_feed(self, feed: Feed):
+    def add_source(self, source: Source):
         with self.db_con() as r:
-            feed.user_hash = self.user_hash
-            feed.category_hash = self.name_hash
-            if not feed.exists():
-                feed.create()
-            r.sadd(f"{self.key}:FEEDS", feed.name_hash)
+            source.user_hash = self.user_hash
+            source.category_hash = self.name_hash
+            if not source.exists():
+                source.create()
+            r.sadd(f"{self.key}:SOURCES", source.name_hash)
 
-    def delete_feed(self, feed: Feed):
+    def delete_source(self, source: Source):
         with self.db_con() as r:
-            feed.delete()
-            r.srem(f"{self.key}:FEEDS", feed.name_hash)
+            source.delete()
+            r.srem(f"{self.key}:SOURCES", source.name_hash)

@@ -1,16 +1,16 @@
 import logging
 import feedparser
 from db.item import ItemLoose, ItemStrict
-from db.feed import Feed
+from db.source import Source
 from db.category import Category
 from ingest.item.rss import ingest_rss_item
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
 
-# TODO maybe this belongs in the feed DB model
-def ingest_feed(feed: Feed) -> None:
-    entries = feedparser.parse(str(feed.url)).entries
+# TODO maybe this belongs in the source DB model
+def ingest_source(source: Source) -> None:
+    entries = feedparser.parse(str(source.url)).entries
 
     items_to_link = []
     for entry in entries:
@@ -49,6 +49,6 @@ def ingest_feed(feed: Feed) -> None:
 
         items_to_link.append(final_item)
 
-    feed.add_items(items_to_link)
-    category = Category.read(user_hash=feed.user_hash, name_hash=feed.category_hash)
+    source.add_items(items_to_link)
+    category = Category.read(user_hash=source.user_hash, name_hash=source.category_hash)
     category.add_items(items_to_link)

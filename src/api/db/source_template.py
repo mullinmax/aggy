@@ -7,34 +7,34 @@ from db.base import AggyBaseModel
 from config import config
 
 
-class FeedTemplateParameterType(Enum):
+class SourceTemplateParameterType(Enum):
     text = "text"
     select = "select"
     checkbox = "checkbox"
     number = "number"
 
 
-class FeedTemplateParameter(AggyBaseModel):
+class SourceTemplateParameter(AggyBaseModel):
     name: str
     required: bool
-    type: FeedTemplateParameterType
+    type: SourceTemplateParameterType
     default: Optional[Any] = None
     example: Optional[str] = None
     title: Optional[str] = None
     options: Optional[Dict[str, str]] = None
 
 
-class FeedTemplate(AggyBaseModel):
+class SourceTemplate(AggyBaseModel):
     name: str
     bridge_short_name: Optional[str] = None
     url: HttpUrl
     description: str
     context: Optional[str] = None
-    parameters: Dict[str, FeedTemplateParameter]
+    parameters: Dict[str, SourceTemplateParameter]
 
     @property
     def key(self):
-        return f"FEED_TEMPLATE:{self.name_hash}"
+        return f"SOURCE_TEMPLATE:{self.name_hash}"
 
     @property
     def name_hash(self):
@@ -112,21 +112,21 @@ class FeedTemplate(AggyBaseModel):
             r.set(self.key, self.json)
 
             # add to list of all templates
-            r.sadd("FEED_TEMPLATES", self.name_hash)
+            r.sadd("SOURCE_TEMPLATES", self.name_hash)
 
     @classmethod
-    def read(cls, name_hash: str) -> Optional["FeedTemplate"]:
+    def read(cls, name_hash: str) -> Optional["SourceTemplate"]:
         with cls.db_con() as r:
-            data = r.get(f"FEED_TEMPLATE:{name_hash}")
+            data = r.get(f"SOURCE_TEMPLATE:{name_hash}")
             if data:
                 return cls.model_validate_json(data)
             return None
 
     @classmethod
-    def read_all(cls) -> List["FeedTemplate"]:
+    def read_all(cls) -> List["SourceTemplate"]:
         templates = []
         with cls.db_con() as r:
-            template_hashes = r.smembers("FEED_TEMPLATES")
+            template_hashes = r.smembers("SOURCE_TEMPLATES")
             for template_hash in template_hashes:
                 template = cls.read(template_hash)
                 if template:

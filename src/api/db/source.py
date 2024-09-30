@@ -2,11 +2,11 @@ from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
 from datetime import datetime
 
-from constants import FEEDS_TO_INGEST_KEY, FEED_READ_INTERVAL_TIMEDELTA
+from constants import SOURCES_TO_INGEST_KEY, SOURCE_READ_INTERVAL_TIMEDELTA
 from .item_collection import ItemCollection
 
 
-class Feed(ItemCollection):
+class Source(ItemCollection):
     user_hash: str
     category_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
@@ -18,9 +18,7 @@ class Feed(ItemCollection):
 
     @property
     def key(self):
-        return (
-            f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:FEED:{self.name_hash}"
-        )
+        return f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:SOURCE:{self.name_hash}"
 
     @property
     def items_key(self):
@@ -29,7 +27,7 @@ class Feed(ItemCollection):
     def create(self):
         with self.db_con() as r:
             if r.exists(self.key):
-                raise Exception(f"Cannot create duplicate feed {self.key}")
+                raise Exception(f"Cannot create duplicate source {self.key}")
 
             r.hset(self.key, mapping={"url": str(self.url), "name": self.name})
             self.trigger_ingest(now=True)
@@ -41,36 +39,36 @@ class Feed(ItemCollection):
             r.delete(self.items_key)
 
     def trigger_ingest(self, now=False):
-        # if the feed is not already in the list
+        # if the source is not already in the list
         # we're assuming it's over due to ingest
         if now:
             score = int(datetime.now().timestamp())
         else:
-            score = datetime.now() + FEED_READ_INTERVAL_TIMEDELTA
+            score = datetime.now() + SOURCE_READ_INTERVAL_TIMEDELTA
             score = int((score).timestamp())
 
         with self.db_con() as r:
-            # lt=True means that if the feed is already in the list
+            # lt=True means that if the source is already in the list
             # it will only be updated if the new score is lower
-            r.zadd(FEEDS_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
+            r.zadd(SOURCES_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
 
     @classmethod
-    def read(cls, user_hash, category_hash, feed_hash):
-        feed_key = f"USER:{user_hash}:CATEGORY:{category_hash}:FEED:{feed_hash}"
-        feed = cls.read_by_key(feed_key)
+    def read(cls, user_hash, category_hash, source_hash):
+        source_key = f"USER:{user_hash}:CATEGORY:{category_hash}:SOURCE:{source_hash}"
+        source = cls.read_by_key(source_key)
 
-        if feed:
-            return feed
+        if source:
+            return source
 
-        raise ValueError("Feed not found")
+        raise ValueError("Source not found")
 
     @classmethod
-    def read_by_key(cls, feed_key):
+    def read_by_key(cls, source_key):
         with cls.db_con() as r:
-            if r.exists(feed_key):
-                feed_data = r.hgetall(feed_key)
-                _, user_hash, _, category_hash, _, feed_hash = feed_key.split(":")
-                return Feed(
-                    user_hash=user_hash, category_hash=category_hash, **feed_data
+            if r.exists(source_key):
+                source_data = r.hgetall(source_key)
+                _, user_hash, _, category_hash, _, source_hash = source_key.split(":")
+                return Source(
+                    user_hash=user_hash, category_hash=category_hash, **source_data
                 )
         return None

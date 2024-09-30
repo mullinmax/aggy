@@ -19,11 +19,11 @@ def test_items_key(unique_category):
     )
 
 
-def test_feeds_key(unique_category):
-    """Tests the feeds_key property."""
+def test_sources_key(unique_category):
+    """Tests the sources_key property."""
     assert (
-        unique_category.feeds_key
-        == f"USER:{unique_category.user_hash}:CATEGORY:{unique_category.name_hash}:FEEDS"
+        unique_category.sources_key
+        == f"USER:{unique_category.user_hash}:CATEGORY:{unique_category.name_hash}:SOURCES"
     )
 
 
@@ -97,40 +97,40 @@ def test_get_items(unique_category, unique_item_strict):
     assert not unique_category.exists()
 
 
-def test_feeds(unique_category, unique_feed):
-    """Tests adding and removing feeds from a category."""
+def test_sources(unique_category, unique_source):
+    """Tests adding and removing sources from a category."""
     unique_category.create()
 
-    unique_category.add_feed(unique_feed)
-    assert unique_feed.name_hash in unique_category.feed_hashes
-    assert len(unique_category.feed_hashes) == 1
-    assert unique_feed in unique_category.feeds
-    assert unique_feed.exists()
+    unique_category.add_source(unique_source)
+    assert unique_source.name_hash in unique_category.source_hashes
+    assert len(unique_category.source_hashes) == 1
+    assert unique_source in unique_category.sources
+    assert unique_source.exists()
 
-    unique_category.delete_feed(unique_feed)
-    assert unique_feed.name_hash not in unique_category.feed_hashes
-    assert not unique_feed.exists()
+    unique_category.delete_source(unique_source)
+    assert unique_source.name_hash not in unique_category.source_hashes
+    assert not unique_source.exists()
 
 
-def test_delete_category_removes_feeds(unique_category, unique_feed):
-    """Tests that deleting a category removes its feeds."""
+def test_delete_category_removes_sources(unique_category, unique_source):
+    """Tests that deleting a category removes its sources."""
     unique_category.create()
-    unique_category.add_feed(unique_feed)
+    unique_category.add_source(unique_source)
 
     with unique_category.db_con() as r:
-        assert r.exists(unique_category.feeds_key)
+        assert r.exists(unique_category.sources_key)
         assert not r.exists(unique_category.items_key)
         assert r.exists(unique_category.key)
-        assert r.exists(unique_feed.key)
+        assert r.exists(unique_source.key)
 
     unique_category.delete()
-    assert not unique_feed.exists()
+    assert not unique_source.exists()
     assert not unique_category.exists()
     with unique_category.db_con() as r:
-        assert not r.exists(unique_category.feeds_key)
+        assert not r.exists(unique_category.sources_key)
         assert not r.exists(unique_category.items_key)
         assert not r.exists(unique_category.key)
-        assert not r.exists(unique_feed.key)
+        assert not r.exists(unique_source.key)
 
 
 def test_remove_items(unique_category, unique_item_strict):
