@@ -1,9 +1,9 @@
-import sourceparser
+import feedparser
 
 from db.item import ItemLoose
 
 
-def ingest_rss_item(entry: sourceparser.SourceParserDict) -> ItemLoose:
+def ingest_rss_item(entry: feedparser.SourceParserDict) -> ItemLoose:
     # TODO more advanced parsing of content (like when there's more than 1 value)
     try:
         entry_content = entry.get("content")[0]["value"]

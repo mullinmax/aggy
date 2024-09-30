@@ -1,5 +1,5 @@
 import logging
-import sourceparser
+import feedparser
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.category import Category
@@ -10,7 +10,7 @@ from ingest.item.mercury import ingest_mercury_item
 
 # TODO maybe this belongs in the source DB model
 def ingest_source(source: Source) -> None:
-    entries = sourceparser.parse(str(source.url)).entries
+    entries = feedparser.parse(str(source.url)).entries
 
     items_to_link = []
     for entry in entries:

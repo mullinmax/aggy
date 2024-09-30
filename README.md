@@ -5,7 +5,7 @@
 
 Let’s say you’re fascinated by alligators. You hop between platforms to follow alligator-related creators and subreddits. Every once in a while, you see a post about crocodiles, Argh! Aggy solves this problem by bringing **all your content into one place** and sorting it based on how relevant it is to you. When you're in the mood for alligator facts, you won’t have to sift through crocodile content—Aggy does the filtering for you.
 
-Aggy works for any type of content. Whether it’s specific animals, hobbies, news, or entertainment, Aggy curates your source to match **your interests**.
+Aggy works for any type of content. Whether it’s specific animals, hobbies, news, or entertainment, Aggy curates your feed to match **your interests**.
 
 ## How does Aggy work?
 
@@ -24,7 +24,7 @@ When Aggy finds new content, it analyzes metadata and determines how relevant it
 
 ### Understanding your preferences
 
-Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide sourceback, Aggy fine-tunes your source so you get more of what you love without relying on generic algorithms or trends.
+Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide feedback, Aggy fine-tunes your feed so you get more of what you love without relying on generic algorithms or trends.
 
 ## Features
 
@@ -37,12 +37,14 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 
 - **URL remapping** (e.g., YouTube to [Invidious](https://invidious.io/))
 - **Embedding generation for images**
-- **User sourceback-based model training** (Aggy gets smarter with your input)
+- **User feedback-based model training** (Aggy gets smarter with your input)
 - **Duplicate post detection** (Recognizes similar content across different sources and only shows the best)
 - **Alternate sorting options** (Best, Worst, Newest, Oldest)
 - **Recommendation transparency** (Learn why a piece of content was recommended to you)
 - **Semantic filters** (E.g., hide political content)
 - **NSFW content controls** (Blur or block inappropriate images)
+- **meta feeds** Combine one or more aggy feeds into a single feed
+- **export feed as rss** allow an aggy feed to be read by your favorite rss reader
 
 ## Contributing
 
@@ -64,8 +66,6 @@ We’re still working on a contribution guide, but if you have ideas, we’d lov
 - [ ] use embeddings to help decide which image would be the best preview image
 - [ ] fix reddit albums getting very low res thumbnails
 - [ ] de-duplicate posts where possible (same title, picture(maybe based on embeddings?), link after redirects)
-- [ ] Add RSS bridge (or similar) to docker compose setup (use this to template rss sources?)
-- [ ] API for templated rss sources
 
 
 ### Database Design
