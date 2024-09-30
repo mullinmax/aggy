@@ -5,7 +5,7 @@ from typing import List
 from db.category import Category
 from db.user import User
 from route_models.category import CategoryResponse
-from route_models.feed import FeedRouteModel
+from route_models.source import SourceRouteModel
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
 from routers.auth import authenticate
@@ -71,25 +71,25 @@ def get_category(
     response_model=List[CategoryResponse],
 )
 def list_categories(user: User = Depends(authenticate)) -> List[CategoryResponse]:
-    # TODO add list of feeds in each category in the response
+    # TODO add list of sources in each category in the response
     return [CategoryResponse.from_db_model(c) for c in user.categories if c is not None]
 
 
-# get all feeds in a category
+# get all sources in a category
 @category_router.get(
-    "/feeds",
-    summary="List all feeds in a category",
-    response_model=List[FeedRouteModel],
+    "/sources",
+    summary="List all sources in a category",
+    response_model=List[SourceRouteModel],
 )
-def feeds(
+def sources(
     category_name_hash: str, user: User = Depends(authenticate)
-) -> List[FeedRouteModel]:
+) -> List[SourceRouteModel]:
     cat = Category.read(user_hash=user.name_hash, name_hash=category_name_hash)
 
     if cat is None:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    return [FeedRouteModel.from_db_model(f) for f in cat.feeds]
+    return [SourceRouteModel.from_db_model(f) for f in cat.sources]
 
 
 # get all items in a category

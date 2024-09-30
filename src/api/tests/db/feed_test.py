@@ -1,54 +1,56 @@
 import pytest
 
-from db.feed import Feed
+from db.source import Source
 
 
-def test_create_feed(unique_feed):
-    unique_feed.create()
-    assert unique_feed.exists()
+def test_create_source(unique_source):
+    unique_source.create()
+    assert unique_source.exists()
 
-    unique_feed.delete()
-    assert not unique_feed.exists()
+    unique_source.delete()
+    assert not unique_source.exists()
 
 
-def test_duplicate_feed_creation(unique_feed):
-    unique_feed.create()
+def test_duplicate_source_creation(unique_source):
+    unique_source.create()
 
     with pytest.raises(Exception) as e:
-        unique_feed.create()  # Attempt to create duplicate feed
-    assert "Cannot create duplicate feed" in str(
+        unique_source.create()  # Attempt to create duplicate source
+    assert "Cannot create duplicate source" in str(
         e.value
-    ), "Should not allow duplicate feeds"
+    ), "Should not allow duplicate sources"
 
 
-def test_read_feed(unique_feed):
-    unique_feed.create()
-    read_feed = Feed.read(
-        user_hash=unique_feed.user_hash,
-        category_hash=unique_feed.category_hash,
-        feed_hash=unique_feed.name_hash,
+def test_read_source(unique_source):
+    unique_source.create()
+    read_source = Source.read(
+        user_hash=unique_source.user_hash,
+        category_hash=unique_source.category_hash,
+        source_hash=unique_source.name_hash,
     )
-    assert read_feed, "Feed should be readable"
-    assert read_feed.name == unique_feed.name, "Feed name should match"
-    assert read_feed.url == unique_feed.url, "Feed url should match"
-    assert read_feed.user_hash == unique_feed.user_hash, "Feed user_hash should match"
+    assert read_source, "Source should be readable"
+    assert read_source.name == unique_source.name, "Source name should match"
+    assert read_source.url == unique_source.url, "Source url should match"
     assert (
-        read_feed.category_hash == unique_feed.category_hash
-    ), "Feed category_hash should match"
-
-
-def test_feed_add_items(unique_feed, unique_item_strict):
-    unique_feed.create()
-    unique_item_strict.create()
-    unique_feed.add_items(items=[unique_item_strict])
+        read_source.user_hash == unique_source.user_hash
+    ), "Source user_hash should match"
     assert (
-        unique_item_strict in unique_feed.query_items()
-    ), "Item should be in feed items"
+        read_source.category_hash == unique_source.category_hash
+    ), "Source category_hash should match"
 
 
-def test_count_items(unique_feed, unique_item_strict):
-    unique_feed.create()
+def test_source_add_items(unique_source, unique_item_strict):
+    unique_source.create()
     unique_item_strict.create()
-    assert unique_feed.count_items() == 0, "Should not count items in feed"
-    unique_feed.add_items(unique_item_strict)
-    assert unique_feed.count_items() == 1, "Should count items in feed"
+    unique_source.add_items(items=[unique_item_strict])
+    assert (
+        unique_item_strict in unique_source.query_items()
+    ), "Item should be in source items"
+
+
+def test_count_items(unique_source, unique_item_strict):
+    unique_source.create()
+    unique_item_strict.create()
+    assert unique_source.count_items() == 0, "Should not count items in source"
+    unique_source.add_items(unique_item_strict)
+    assert unique_source.count_items() == 1, "Should count items in source"

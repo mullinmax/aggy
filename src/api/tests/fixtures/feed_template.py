@@ -1,29 +1,29 @@
 import pytest
 import uuid
 
-from db.feed_template import (
-    FeedTemplate,
-    FeedTemplateParameter,
-    FeedTemplateParameterType,
+from db.source_template import (
+    SourceTemplate,
+    SourceTemplateParameter,
+    SourceTemplateParameterType,
 )
 
 
 @pytest.fixture(scope="function")
-def unique_feed_template() -> FeedTemplate:
-    """Generates unique feed template data for each test"""
+def unique_source_template() -> SourceTemplate:
+    """Generates unique source template data for each test"""
 
-    parameter = FeedTemplateParameter(
+    parameter = SourceTemplateParameter(
         name="Parameter Name",
         required=True,
-        type=FeedTemplateParameterType.text,
+        type=SourceTemplateParameterType.text,
         default="value",
         example="example_value",
         title="title",
         options={"value": "Human Readable Value", "other_value": "Other Value"},
     )
 
-    feed_template = FeedTemplate(
-        name=f"Feed Template Name {uuid.uuid4()}",
+    source_template = SourceTemplate(
+        name=f"Source Template Name {uuid.uuid4()}",
         bridge_short_name="test",
         url="http://example.com",
         description="Description",
@@ -31,14 +31,14 @@ def unique_feed_template() -> FeedTemplate:
         parameters={"parameter_name": parameter},
     )
 
-    yield feed_template
+    yield source_template
 
-    if feed_template.exists():
-        feed_template.delete()
+    if source_template.exists():
+        source_template.delete()
 
 
 @pytest.fixture(scope="function")
-def existing_feed_template(unique_feed_template: FeedTemplate) -> FeedTemplate:
-    """Generates existing feed template data for each test"""
-    unique_feed_template.create()
-    yield unique_feed_template
+def existing_source_template(unique_source_template: SourceTemplate) -> SourceTemplate:
+    """Generates existing source template data for each test"""
+    unique_source_template.create()
+    yield unique_source_template

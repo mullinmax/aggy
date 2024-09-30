@@ -1,10 +1,10 @@
 from pydantic import HttpUrl
 
 from .base import BaseRouteModel
-from db.feed_template import FeedTemplate
+from db.source_template import SourceTemplate
 
 
-class FeedTemplateParameterRouteModel(BaseRouteModel):
+class SourceTemplateParameterRouteModel(BaseRouteModel):
     name: str
     required: bool
     type: str
@@ -14,7 +14,7 @@ class FeedTemplateParameterRouteModel(BaseRouteModel):
     options: dict
 
 
-class FeedTemplateRouteModel(BaseRouteModel):
+class SourceTemplateRouteModel(BaseRouteModel):
     name: str
     bridge_short_name: str
     url: HttpUrl
@@ -23,7 +23,7 @@ class FeedTemplateRouteModel(BaseRouteModel):
     parameters: dict
 
     @classmethod
-    def from_db_model(cls, db_model: FeedTemplate):
+    def from_db_model(cls, db_model: SourceTemplate):
         return cls(
             name=db_model.name,
             bridge_short_name=db_model.bridge_short_name,

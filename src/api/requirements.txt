@@ -4,7 +4,6 @@ beautifulsoup4
 bleach
 dateparser
 fastapi
-feedparser
 httpx
 ollama
 pre-commit
@@ -14,4 +13,5 @@ pytest-cov
 python-multipart
 redis
 requests
+sourceparser
 uvicorn

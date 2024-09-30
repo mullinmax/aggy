@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import config
-from db.feed_template import FeedTemplate, FeedTemplateParameter
+from db.source_template import SourceTemplate, SourceTemplateParameter
 
 
 def parse_parameters(form):
@@ -56,7 +56,7 @@ def parse_parameters(form):
                         .strip()
                     )
 
-                parameters[param_name] = FeedTemplateParameter(**param_info)
+                parameters[param_name] = SourceTemplateParameter(**param_info)
     return parameters
 
 
@@ -87,7 +87,7 @@ def rss_bridge_get_templates_job() -> None:
                 if context_input is not None:
                     context = context_input.get("value")
 
-                bridge_template = FeedTemplate(
+                bridge_template = SourceTemplate(
                     name=bridge_name,
                     bridge_short_name=bridge_short_name,
                     url=bridge_url,

@@ -4,7 +4,12 @@ from db.item_state import ItemState
 
 
 def test_set_item_state(
-    client, existing_user, existing_feed, existing_category, existing_item_strict, token
+    client,
+    existing_user,
+    existing_source,
+    existing_category,
+    existing_item_strict,
+    token,
 ):
     item_state = ItemState.read(
         user_hash=existing_user.name_hash,
@@ -39,7 +44,7 @@ def test_set_item_state(
 
 def test_get_item_state(
     client,
-    existing_feed,
+    existing_source,
     existing_category,
     existing_item_strict,
     existing_item_state,
@@ -65,7 +70,7 @@ def test_get_item_state(
 
 
 def test_set_state_non_existent_category(
-    client, existing_user, existing_feed, existing_item_strict, token
+    client, existing_user, existing_source, existing_item_strict, token
 ):
     args = build_api_request_args(
         path="/item/set_state",
@@ -83,7 +88,7 @@ def test_set_state_non_existent_category(
 
 
 def test_get_state_non_existent_item(
-    client, existing_user, existing_feed, existing_category, token
+    client, existing_user, existing_source, existing_category, token
 ):
     args = build_api_request_args(
         path="/item/get_state",

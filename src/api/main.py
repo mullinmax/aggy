@@ -9,13 +9,13 @@ from config import config
 from routers.admin import admin_router
 from routers.auth import auth_router
 from routers.category import category_router
-from routers.feed_template import feed_template_router
-from routers.feed import feed_router
+from routers.source_template import source_template_router
+from routers.source import source_router
 from routers.item import item_router
 from bridge.jobs import rss_bridge_get_templates_job
 from ingest.jobs import (
-    feed_ingestion_scheduling_job,
-    feed_ingestion_job,
+    source_ingestion_scheduling_job,
+    source_ingestion_job,
     download_embedding_model_job,
 )
 
@@ -27,20 +27,20 @@ scheduler = AsyncIOScheduler()
 async def app_lifespan(app: FastAPI):
     logging.info("API starting up...")
     scheduler.add_job(
-        func=feed_ingestion_scheduling_job,
+        func=source_ingestion_scheduling_job,
         trigger="interval",
-        seconds=60 * config.get("FEED_READ_INTERVAL_MINUTES"),
-        id="feed_ingestion_scheduling_job",
+        seconds=60 * config.get("SOURCE_READ_INTERVAL_MINUTES"),
+        id="source_ingestion_scheduling_job",
         replace_existing=False,
         next_run_time=datetime.now(),
     )
 
-    # add scheduler job for ingesting feeds every n seconds
+    # add scheduler job for ingesting sources every n seconds
     scheduler.add_job(
-        func=feed_ingestion_job,
+        func=source_ingestion_job,
         trigger="interval",
-        seconds=config.get("FEED_INGESTION_RUN_INTERVAL_SECONDS"),
-        id="feed_ingestion_job",
+        seconds=config.get("SOURCE_INGESTION_RUN_INTERVAL_SECONDS"),
+        id="source_ingestion_job",
         replace_existing=False,
         next_run_time=datetime.now(),
     )
@@ -80,9 +80,9 @@ app.include_router(admin_router, tags=["Admin"])
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(category_router, prefix="/category", tags=["Categories"])
 app.include_router(
-    feed_template_router, prefix="/feed_template", tags=["Feed Templates"]
+    source_template_router, prefix="/source_template", tags=["Source Templates"]
 )
-app.include_router(feed_router, prefix="/feed", tags=["Feeds"])
+app.include_router(source_router, prefix="/source", tags=["Sources"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
 
 

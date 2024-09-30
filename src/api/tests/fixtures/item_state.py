@@ -23,7 +23,7 @@ def unique_item_state(unique_item_strict, unique_user, unique_category):
 
 @pytest.fixture(scope="function")
 def existing_item_state(
-    unique_item_state, existing_feed, existing_category, existing_item_strict
+    unique_item_state, existing_source, existing_category, existing_item_strict
 ):
     unique_item_state.create()
     yield unique_item_state
