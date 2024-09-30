@@ -1,11 +1,11 @@
 from tests.utils import build_api_request_args
 
 
-def test_create_source(client, unique_source, existing_category, token):
+def test_create_source(client, unique_source, existing_feed, token):
     args = build_api_request_args(
         path="/source/create",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_name": unique_source.name,
             "source_url": unique_source.url,
         },
@@ -18,11 +18,11 @@ def test_create_source(client, unique_source, existing_category, token):
     assert response.json() == {"message": "success"}
 
 
-def test_create_no_name(client, unique_source, existing_category, token):
+def test_create_no_name(client, unique_source, existing_feed, token):
     args = build_api_request_args(
         path="/source/create",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_url": unique_source.url,
         },
         token=token,
@@ -32,11 +32,11 @@ def test_create_no_name(client, unique_source, existing_category, token):
     assert response.status_code == 422
 
 
-def test_create_no_url(client, unique_source, existing_category, token):
+def test_create_no_url(client, unique_source, existing_feed, token):
     args = build_api_request_args(
         path="/source/create",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_name": unique_source.name,
         },
         token=token,
@@ -47,11 +47,11 @@ def test_create_no_url(client, unique_source, existing_category, token):
     assert response.status_code == 422
 
 
-def test_source_no_items(client, existing_category, existing_source, token):
+def test_source_no_items(client, existing_feed, existing_source, token):
     args = build_api_request_args(
         path="/source/items",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_name_hash": existing_source.name_hash,
         },
         token=token,
@@ -63,12 +63,12 @@ def test_source_no_items(client, existing_category, existing_source, token):
 
 
 def test_source_with_items(
-    client, existing_category, existing_source, existing_item_strict, token
+    client, existing_feed, existing_source, existing_item_strict, token
 ):
     args = build_api_request_args(
         path="/source/items",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_name_hash": existing_source.name_hash,
         },
         token=token,
@@ -82,11 +82,11 @@ def test_source_with_items(
     assert item_json["item_url"] == str(existing_item_strict.url)
 
 
-def test_delete_source(client, existing_category, existing_source, token):
+def test_delete_source(client, existing_feed, existing_source, token):
     args = build_api_request_args(
         path="/source/delete",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_name_hash": existing_source.name_hash,
         },
         token=token,
@@ -100,7 +100,7 @@ def test_delete_source(client, existing_category, existing_source, token):
     args = build_api_request_args(
         path="/source/items",
         params={
-            "category_name_hash": existing_category.name_hash,
+            "feed_name_hash": existing_feed.name_hash,
             "source_name_hash": existing_source.name_hash,
         },
         token=token,

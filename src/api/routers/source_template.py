@@ -59,7 +59,7 @@ def create_source_from_template(
     source_url = source_template.create_rss_url(**ff_template.parameters)
     source = Source(
         user_hash=user.name_hash,
-        category_hash=ff_template.category_hash,
+        feed_hash=ff_template.feed_hash,
         name=ff_template.source_name,
         url=source_url,
     )
