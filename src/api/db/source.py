@@ -8,7 +8,7 @@ from .item_collection import ItemCollection
 
 class Source(ItemCollection):
     user_hash: str
-    category_hash: str
+    feed_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
     url: HttpUrl
 
@@ -18,7 +18,7 @@ class Source(ItemCollection):
 
     @property
     def key(self):
-        return f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:SOURCE:{self.name_hash}"
+        return f"USER:{self.user_hash}:FEED:{self.feed_hash}:SOURCE:{self.name_hash}"
 
     @property
     def items_key(self):
@@ -53,8 +53,8 @@ class Source(ItemCollection):
             r.zadd(SOURCES_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
 
     @classmethod
-    def read(cls, user_hash, category_hash, source_hash):
-        source_key = f"USER:{user_hash}:CATEGORY:{category_hash}:SOURCE:{source_hash}"
+    def read(cls, user_hash, feed_hash, source_hash):
+        source_key = f"USER:{user_hash}:FEED:{feed_hash}:SOURCE:{source_hash}"
         source = cls.read_by_key(source_key)
 
         if source:
@@ -67,8 +67,6 @@ class Source(ItemCollection):
         with cls.db_con() as r:
             if r.exists(source_key):
                 source_data = r.hgetall(source_key)
-                _, user_hash, _, category_hash, _, source_hash = source_key.split(":")
-                return Source(
-                    user_hash=user_hash, category_hash=category_hash, **source_data
-                )
+                _, user_hash, _, feed_hash, _, source_hash = source_key.split(":")
+                return Source(user_hash=user_hash, feed_hash=feed_hash, **source_data)
         return None

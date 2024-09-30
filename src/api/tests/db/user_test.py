@@ -66,23 +66,23 @@ def test_delete_user(existing_user):
     assert existing_user.exists()
     existing_user.delete()
     assert not existing_user.exists()
-    assert existing_user.categories == []
+    assert existing_user.feeds == []
 
 
-def test_delete_user_with_categories(existing_user, existing_category):
-    assert existing_category.exists()
-    assert existing_user.categories == [existing_category]
+def test_delete_user_with_feeds(existing_user, existing_feed):
+    assert existing_feed.exists()
+    assert existing_user.feeds == [existing_feed]
     existing_user.delete()
     assert not existing_user.exists()
-    assert existing_user.categories == []
-    assert not existing_category.exists()
+    assert existing_user.feeds == []
+    assert not existing_feed.exists()
 
 
-def test_remove_category_from_user(existing_user, existing_category):
-    assert existing_user.categories == [existing_category]
-    existing_user.remove_category(existing_category)
-    assert existing_user.categories == []
-    assert not existing_category.exists()
+def test_remove_feed_from_user(existing_user, existing_feed):
+    assert existing_user.feeds == [existing_feed]
+    existing_user.remove_feed(existing_feed)
+    assert existing_user.feeds == []
+    assert not existing_feed.exists()
 
 
 def test_update_user(existing_user):
@@ -121,8 +121,8 @@ def test_two_users_password_check(existing_user):
     assert unique_user.check_password("password2")
 
 
-def test_user_add_category(existing_user, unique_category):
-    unique_category.user_hash = existing_user.name_hash
-    existing_user.add_category(unique_category)
-    assert existing_user.categories == [unique_category]
-    assert unique_category.exists()
+def test_user_add_feed(existing_user, unique_feed):
+    unique_feed.user_hash = existing_user.name_hash
+    existing_user.add_feed(unique_feed)
+    assert existing_user.feeds == [unique_feed]
+    assert unique_feed.exists()

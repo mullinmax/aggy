@@ -3,7 +3,7 @@ from pydantic import confloat
 
 from .item import ItemLoose
 from .user import User
-from .category import Category
+from .feed import Feed
 from .base import AggyBaseModel
 
 # class ReservedVoteReasons(Enum):
@@ -24,28 +24,24 @@ from .base import AggyBaseModel
 class ItemState(AggyBaseModel):
     item_url_hash: str
     user_hash: str
-    category_hash: str
+    feed_hash: str
     score: confloat(ge=-1, le=1) = None
     score_date: datetime = None
     is_read: bool = None
 
     @property
     def key(self) -> str:
-        return f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:ITEM:{self.item_url_hash}:ITEM_STATE"
+        return f"USER:{self.user_hash}:FEED:{self.feed_hash}:ITEM:{self.item_url_hash}:ITEM_STATE"
 
     def create(self) -> None:
         with self.db_con() as r:
             # check user exists
             User.read(self.user_hash)  # raises ValueError if user does not exist
 
-            # check category exists
-            category = Category.read(
-                user_hash=self.user_hash, name_hash=self.category_hash
-            )
-            if not category:
-                raise ValueError(
-                    f"Category with hash {self.category_hash} does not exist"
-                )
+            # check feed exists
+            feed = Feed.read(user_hash=self.user_hash, name_hash=self.feed_hash)
+            if not feed:
+                raise ValueError(f"Feed with hash {self.feed_hash} does not exist")
 
             item = ItemLoose.read(self.item_url_hash)
             if not item:
@@ -61,10 +57,10 @@ class ItemState(AggyBaseModel):
             r.delete(self.key)
 
     @classmethod
-    def read(cls, user_hash, category_hash, item_url_hash) -> "ItemState":
+    def read(cls, user_hash, feed_hash, item_url_hash) -> "ItemState":
         with cls.db_con() as r:
             item_vote_json = r.get(
-                f"USER:{user_hash}:CATEGORY:{category_hash}:ITEM:{item_url_hash}:ITEM_STATE"
+                f"USER:{user_hash}:FEED:{feed_hash}:ITEM:{item_url_hash}:ITEM_STATE"
             )
 
         if item_vote_json:
@@ -75,18 +71,18 @@ class ItemState(AggyBaseModel):
     def set_state(
         cls,
         user_hash: str,
-        category_hash: str,
+        feed_hash: str,
         item_url_hash: str,
         score: confloat(ge=-1, le=1) = None,
         is_read: bool = None,
     ) -> None:
-        item_state = cls.read(user_hash, category_hash, item_url_hash)
+        item_state = cls.read(user_hash, feed_hash, item_url_hash)
 
         if item_state is None:
             item_state = cls(
                 item_url_hash=item_url_hash,
                 user_hash=user_hash,
-                category_hash=category_hash,
+                feed_hash=feed_hash,
             )
 
         if score is not None:

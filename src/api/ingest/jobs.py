@@ -13,8 +13,8 @@ from config import config
 def source_ingestion_scheduling_job() -> None:
     users = User.read_all()
     for user in users:
-        for category in user.categories:
-            for source in category.sources:
+        for feed in user.feeds:
+            for source in feed.sources:
                 source.trigger_ingest(now=False)
 
 

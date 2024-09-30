@@ -8,7 +8,7 @@ class SourceRouteModel(BaseRouteModel):
     source_name: str
     source_name_hash: str
     source_url: HttpUrl
-    source_category: str
+    source_feed: str
 
     @classmethod
     def from_db_model(cls, db_model: Source):
@@ -16,5 +16,5 @@ class SourceRouteModel(BaseRouteModel):
             source_name=db_model.name,
             source_name_hash=db_model.name_hash,
             source_url=db_model.url,
-            source_category=db_model.category_hash,
+            source_feed=db_model.feed_hash,
         )

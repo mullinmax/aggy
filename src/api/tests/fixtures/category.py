@@ -1,26 +1,26 @@
 import pytest
 import uuid
 
-from db.category import Category
+from db.feed import Feed
 from db.user import User
 
 
 @pytest.fixture(scope="function")
-def unique_category(unique_user: User) -> Category:
-    """Generates unique category data for each test, assuming a Redis connection fixture."""
-    category = Category(
+def unique_feed(unique_user: User) -> Feed:
+    """Generates unique feed data for each test, assuming a Redis connection fixture."""
+    feed = Feed(
         user_hash=unique_user.name_hash,
-        name=f"Category Name {uuid.uuid4()}",
+        name=f"Feed Name {uuid.uuid4()}",
     )
 
-    yield category
+    yield feed
 
-    if category.exists():
-        category.delete()
+    if feed.exists():
+        feed.delete()
 
 
 @pytest.fixture(scope="function")
-def existing_category(unique_category: Category, existing_user: User) -> Category:
-    """Generates existing category data for each test, assuming a Redis connection fixture."""
-    existing_user.add_category(unique_category)
-    yield unique_category
+def existing_feed(unique_feed: Feed, existing_user: User) -> Feed:
+    """Generates existing feed data for each test, assuming a Redis connection fixture."""
+    existing_user.add_feed(unique_feed)
+    yield unique_feed

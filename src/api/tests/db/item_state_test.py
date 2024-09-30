@@ -22,7 +22,7 @@ def test_update_item_state(existing_item_state):
 def test_read_item_state(existing_item_state):
     read_item_state = ItemState.read(
         user_hash=existing_item_state.user_hash,
-        category_hash=existing_item_state.category_hash,
+        feed_hash=existing_item_state.feed_hash,
         item_url_hash=existing_item_state.item_url_hash,
     )
     assert read_item_state, "ItemState should be readable"
@@ -36,8 +36,8 @@ def test_read_item_state(existing_item_state):
         read_item_state.user_hash == existing_item_state.user_hash
     ), "ItemState user_hash should match"
     assert (
-        read_item_state.category_hash == existing_item_state.category_hash
-    ), "ItemState category_hash should match"
+        read_item_state.feed_hash == existing_item_state.feed_hash
+    ), "ItemState feed_hash should match"
     assert (
         read_item_state.item_url_hash == existing_item_state.item_url_hash
     ), "ItemState item_url_hash should match"
@@ -64,7 +64,7 @@ def test_set_state(
 
     ItemState.set_state(
         user_hash=existing_item_state.user_hash,
-        category_hash=existing_item_state.category_hash,
+        feed_hash=existing_item_state.feed_hash,
         item_url_hash=existing_item_state.item_url_hash,
         score=score,
         is_read=is_read,
@@ -72,7 +72,7 @@ def test_set_state(
 
     read_item_state = ItemState.read(
         user_hash=existing_item_state.user_hash,
-        category_hash=existing_item_state.category_hash,
+        feed_hash=existing_item_state.feed_hash,
         item_url_hash=existing_item_state.item_url_hash,
     )
 
@@ -92,7 +92,7 @@ def test_read_non_existent_item_state(unique_item_state):
     assert not unique_item_state.exists(), "ItemState should not exist before creation"
     read_item_state = ItemState.read(
         user_hash=unique_item_state.user_hash,
-        category_hash=unique_item_state.category_hash,
+        feed_hash=unique_item_state.feed_hash,
         item_url_hash=unique_item_state.item_url_hash,
     )
     assert read_item_state is None, "ItemState should not be readable"
@@ -106,17 +106,15 @@ def test_create_item_state_with_bad_user_hash(unique_item_state):
     assert "User" in str(e.value), "Should not create ItemState with bad user_hash"
 
 
-def test_create_item_state_with_bad_category_hash(unique_item_state, existing_user):
-    unique_item_state.category_hash = "bad_category_hash"
+def test_create_item_state_with_bad_feed_hash(unique_item_state, existing_user):
+    unique_item_state.feed_hash = "bad_feed_hash"
     with pytest.raises(Exception) as e:
         unique_item_state.create()
-    assert "Category" in str(
-        e.value
-    ), "Should not create ItemState with bad category_hash"
+    assert "Feed" in str(e.value), "Should not create ItemState with bad feed_hash"
 
 
 def test_create_item_state_with_bad_item_url_hash(
-    unique_item_state, existing_user, existing_category
+    unique_item_state, existing_user, existing_feed
 ):
     unique_item_state.item_url_hash = "bad_item_url_hash"
     with pytest.raises(Exception) as e:
