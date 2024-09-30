@@ -15,3 +15,16 @@ def get_ollama_connection() -> Client:
     ollama = Client(**ollama_args)
 
     return ollama
+
+
+def skip_limit_to_start_end(skip: int = 0, limit: int = -1) -> tuple[int, int]:
+    """Converts a skip and limit to a start and end index."""
+    start = 0
+    if skip is not None and skip > 0:
+        start = skip
+
+    end = -1
+    if limit is not None and limit >= 0:
+        end = start + limit - 1
+
+    return (start, end)

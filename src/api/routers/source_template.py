@@ -66,3 +66,19 @@ def create_source_from_template(
     source.create()
 
     return SourceRouteModel.from_db_model(source)
+
+
+# # search for a template with pagination
+# @source_template_router.get(
+#     "/search",
+#     summary="Search for a template",
+#     response_model=List[SourceTemplate],
+# )
+# def search_source_templates(
+#     query: str,
+#     start: int = 0,
+#     end: int = -1,
+#     user: User = Depends(authenticate)
+# ) -> List[SourceTemplate]:
+#     source_templates = SourceTemplate.search(query, start, end)
+#     return source_templates

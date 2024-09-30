@@ -1,4 +1,4 @@
-from tests.utils import build_api_request_args
+from tests.testing_utils import build_api_request_args
 from pydantic import HttpUrl
 
 
@@ -181,8 +181,8 @@ def test_get_some_items(
         path="/feed/items",
         params={
             "feed_name_hash": existing_feed.name_hash,
-            "start": 2,
-            "end": 3,
+            "skip": 2,
+            "limit": 2,
         },
         token=token,
     )

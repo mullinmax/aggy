@@ -1,4 +1,4 @@
-from tests.utils import build_api_request_args
+from tests.testing_utils import build_api_request_args
 
 
 def test_create_source(client, unique_source, existing_feed, token):

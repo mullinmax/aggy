@@ -2,6 +2,7 @@ from typing import List, Union
 
 from .base import AggyBaseModel
 from .item import ItemStrict
+from utils import skip_limit_to_start_end
 
 
 class ItemCollection(AggyBaseModel):
@@ -9,7 +10,8 @@ class ItemCollection(AggyBaseModel):
     def items_key(self) -> str:
         raise NotImplementedError
 
-    def query_items(self, start=0, end=-1) -> List[ItemStrict]:
+    def query_items(self, skip=None, limit=None) -> List[ItemStrict]:
+        start, end = skip_limit_to_start_end(skip, limit)
         with self.db_con() as r:
             url_hashes = r.zrange(self.items_key, start=start, end=end)
         items = [ItemStrict.read(url_hash) for url_hash in url_hashes]

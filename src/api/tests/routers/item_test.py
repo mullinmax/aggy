@@ -1,4 +1,4 @@
-from tests.utils import build_api_request_args
+from tests.testing_utils import build_api_request_args
 
 from db.item_state import ItemState
 

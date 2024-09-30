@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from typing import List
+from typing import List, Union
 
 from db.feed import Feed
 from db.user import User
@@ -96,8 +96,8 @@ def sources(
 )
 def get_feed_items(
     feed_name_hash: str,
-    start: int = 0,
-    end: int = -1,
+    skip: Union[int, None] = None,
+    limit: Union[int, None] = None,
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
@@ -106,7 +106,7 @@ def get_feed_items(
         raise HTTPException(status_code=404, detail="Feed not found")
 
     return [
-        ItemResponse.from_db_model(i) for i in feed.query_items(start=start, end=end)
+        ItemResponse.from_db_model(i) for i in feed.query_items(skip=skip, limit=limit)
     ]
 
 
