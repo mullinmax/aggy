@@ -23,14 +23,14 @@ def create_source(
     source_url: str,
     user: User = Depends(authenticate),
 ) -> AcknowledgeResponse:
-    cat = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
     source = Source(
         user_hash=user.name_hash,
         feed_hash=feed_name_hash,
         name=source_name,
         url=source_url,
     )
-    cat.add_source(source)
+    feed.add_source(source)
     return AcknowledgeResponse()
 
 
@@ -64,11 +64,11 @@ def get_items(
 def delete_source(
     feed_name_hash: str, source_name_hash: str, user: User = Depends(authenticate)
 ) -> AcknowledgeResponse:
-    cat = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
     source = Source.read(
         user_hash=user.name_hash,
         feed_hash=feed_name_hash,
         source_hash=source_name_hash,
     )
-    cat.delete_source(source)
+    feed.delete_source(source)
     return AcknowledgeResponse
