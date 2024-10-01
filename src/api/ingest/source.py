@@ -1,5 +1,6 @@
 import logging
 import feedparser
+from config import config
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
@@ -8,47 +9,49 @@ from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
 
-# TODO maybe this belongs in the source DB model
 def ingest_source(source: Source) -> None:
     entries = feedparser.parse(str(source.url)).entries
 
-    items_to_link = []
     for entry in entries:
+        # if the item already exists in the database, skip scraping
         temp_item = ItemLoose(url=entry.link)
         if temp_item.exists():
             logging.info(f"Item already exists in database: {entry.link}")
-            items_to_link.append(temp_item)
-            continue
 
-        rss_item = ingest_rss_item(entry)
-        open_graph_item = ingest_open_graph_item(rss_item)
-        mercury_item = ingest_mercury_item(rss_item)
+            # TODO check how long ago we ingested this item and re-ingest if it's been long enough
+            final_item = ItemStrict.read(url_hash=temp_item.url_hash)
+        else:
+            rss_item = ingest_rss_item(entry)
+            open_graph_item = ingest_open_graph_item(rss_item)
+            mercury_item = ingest_mercury_item(rss_item)
 
-        best_item = ItemLoose.merge_instances(
-            items=[rss_item, open_graph_item, mercury_item]
-        )
+            best_item = ItemLoose.merge_instances(
+                items=[rss_item, open_graph_item, mercury_item]
+            )
 
-        # Attempt to make strict item from best of all
-        try:
-            final_item = ItemStrict(**best_item.dict())
-        except Exception:
-            logging.error("failed to parse best item into strict item")
-            logging.error(str(best_item))
-            # TODO make sure we don't attempt this url over and over
+            # Attempt to make strict item from best of all
+            try:
+                final_item = ItemStrict(**best_item.dict())
+            except Exception:
+                logging.error("failed to parse best item into strict item")
+                logging.error(str(best_item))
+                # TODO make sure we don't attempt this url over and over
 
-        try:
-            final_item.add_embedding()
-        except Exception as e:
-            logging.error(f"Error adding embedding to item: {e}")
+        # generate embedding if it doesn't exist
+        embeddings_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
+        if final_item.embeddings.get(embeddings_model, None) is None:
+            try:
+                final_item.add_embedding()
+            except Exception as e:
+                logging.error(f"Error adding embedding to item: {e}")
 
+        # write item to db
         try:
             final_item.create()
         except Exception as e:
             logging.error(f"Error creating item: {e}")
             continue
 
-        items_to_link.append(final_item)
-
-    source.add_items(items_to_link)
-    feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
-    feed.add_items(items_to_link)
+        source.add_items(final_item)
+        feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
+        feed.add_items(final_item)
