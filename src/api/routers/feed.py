@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from typing import List
+from typing import List, Union
 
 from db.feed import Feed
 from db.user import User
@@ -14,11 +14,11 @@ feed_router = APIRouter()
 
 
 def get_feed_by_name_hash(user_hash: str, name_hash: str) -> Feed:
-    cat = Feed.read(user_hash=user_hash, name_hash=name_hash)
-    if cat is None:
+    feed = Feed.read(user_hash=user_hash, name_hash=name_hash)
+    if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    return cat
+    return feed
 
 
 # create feed
@@ -39,9 +39,9 @@ def create_feed(feed_name: str, user: User = Depends(authenticate)) -> FeedRespo
 def delete_feed(
     feed_name_hash: str, user: User = Depends(authenticate)
 ) -> AcknowledgeResponse:
-    cat = get_feed_by_name_hash(user.name_hash, feed_name_hash)
-    if cat.exists():
-        cat.delete()
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    if feed.exists():
+        feed.delete()
         return AcknowledgeResponse()
 
     raise HTTPException(status_code=404, detail="Feed not found")
@@ -50,12 +50,12 @@ def delete_feed(
 # get a feed
 @feed_router.get("/get", summary="Get a feed", response_model=FeedResponse)
 def get_feed(feed_name_hash: str, user: User = Depends(authenticate)) -> FeedResponse:
-    cat = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
 
-    if cat is None:
+    if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    return FeedResponse.from_db_model(cat)
+    return FeedResponse.from_db_model(feed)
 
 
 # get all feeds
@@ -78,12 +78,12 @@ def list_feeds(user: User = Depends(authenticate)) -> List[FeedResponse]:
 def sources(
     feed_name_hash: str, user: User = Depends(authenticate)
 ) -> List[SourceRouteModel]:
-    cat = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
 
-    if cat is None:
+    if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    return [SourceRouteModel.from_db_model(f) for f in cat.sources]
+    return [SourceRouteModel.from_db_model(f) for f in feed.sources]
 
 
 # get all items in a feed
@@ -96,17 +96,17 @@ def sources(
 )
 def get_feed_items(
     feed_name_hash: str,
-    start: int = 0,
-    end: int = -1,
+    skip: Union[int, None] = None,
+    limit: Union[int, None] = None,
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
-    cat = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
 
-    if cat is None:
+    if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
     return [
-        ItemResponse.from_db_model(i) for i in cat.query_items(start=start, end=end)
+        ItemResponse.from_db_model(i) for i in feed.query_items(skip=skip, limit=limit)
     ]
 
 

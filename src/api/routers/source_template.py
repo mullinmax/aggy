@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict
+from typing import Dict, List, Union
 
 
 from db.source_template import SourceTemplate
@@ -66,3 +66,18 @@ def create_source_from_template(
     source.create()
 
     return SourceRouteModel.from_db_model(source)
+
+
+@source_template_router.get(
+    "/search",
+    summary="Search for a template",
+    response_model=List[SourceTemplate],
+)
+def search_source_templates(
+    query: str,
+    skip: Union[int, None] = None,
+    limit: Union[int, None] = None,
+    user: User = Depends(authenticate),
+) -> List[SourceTemplate]:
+    source_templates = SourceTemplate.search(query, skip, limit)
+    return source_templates

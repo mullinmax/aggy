@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from typing import List
+from typing import List, Union
 
 from db.feed import Feed
 from db.source import Source
@@ -23,14 +23,14 @@ def create_source(
     source_url: str,
     user: User = Depends(authenticate),
 ) -> AcknowledgeResponse:
-    cat = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
     source = Source(
         user_hash=user.name_hash,
         feed_hash=feed_name_hash,
         name=source_name,
         url=source_url,
     )
-    cat.add_source(source)
+    feed.add_source(source)
     return AcknowledgeResponse()
 
 
@@ -40,8 +40,8 @@ def create_source(
 def get_items(
     feed_name_hash: str,
     source_name_hash: str,
-    start: int = 0,
-    end: int = -1,
+    skip: Union[int, None] = None,
+    limit: Union[int, None] = None,
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     try:
@@ -50,7 +50,7 @@ def get_items(
             feed_hash=feed_name_hash,
             source_hash=source_name_hash,
         )
-        items = source.query_items(start=start, end=end)
+        items = source.query_items(skip=skip, limit=limit)
         return [ItemResponse.from_db_model(item) for item in items]
     except Exception:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -64,11 +64,11 @@ def get_items(
 def delete_source(
     feed_name_hash: str, source_name_hash: str, user: User = Depends(authenticate)
 ) -> AcknowledgeResponse:
-    cat = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
     source = Source.read(
         user_hash=user.name_hash,
         feed_hash=feed_name_hash,
         source_hash=source_name_hash,
     )
-    cat.delete_source(source)
+    feed.delete_source(source)
     return AcknowledgeResponse
