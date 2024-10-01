@@ -8,6 +8,7 @@ from config import config
 from route_models.token import TokenResponse
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.auth_user import AuthUser
+from route_models.user_info import UserInfoResponse
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/form_login")
 
@@ -80,6 +81,8 @@ def token_check(user: User = Depends(authenticate)) -> AcknowledgeResponse:
     return AcknowledgeResponse(message=user.name)
 
 
-@auth_router.get("/get_username", summary="Get username from token", response_model=str)
-def get_username(user: User = Depends(authenticate)) -> str:
-    return user.name
+@auth_router.get(
+    "/user_info", summary="Get username from token", response_model=UserInfoResponse
+)
+def get_username(user: User = Depends(authenticate)) -> UserInfoResponse:
+    return UserInfoResponse(username=user.name)

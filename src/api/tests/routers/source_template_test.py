@@ -1,6 +1,7 @@
 from tests.testing_utils import build_api_request_args
 
 from db.source import Source
+from db.source_template import SourceTemplate
 
 
 def test_create_source_template(unique_source_template):
@@ -103,3 +104,40 @@ def create_source_with_nonexistent_template(
     response = client.post(**args)
 
     assert response.status_code == 404
+
+
+def search_source_templates(
+    client,
+    existing_source_template,
+    token,
+):
+    # make some dummy source templates
+    for i in range(5):
+        source_template = SourceTemplate(
+            name=f"test_template_{i}",
+            context="test",
+            bridge_short_name="test",
+        )
+        source_template.create()
+
+    args = build_api_request_args(
+        path="/source_template/search",
+        token=token,
+        params={
+            "query": existing_source_template.name,
+            "limit": "3",
+        },
+    )
+
+    response = client.get(**args)
+
+    assert response.status_code == 200
+    res_data = response.json()
+
+    assert existing_source_template.exists() is True
+    assert isinstance(res_data, list)
+    assert len(res_data) == 3
+    assert res_data[0]["name"] == existing_source_template.name
+
+    # check that the next template in the response is one of the dummy templates
+    assert "test_template_" in res_data[1]["name"]

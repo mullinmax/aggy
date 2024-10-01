@@ -2,6 +2,8 @@ import jwt
 from config import config
 from unittest.mock import patch
 
+from tests.testing_utils import build_api_request_args
+
 
 def test_create_user(client, unique_user):
     response = client.post(
@@ -198,3 +200,10 @@ def test_form_login(client, unique_user):
 
     response = client.get("/auth/token_check", headers=headers)
     assert response.status_code == 200
+
+
+def test_get_user_info(client, existing_user, token):
+    args = build_api_request_args("/auth/user_info", token=token)
+    response = client.get(**args)
+    assert response.status_code == 200
+    assert response.json() == {"username": existing_user.name}

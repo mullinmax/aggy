@@ -161,6 +161,7 @@ def test_get_all_items(
 
     response = client.get(**args)
 
+    print(response.json())
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["item_url"] == str(existing_item_strict.url)

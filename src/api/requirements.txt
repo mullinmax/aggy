@@ -12,6 +12,7 @@ PyJWT
 pytest
 pytest-cov
 python-multipart
+rapidfuzz
 redis
 requests
 uvicorn

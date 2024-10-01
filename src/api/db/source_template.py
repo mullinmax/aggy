@@ -1,10 +1,12 @@
 from pydantic import HttpUrl
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from enum import Enum
 import urllib
+from rapidfuzz import fuzz
 
 from db.base import AggyBaseModel
 from config import config
+from utils import skip_limit_to_start_end
 
 
 class SourceTemplateParameterType(Enum):
@@ -133,25 +135,28 @@ class SourceTemplate(AggyBaseModel):
                     templates.append(template)
         return templates
 
-    # @classmethod
-    # def search(cls, query: str, start: int = 0, stop: int = None) -> List["SourceTemplate"]:
-    #     templates = []
-    #     with cls.db_con() as r:
-    #         template_hashes = r.smembers("SOURCE_TEMPLATES")
-    #         for template_hash in template_hashes:
-    #             template = cls.read(template_hash)
-    #             if template:
-    #                 # Compute fuzzy match score between the query and the template name
-    #                 score = fuzz.ratio(query.lower(), template.name.lower())
+    @classmethod
+    def search(
+        cls, query: str, skip: Union[int, None] = None, limit: Union[int, None] = None
+    ) -> List["SourceTemplate"]:
+        templates = []
+        with cls.db_con() as r:
+            template_hashes = r.smembers("SOURCE_TEMPLATES")
+            for template_hash in template_hashes:
+                template = cls.read(template_hash)
+                if template:
+                    # Compute fuzzy match score between the query and the template name
+                    score = fuzz.ratio(query.lower(), template.name.lower())
 
-    #                 # Add the template and score to the list
-    #                 templates.append((template, score))
+                    # Add the template and score to the list
+                    templates.append((template, score))
 
-    #     # Sort the templates by score in descending order (high similarity first)
-    #     templates.sort(key=lambda x: x[1], reverse=True)
+        # Sort the templates by score in descending order (high similarity first)
+        templates.sort(key=lambda x: x[1], reverse=True)
 
-    #     # Paginate results by slicing the list with start and stop indices
-    #     paginated_results = templates[start:stop]
+        # Paginate results by skipping the first 'skip' items and returning 'limit' items
+        start, end = skip_limit_to_start_end(skip, limit)
+        paginated_results = templates[start:end]
 
-    #     # Return only the templates, excluding the scores
-    #     return [template for template, score in paginated_results]
+        # Return only the templates, excluding the scores
+        return [template for template, score in paginated_results]
