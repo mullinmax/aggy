@@ -89,7 +89,7 @@ module.exports = {
     proxy: [
       {
         context: ["/"],
-        target: "https://blinderapi.doze.dev",
+        target: "https://api.aggy.io",
         secure: true, // If your API server uses HTTPS, set this to true
         changeOrigin: true,
         // changeOrigin: true, // Needed for virtual hosted sites

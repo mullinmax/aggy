@@ -22,7 +22,9 @@ export default function StandardHeader({
 }: HeaderProps) {
   function logoutHandler() {
     // const token = AuthService.getToken();
-    AuthService.logout();
+    localStorage.removeItem("id_token");
+    // this will reload the page and reset the state of the application
+    window.location.assign("/");
   }
   return (
     <div className="Header-Container">
