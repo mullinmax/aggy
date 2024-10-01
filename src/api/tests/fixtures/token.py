@@ -11,4 +11,4 @@ def token(client: TestClient, existing_user: User) -> str:
         json={"username": existing_user.name, "password": "password"},
     )
 
-    return response.json()["token"]
+    return response.json()["access_token"]

@@ -20,3 +20,7 @@ repos:
     rev: v1.0.5
     hooks:
       - id: csslint
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.15.2
+    hooks:
+    -   id: pyupgrade

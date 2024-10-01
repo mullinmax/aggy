@@ -1,4 +1,4 @@
-APScheduler < 4.*.*
+APScheduler < 4
 bcrypt
 beautifulsoup4
 bleach
@@ -6,10 +6,12 @@ dateparser
 fastapi
 feedparser
 httpx
+ollama
+pre-commit
 PyJWT
 pytest
 pytest-cov
 python-multipart
-redis #TODO try aioredis
+redis
 requests
 uvicorn

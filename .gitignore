@@ -9,9 +9,9 @@ coverage.xml
 **/node_modules/
 
 # Expo
-src/react/assets/blinder/.expo/
-blinder/src/react/dist/
-blinder/src/react/web-build/
+src/react/assets/aggy/.expo/
+aggy/src/react/dist/
+aggy/src/react/web-build/
 
 # Native
 *.orig.*

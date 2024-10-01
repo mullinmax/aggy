@@ -1,10 +1,10 @@
 import bcrypt
 
-from .base import BlinderBaseModel
-from .category import Category
+from .base import AggyBaseModel
+from .feed import Feed
 
 
-class User(BlinderBaseModel):
+class User(AggyBaseModel):
     name: str
     hashed_password: str = None
 
@@ -21,19 +21,19 @@ class User(BlinderBaseModel):
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     @property
-    def categories_key(self):
-        return f"USER:{self.name_hash}:CATEGORIES"
+    def feeds_key(self):
+        return f"USER:{self.name_hash}:FEEDS"
 
     @property
-    def category_hashes(self):
+    def feed_hashes(self):
         with self.db_con() as r:
-            return r.smembers(self.categories_key)
+            return r.smembers(self.feeds_key)
 
     @property
-    def categories(self):
+    def feeds(self):
         return [
-            Category.read(user_hash=self.name_hash, name_hash=name_hash)
-            for name_hash in self.category_hashes
+            Feed.read(user_hash=self.name_hash, name_hash=name_hash)
+            for name_hash in self.feed_hashes
         ]
 
     def set_password(self, password: str):
@@ -59,7 +59,7 @@ class User(BlinderBaseModel):
         return self.key
 
     @classmethod
-    def read(cls, name_hash=None, name=None):
+    def read(cls, name_hash=None, name=None) -> "User":
         if name_hash is None:
             if name is None:
                 raise Exception("name or name_hash is required")
@@ -74,7 +74,7 @@ class User(BlinderBaseModel):
         return cls(**user_data)
 
     @classmethod
-    def read_all(cls):
+    def read_all(cls) -> list["User"]:
         with cls.db_con() as r:
             user_hashes = r.smembers("USERS")
 
@@ -95,9 +95,9 @@ class User(BlinderBaseModel):
 
     def delete(self):
         with self.db_con() as r:
-            # delete all categories
-            for category in self.categories:
-                category.delete()
+            # delete all feeds
+            for feed in self.feeds:
+                feed.delete()
 
             # remove user from list of users
             r.srem("USERS", self.name_hash)
@@ -105,17 +105,17 @@ class User(BlinderBaseModel):
             # delete self
             r.delete(self.key)
 
-    def add_category(self, category: Category):
+    def add_feed(self, feed: Feed):
         with self.db_con() as r:
-            if category.user_hash != self.name_hash:
-                raise Exception("Category does not belong to user")
-            if not category.exists():
-                category.create()
-            r.sadd(self.categories_key, category.name_hash)
+            if feed.user_hash != self.name_hash:
+                raise Exception("Feed does not belong to user")
+            if not feed.exists():
+                feed.create()
+            r.sadd(self.feeds_key, feed.name_hash)
 
-    def remove_category(self, category: Category):
+    def remove_feed(self, feed: Feed):
         with self.db_con() as r:
-            # get the category
-            category.delete()
-            # delete category
-            r.srem(self.categories_key, category.name_hash)
+            # get the feed
+            feed.delete()
+            # delete feed
+            r.srem(self.feeds_key, feed.name_hash)

@@ -1,0 +1,78 @@
+networks:
+  default:
+    external: true
+    name: "traefik_default"
+
+services:
+  aggy-db:
+    container_name: "${DEV_NAME}-aggy-db"
+    image: valkey/valkey:7.2.5-alpine
+    ports:
+      - 6379
+
+  aggy-extract:
+    container_name: "${DEV_NAME}-aggy-extract"
+    image: wangqiru/mercury-parser-api
+    ports:
+      - 3000
+
+  aggy-bridge:
+    container_name: "${DEV_NAME}-aggy-bridge"
+    build:
+      context: ./src/bridge
+      dockerfile: dockerfile
+    restart: unless-stopped
+    ports:
+      - 80
+
+  aggy-ollama:
+    container_name: "${DEV_NAME}-aggy-ollama"
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - 11434
+    volumes:
+      - "aggy-ollama-data:/root/.ollama"
+
+  aggy-api:
+    container_name: "${DEV_NAME}-aggy-api"
+    build:
+      context: ./src/api
+      dockerfile: dockerfile
+    ports:
+      - 8000
+    environment:
+      - DB_HOST=${DEV_NAME}-aggy-db
+      - DB_PORT=6379
+      - RSS_BRIDGE_HOST=${DEV_NAME}-aggy-bridge
+      - RSS_BRIDGE_PORT=80
+      - OLLAMA_HOST=${DEV_NAME}-aggy-ollama
+      - OLLAMA_PORT=11434
+      - JWT_ALGORITHM=HS256
+      - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
+    labels:
+      - "traefik.http.routers.${DEV_NAME}aggyapi.rule=Host(`${DEV_NAME}aggyapi.doze.dev`)"
+      - "traefik.http.routers.${DEV_NAME}aggyapi.service=${DEV_NAME}aggyapi"
+      - "traefik.http.services.${DEV_NAME}aggyapi.loadbalancer.server.port=8000"
+    depends_on:
+      - aggy-db
+      - aggy-extract
+      - aggy-bridge
+
+  aggy-webui:
+    container_name: "${DEV_NAME}-aggy-webui"
+    build:
+      context: ./src/webui
+      dockerfile: dockerfile
+    environment:
+      - AGGY_API_URL=http://${DEV_NAME}aggyapi.doze.dev
+    labels:
+      - "traefik.http.routers.${DEV_NAME}aggy.rule=Host(`${DEV_NAME}aggy.doze.dev`)"
+      - "traefik.http.routers.${DEV_NAME}aggy.service=${DEV_NAME}aggy"
+      - "traefik.http.services.${DEV_NAME}aggy.loadbalancer.server.port=80"
+    depends_on:
+      - aggy-api
+#TODO setup traefik so api and web ui are on the same domain and subdomain(?)
+
+volumes:
+  aggy-ollama-data:

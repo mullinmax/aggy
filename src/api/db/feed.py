@@ -1,100 +1,117 @@
-from pydantic import StringConstraints, HttpUrl
+from pydantic import StringConstraints
+from typing import List, Optional
 from typing_extensions import Annotated
-from typing import List
-from datetime import datetime
 
-from constants import FEEDS_TO_INGEST_KEY, FEED_CHECK_INTERVAL_TIMEDELTA
-from .base import BlinderBaseModel
-from .item import ItemStrict
+from .item_collection import ItemCollection
+from .source import Source
 
 
-class Feed(BlinderBaseModel):
+# TODO write unit test that ensures we are using hashes where we should be
+# (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
+class Feed(ItemCollection):
     user_hash: str
-    category_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
-    url: HttpUrl
+
+    @property
+    def key(self):
+        return f"USER:{self.user_hash}:FEED:{self.name_hash}"
+
+    @property
+    def sources_key(self):
+        return f"{self.key}:SOURCES"
 
     @property
     def name_hash(self):
         return self.__insecure_hash__(self.name)
 
     @property
-    def key(self):
-        return (
-            f"USER:{self.user_hash}:CATEGORY:{self.category_hash}:FEED:{self.name_hash}"
-        )
-
-    @property
-    def feed_items_key(self):
-        return f"{self.key}:ITEMS"
-
-    @property
-    def items(self) -> List[ItemStrict]:
-        items = []
+    def source_hashes(self):
         with self.db_con() as r:
-            for item_url_hash in r.smembers(self.feed_items_key):
-                try:
-                    items.append(ItemStrict.read(url_hash=item_url_hash))
-                except Exception:
-                    pass
-        return items
+            return list(r.smembers(self.sources_key))
+
+    @property
+    def sources(self) -> List[Source]:
+        return [
+            Source.read(
+                user_hash=self.user_hash,
+                feed_hash=self.name_hash,
+                source_hash=source_hash,
+            )
+            for source_hash in self.source_hashes
+        ]
+
+    @property
+    def items_key(self):
+        return f"{self.key}:ITEMS"
 
     def create(self):
         with self.db_con() as r:
-            if r.exists(self.key):
-                raise Exception(f"Cannot create duplicate feed {self.key}")
+            if self.exists():
+                raise Exception(f"Feed with name {self.name} already exists")
 
-            (r.hset(self.key, mapping={"url": str(self.url), "name": self.name}),)
-            self.trigger_ingest(now=True)
-        return
+            r.hset(self.key, mapping={"name": self.name})
+            r.sadd(f"USER:{self.user_hash}:FEEDS", self.name_hash)
+
+        return self.key
 
     def delete(self):
         with self.db_con() as r:
+            # remove feed from list of user's feeds
+            r.srem(f"USER:{self.user_hash}:FEEDS", self.name_hash)
+
+            # delete each source then remove list
+            for source_hash in self.source_hashes:
+                try:
+                    source = Source.read(
+                        user_hash=self.user_hash,
+                        feed_hash=self.name_hash,
+                        source_hash=source_hash,
+                    )
+                    source.delete()
+                except ValueError:
+                    # source does not exist
+                    pass
+            r.delete(self.sources_key)
+
+            # delete list of feed items
+            r.delete(f"{self.key}:ITEMS")
+
+            # delete self
             r.delete(self.key)
-            r.delete(self.feed_items_key)
-
-    def trigger_ingest(self, now=False):
-        # if the feed is not already in the list
-        # we're assuming it's over due to ingest
-        if now:
-            score = int(datetime.now().timestamp())
-        else:
-            score = datetime.now() + FEED_CHECK_INTERVAL_TIMEDELTA
-            score = int((score).timestamp())
-
-        with self.db_con() as r:
-            # lt=True means that if the feed is already in the list
-            # it will only be updated if the new score is lower
-            r.zadd(FEEDS_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
 
     @classmethod
-    def read(cls, user_hash, category_hash, feed_hash):
-        feed_key = f"USER:{user_hash}:CATEGORY:{category_hash}:FEED:{feed_hash}"
-        feed = cls.read_by_key(feed_key)
-
-        if feed:
-            return feed
-
-        raise ValueError("Feed not found")
-
-    @classmethod
-    def read_by_key(cls, feed_key):
+    def read(cls, user_hash, name_hash) -> Optional["Feed"]:
+        key = f"USER:{user_hash}:FEED:{name_hash}"
         with cls.db_con() as r:
-            if r.exists(feed_key):
-                feed_data = r.hgetall(feed_key)
-                _, user_hash, _, category_hash, _, feed_hash = feed_key.split(":")
-                return Feed(
-                    user_hash=user_hash, category_hash=category_hash, **feed_data
-                )
+            feed_data = r.hgetall(key)
+
+        if feed_data:
+            feed_data["name_hash"] = name_hash
+            feed_data["user_hash"] = user_hash
+            return Feed(**feed_data)
+
         return None
 
-    def add_items(self, items: ItemStrict):
-        with self.db_con() as r:
-            if isinstance(items, ItemStrict):
-                items = [items]
-            for item in items:
-                r.sadd(self.feed_items_key, item.url_hash)
+    @classmethod
+    def read_all(cls, user_hash) -> List["Feed"]:
+        with cls.db_con() as r:
+            feed_name_hashs = r.smembers(f"USER:{user_hash}:FEEDS")
 
-    def count_items(self):
+        feeds = []
+        for name_hash in feed_name_hashs:
+            feeds.append(cls.read(user_hash=user_hash, name_hash=name_hash))
+
+        return feeds
+
+    def add_source(self, source: Source):
         with self.db_con() as r:
-            return r.scard(self.feed_items_key)
+            source.user_hash = self.user_hash
+            source.feed_hash = self.name_hash
+            if not source.exists():
+                source.create()
+            r.sadd(f"{self.key}:SOURCES", source.name_hash)
+
+    def delete_source(self, source: Source):
+        with self.db_con() as r:
+            source.delete()
+            r.srem(f"{self.key}:SOURCES", source.name_hash)

@@ -1,22 +1,21 @@
-from pydantic import HttpUrl
+from .base import BaseRouteModel
 
 from db.feed import Feed
-from .base import BaseRouteModel
 
 
 class FeedResponse(BaseRouteModel):
-    name: str
-    name_hash: str
-    feed_url: HttpUrl
-    feed_description: str
-    feed_category: str
+    feed_name: str
+    feed_name_hash: str
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "feed_name": "Technology",
+                "feed_name_hash": "982d98h98hf1uhfdi1sdhu",
+            }
+        }
+    }
 
     @classmethod
     def from_db_model(cls, db_model: Feed):
-        return cls(
-            name=db_model.name,
-            name_hash=db_model.name_hash,
-            feed_url=db_model.url,
-            feed_description=db_model.description,
-            feed_category=db_model.category_hash,
-        )
+        return cls(feed_name=db_model.name, feed_name_hash=db_model.name_hash)
