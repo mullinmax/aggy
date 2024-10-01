@@ -78,3 +78,8 @@ def authenticate(token: str = Depends(oauth2_scheme)) -> User:
 )
 def token_check(user: User = Depends(authenticate)) -> AcknowledgeResponse:
     return AcknowledgeResponse(message=user.name)
+
+
+@auth_router.get("/get_username", summary="Get username from token", response_model=str)
+def get_username(user: User = Depends(authenticate)) -> str:
+    return user.name
