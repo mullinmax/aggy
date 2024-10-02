@@ -1,6 +1,6 @@
 services:
   test-aggy-db:
-    image: valkey/valkey:7.2.5-alpine
+    image: valkey/valkey:8.0.0-alpine
     ports:
       - 6379
 
