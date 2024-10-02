@@ -61,7 +61,7 @@ class SourceTemplate(AggyBaseModel):
                         f"Parameter {name} must be one of {list(parameter.options.keys())}"
                     )
             else:
-                if parameter.required or parameter.default is None:
+                if parameter.required:
                     validation_issues.append(f"Parameter {name} is required")
                 elif (
                     parameter.default is not None

@@ -30,6 +30,9 @@ class Source(ItemCollection):
                 raise Exception(f"Cannot create duplicate source {self.key}")
 
             r.hset(self.key, mapping={"url": str(self.url), "name": self.name})
+
+            # add self to list of sources for feed
+
             self.trigger_ingest(now=True)
         return
 

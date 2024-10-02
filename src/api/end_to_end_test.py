@@ -114,6 +114,17 @@ def get_template_details(token, source_template_hash):
     return response.json()
 
 
+# get all sources already in a feed
+# curl -X 'GET' \
+#   'https://codehostapi.doze.dev/feed/sources?feed_name_hash=123123' \
+def get_existing_sources(token, feed_hash):
+    response = requests.get(
+        f"https://codehostapi.doze.dev/feed/sources?feed_name_hash={feed_hash}",
+        headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    return [source["source_name_hash"] for source in response.json()]
+
+
 # create a source from a template
 # curl -X 'POST' \
 #   'https://codehostapi.doze.dev/source_template/create' \
@@ -146,18 +157,25 @@ def main():
     token = login("user", "pass")
     feed_hash = create_feed(token, "feed")
     source_templates = list_all_source_templates(token)
-    for source_template_hash, source_template_name in source_templates.items():
+    existing_sources = get_existing_sources(token, feed_hash)
+
+    print("Existing sources:", existing_sources)
+
+    # filter down to sources we haven't already used
+    new_sources = {
+        source_template_hash: source_template_name
+        for source_template_hash, source_template_name in source_templates.items()
+        if source_template_hash not in existing_sources
+    }
+
+    for source_template_hash, source_template_name in new_sources.items():
         template = get_template_details(token, source_template_hash)
-        if (
-            len(
-                [
-                    p
-                    for p in template["parameters"]
-                    if template["parameters"][p]["required"]
-                ]
-            )
-            == 0
-        ):
+
+        required = [
+            p for p in template["parameters"] if template["parameters"][p]["required"]
+        ]
+        num_required = len(required)
+        if num_required == 0:
             break
     else:
         print("No suitable source template found.")
@@ -165,7 +183,9 @@ def main():
 
     print("Feed hash:", feed_hash)
     print("Selected source_template_hash:", source_template_hash)
-    source_name_hash = create_source(token, feed_hash, "source", source_template_hash)
+    source_name_hash = create_source(
+        token, feed_hash, source_template_name, source_template_hash
+    )
     print("Source name hash:", source_name_hash)
 
 

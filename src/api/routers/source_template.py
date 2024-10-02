@@ -7,6 +7,7 @@ from db.source import Source
 from route_models.source import SourceRouteModel
 from route_models.source_from_template import SourceFromTemplate
 from db.user import User
+from db.feed import Feed
 from routers.auth import authenticate
 
 source_template_router = APIRouter()
@@ -45,25 +46,30 @@ def get_source_template(
     response_model=SourceRouteModel,
 )
 def create_source_from_template(
-    ff_template: SourceFromTemplate,
+    sf_template: SourceFromTemplate,
     user: User = Depends(authenticate),
 ) -> SourceRouteModel:
-    # source_template = SourceTemplate.read(name_hash=source_template_name_hash)
+    # confirm the feed exists
+    feed = Feed.read(user.name_hash, sf_template.feed_hash)
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    # find the source template
     source_template = SourceTemplate.read(
-        name_hash=ff_template.source_template_name_hash
+        name_hash=sf_template.source_template_name_hash
     )
 
     if not source_template:
         raise HTTPException(status_code=404, detail="Source template not found")
 
-    source_url = source_template.create_rss_url(**ff_template.parameters)
+    source_url = source_template.create_rss_url(**sf_template.parameters)
     source = Source(
         user_hash=user.name_hash,
-        feed_hash=ff_template.feed_hash,
-        name=ff_template.source_name,
+        feed_hash=sf_template.feed_hash,
+        name=sf_template.source_name,
         url=source_url,
     )
-    source.create()
+    feed.add_source(source)
 
     return SourceRouteModel.from_db_model(source)
 

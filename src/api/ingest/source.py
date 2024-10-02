@@ -38,12 +38,10 @@ def ingest_source(source: Source) -> None:
                 # TODO make sure we don't attempt this url over and over
 
         # generate embedding if it doesn't exist
-        embeddings_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
-        if final_item.embeddings.get(embeddings_model, None) is None:
-            try:
-                final_item.add_embedding()
-            except Exception as e:
-                logging.error(f"Error adding embedding to item: {e}")
+        try:
+            final_item.add_embedding(model_name=config.get("OLLAMA_EMBEDDING_MODEL"))
+        except Exception as e:
+            logging.error(f"Error adding embedding to item: {e}")
 
         # write item to db
         try:
