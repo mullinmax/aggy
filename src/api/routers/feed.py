@@ -66,7 +66,7 @@ def get_feed(feed_name_hash: str, user: User = Depends(authenticate)) -> FeedRes
 )
 def list_feeds(user: User = Depends(authenticate)) -> List[FeedResponse]:
     # TODO add list of sources in each feed in the response
-    return [FeedResponse.from_db_model(c) for c in user.feeds if c is not None]
+    return [FeedResponse.from_db_model(f) for f in user.feeds if f is not None]
 
 
 # get all sources in a feed
@@ -83,7 +83,8 @@ def sources(
     if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    return [SourceRouteModel.from_db_model(f) for f in feed.sources]
+    return [SourceRouteModel.from_db_model(s) for s in feed.sources]
+
 
 
 # get all items in a feed

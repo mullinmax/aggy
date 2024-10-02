@@ -19,7 +19,7 @@ class ItemBase(AggyBaseModel):
     author: Optional[str] = None
     date_published: Optional[datetime] = None
     image_url: Optional[str] = None
-    embeddinds: Optional[Dict[str, List[float]]] = None
+    embeddings: Optional[Dict[str, List[float]]] = None
 
     @property
     def key(self):
@@ -135,16 +135,25 @@ class ItemBase(AggyBaseModel):
         ]
         return "\n".join(print_attrs)
 
-    def add_embedding(self, model_name: str) -> None:
+    def add_embedding(self, model_name: str, force_refresh=False) -> None:
         # TODO write tests for this
+        # TODO make sure the input isn't truncated by the context window (often)
+        if not self.embeddings:
+            self.embeddings = {}
+
+        if model_name in self.embeddings and not force_refresh:
+            return
+
         ollama = get_ollama_connection()
 
         # get the embedding
         ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
-        embedding = ollama.embeddings(model=ollama_embedding_model, prompt=str(self))
+        embedding = ollama.embeddings(model=ollama_embedding_model, prompt=str(self))[
+            "embedding"
+        ]
 
         # add the embedding to self
-        self.embeddinds[ollama_embedding_model] = embedding
+        self.embeddings[ollama_embedding_model] = embedding
 
 
 class ItemStrict(ItemBase):
