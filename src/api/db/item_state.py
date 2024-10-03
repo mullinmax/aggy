@@ -1,10 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pydantic import confloat
+from typing import Optional
 
 from .item import ItemLoose
 from .user import User
 from .feed import Feed
 from .base import AggyBaseModel
+from config import config
 
 # class ReservedVoteReasons(Enum):
 # leaving unimplemented for now, should allow arbitrary user-defined reasons (like tags)
@@ -28,10 +30,20 @@ class ItemState(AggyBaseModel):
     score: confloat(ge=-1, le=1) = None
     score_date: datetime = None
     is_read: bool = None
+    score_estimate: Optional[float] = None
+    score_estimate_date: Optional[datetime] = None
 
     @property
     def key(self) -> str:
         return f"USER:{self.user_hash}:FEED:{self.feed_hash}:ITEM:{self.item_url_hash}:ITEM_STATE"
+
+    @property
+    def score_estimate_is_stale(self):
+        if not self.score_estimate_date:
+            return True
+
+        ttl = config.get("SCORE_ESTIMATE_TTL_HOURS")
+        return datetime.now() - self.score_estimate_date > timedelta(hours=ttl)
 
     def create(self) -> None:
         with self.db_con() as r:
@@ -74,6 +86,7 @@ class ItemState(AggyBaseModel):
         feed_hash: str,
         item_url_hash: str,
         score: confloat(ge=-1, le=1) = None,
+        score_estimate: confloat(ge=-1, le=1) = None,
         is_read: bool = None,
     ) -> None:
         item_state = cls.read(user_hash, feed_hash, item_url_hash)
@@ -88,6 +101,10 @@ class ItemState(AggyBaseModel):
         if score is not None:
             item_state.score = score
             item_state.score_date = datetime.now()
+
+        if score_estimate is not None:
+            item_state.score_estimate = score_estimate
+            item_state.score_estimate_date = datetime.now()
 
         if is_read is not None:
             item_state.is_read = is_read

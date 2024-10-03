@@ -52,33 +52,49 @@ class ScoreEstimator(AggyBaseModel):
             model=data.get("model"),
         )
 
-    def gather_training_data(self):
+    def gather_data(self, training: bool) -> tuple[list[list[float]], list[float]]:
         # get all items in the feed
         feed = Feed.read(user_hash=self.user_hash, name_hash=self.feed_hash)
-        items = feed.items
         item_states = []
+        items = []
         embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
         # get all item_states for the items
-        for item in items:
-            item_state = ItemState.read(
-                user_hash=self.user_hash,
-                feed_hash=self.feed_hash,
-                item_hash=item.item_hash,
-            )
+        for item in feed.items:
+            # we can't do anything if we don't have the embeddings
+            if item.embeddings is not None and embedding_model in item.embeddings:
+                item_state = ItemState.read(
+                    user_hash=self.user_hash,
+                    feed_hash=self.feed_hash,
+                    item_hash=item.item_hash,
+                )
 
-            # throw away any with no score or without the relevant embeddings
-            if (
-                item_state.score is None
-                or item.embeddings is None
-                or embedding_model not in item.embeddings
-            ):
-                item_states.remove(item_state)
-
-            item_states.append(item_state)
+                if training:
+                    if item_state and item_state.score is not None:
+                        item_states.append(item_state)
+                        items.append(item)
+                else:
+                    # only add if the score estimate is stale and the user hasn't already scored it
+                    if (
+                        not item_state
+                        or item_state.score is None
+                        or item_state.score_estimate_is_stale
+                    ):
+                        items.append(item)
 
         # convert into manageable format for training
         item_data = []
         scores = []
+
+        # make sure we feed inference such that it is estimating the scores for today.
+        # TODO maybe we should estimate slightly into the future?
+        if not training:
+            dummy_item_state = ItemState(
+                item_hash=item.url_hash,
+                user_hash=self.user_hash,
+                feed_hash=self.feed_hash,
+                score_date=datetime.now(),
+            )
+            item_states = [dummy_item_state] * len(items)
 
         for item, state in zip(items, item_states):
             delta = state.score_date - item.date_published
@@ -97,22 +113,24 @@ class ScoreEstimator(AggyBaseModel):
                     *item.embeddings[embedding_model],
                 ]
             )
-            scores.append(state.score)
+            if training:
+                scores.append(state.score)
+        return [i.url_hash for i in items], item_data, scores
 
     def train(self):
         # gather data
-        item_data, scores = self.gather_training_data()
+        _, item_data, scores = self.gather_training_data(training=True)
 
-        initial_model = LogisticRegression(penalty="l2", solver="lbfgs", C=1.0)
+        model = LogisticRegression(penalty="l2", solver="lbfgs", C=1.0)
 
         # train
         training_start_time = datetime.now()
-        initial_model.fit(item_data, scores)
+        model.fit(item_data, scores)
         training_end_time = datetime.now()
 
         # inference
         inference_start_time = datetime.now()
-        predictions = initial_model.predict(item_data)
+        predictions = model.predict(item_data)
         inference_end_time = datetime.now()
 
         # evaluate
@@ -125,8 +143,30 @@ class ScoreEstimator(AggyBaseModel):
 
         # save model
         model_buffer = BytesIO()
-        pickle.dump(initial_model, model_buffer, protocol=5)
+        pickle.dump(model, model_buffer, protocol=5)
         self.model = model_buffer.getvalue()
 
     def infer(self):
-        pass
+        # TODO get confidence too?
+        model = pickle.loads(self.model)
+
+        # gather data
+        item_url_hashes, item_data, _ = self.gather_data(training=False)
+
+        # infer
+        predictions = model.predict(item_data)
+
+        # save predictions
+        for item_url_hash, prediction in zip(item_url_hashes, predictions):
+            # ensure we have no out of bounds predictions
+            if prediction > 1:
+                prediction = 1
+            elif prediction < -1:
+                prediction = -1
+
+            ItemState.set_state(
+                user_hash=self.user_hash,
+                feed_hash=self.feed_hash,
+                item_url_hash=item_url_hash,
+                score=prediction,
+            )
