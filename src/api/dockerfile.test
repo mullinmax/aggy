@@ -1,14 +1,45 @@
 FROM python:3.11-alpine as aggy-api
+
+# Set the working directory
 WORKDIR /src
 
+# Set timezone environment variable
 ENV TZ=America/New_York
 
+# Install build dependencies and system libraries required for scikit-learn
+RUN apk add --no-cache --virtual .build-deps \
+    build-base \
+    gcc \
+    g++ \
+    linux-headers \
+    musl-dev \
+    python3-dev \
+    libffi-dev \
+    openblas-dev \
+    && apk add --no-cache \
+    tzdata \
+    bash \
+    && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
+    && echo "${TZ}" > /etc/timezone
+
+# Copy requirements file and install Python dependencies
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
+# Remove the build dependencies to keep the final image small
+RUN apk del .build-deps
+
+# Copy the application code
 COPY . /src/api
 
+# Set version as a build argument and environment variable
+ARG BUILD_VERSION=0.0.0-beta
+ENV BUILD_VERSION=${BUILD_VERSION}
+
+# Expose the application port
 EXPOSE 8000
 
-CMD pytest -x /src/api/tests/
+# Run the application
+CMD ["pytest","-x", "/src/api/tests/"]
