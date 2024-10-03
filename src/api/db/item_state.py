@@ -101,6 +101,7 @@ class ItemState(AggyBaseModel):
         if score is not None:
             item_state.score = score
             item_state.score_date = datetime.now()
+            # TODO trigger score estimator training
 
         if score_estimate is not None:
             item_state.score_estimate = score_estimate

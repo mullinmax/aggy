@@ -118,6 +118,8 @@ class ScoreEstimator(AggyBaseModel):
         return [i.url_hash for i in items], item_data, scores
 
     def train(self):
+        # TODO: prevent training when there's no new data since last training
+
         # gather data
         _, item_data, scores = self.gather_training_data(training=True)
 

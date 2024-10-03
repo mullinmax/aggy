@@ -1,8 +1,6 @@
 from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
-from datetime import datetime
 
-from constants import SOURCES_TO_INGEST_KEY, SOURCE_READ_INTERVAL_TIMEDELTA
 from .item_collection import ItemCollection
 
 
@@ -37,20 +35,6 @@ class Source(ItemCollection):
         with self.db_con() as r:
             r.delete(self.key)
             r.delete(self.items_key)
-
-    def trigger_ingest(self, now=False):
-        # if the source is not already in the list
-        # we're assuming it's over due to ingest
-        if now:
-            score = int(datetime.now().timestamp())
-        else:
-            score = datetime.now() + SOURCE_READ_INTERVAL_TIMEDELTA
-            score = int((score).timestamp())
-
-        with self.db_con() as r:
-            # lt=True means that if the source is already in the list
-            # it will only be updated if the new score is lower
-            r.zadd(SOURCES_TO_INGEST_KEY, mapping={self.key: score}, lt=True)
 
     @classmethod
     def read(cls, user_hash, feed_hash, source_hash):

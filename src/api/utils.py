@@ -1,7 +1,9 @@
 from ollama import Client
 from httpx import BasicAuth
+from datetime import datetime, timedelta
 
 from config import config
+from db.base import get_db_con
 
 
 def get_ollama_connection() -> Client:
@@ -28,3 +30,14 @@ def skip_limit_to_start_end(skip: int = 0, limit: int = -1) -> tuple[int, int]:
         end = start + limit - 1
 
     return (start, end)
+
+
+def schedule(que: str, key: str, interval: timedelta, now: bool = False):
+    when = datetime.now()
+    if not now:
+        when += interval
+
+    r = get_db_con()
+    # lt=True means that if the source is already in the list
+    # it will only be updated if the new "when" is lower (sooner)
+    r.zadd(que, mapping={key: int(when.timestamp())}, lt=True)

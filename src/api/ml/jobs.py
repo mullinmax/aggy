@@ -1,12 +1,12 @@
 from db.user import User
+from utils import schedule
 
 
 def score_estimate_training_scheduling_job() -> None:
     users = User.read_all()
     for user in users:
         for feed in user.feeds:
-            for source in feed.sources:
-                source.trigger_score_estimate_training(now=False)
+            schedule()
 
 
 # def score_estimate_inference_scheduling_job() -> None:

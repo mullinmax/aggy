@@ -6,7 +6,7 @@ from db.base import get_db_con
 from db.source import Source
 from ingest.source import ingest_source
 from db.user import User
-from utils import get_ollama_connection
+from utils import get_ollama_connection, schedule
 from config import config
 
 
@@ -15,7 +15,11 @@ def source_ingestion_scheduling_job() -> None:
     for user in users:
         for feed in user.feeds:
             for source in feed.sources:
-                source.trigger_ingest(now=False)
+                schedule(
+                    que=SOURCES_TO_INGEST_KEY,
+                    key=source.key,
+                    interval=SOURCE_READ_INTERVAL_TIMEDELTA,
+                )
 
 
 def source_ingestion_job() -> None:
@@ -47,9 +51,11 @@ def source_ingestion_job() -> None:
         return
 
     # reschedule the source for next go-round
-    next_process_time = scheduled_time + SOURCE_READ_INTERVAL_TIMEDELTA
-    next_process_time = int(next_process_time.timestamp())
-    r.zadd(SOURCES_TO_INGEST_KEY, mapping={source_key: next_process_time}, lt=True)
+    schedule(
+        que=SOURCES_TO_INGEST_KEY,
+        key=source_key,
+        interval=SOURCE_READ_INTERVAL_TIMEDELTA,
+    )
 
 
 def download_embedding_model_job() -> None:
