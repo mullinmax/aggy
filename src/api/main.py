@@ -29,7 +29,7 @@ async def app_lifespan(app: FastAPI):
     scheduler.add_job(
         func=source_ingestion_scheduling_job,
         trigger="interval",
-        seconds=60 * config.get("SOURCE_READ_INTERVAL_MINUTES"),
+        seconds=60 * config.get("SOURCE_INGESTION_INTERVAL_MINUTES"),
         id="source_ingestion_scheduling_job",
         replace_existing=False,
         next_run_time=datetime.now(),

@@ -42,8 +42,8 @@ class ItemState(AggyBaseModel):
         if not self.score_estimate_date:
             return True
 
-        ttl = config.get("SCORE_ESTIMATE_TTL_HOURS")
-        return datetime.now() - self.score_estimate_date > timedelta(hours=ttl)
+        ttl = config.get("SCORE_ESTIMATE_REFRESH_HOURS")
+        return self.score_estimate_date > datetime.now() + timedelta(hours=ttl)
 
     def create(self) -> None:
         with self.db_con() as r:

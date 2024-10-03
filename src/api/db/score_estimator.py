@@ -28,9 +28,6 @@ class ScoreEstimator(AggyBaseModel):
         return f"USER:{self.user_hash}:FEED:{self.feed_hash}:SCORE_ESTIMATOR"
 
     def create(self):
-        if self.exists():
-            raise Exception("ScoreEstimator already exists")
-
         with self.db_con() as r:
             r.set(self.key, self.model_dump_json())
 
@@ -39,18 +36,16 @@ class ScoreEstimator(AggyBaseModel):
     @classmethod
     def read(cls, user_hash, feed_hash) -> Optional["ScoreEstimator"]:
         key = f"USER:{user_hash}:FEED:{feed_hash}:SCORE_ESTIMATOR"
+        return cls.read_by_key(key)
+
+    @classmethod
+    def read_by_key(cls, key):
         with cls.db_con() as r:
-            data = r.hgetall(key)
+            item_json = r.get(key)
 
-        if not data:
-            return None
-
-        return cls(
-            user_hash=user_hash,
-            feed_hash=feed_hash,
-            training_date=datetime.fromisoformat(data["training_date"]),
-            model=data.get("model"),
-        )
+        if item_json:
+            return cls.model_validate_json(item_json)
+        return None
 
     def gather_data(self, training: bool) -> tuple[list[list[float]], list[float]]:
         # get all items in the feed
@@ -77,7 +72,7 @@ class ScoreEstimator(AggyBaseModel):
                     if (
                         not item_state
                         or item_state.score is None
-                        or item_state.score_estimate_is_stale
+                        or item_state.score_estimate_is_stale  # no estimate is also stale
                     ):
                         items.append(item)
 

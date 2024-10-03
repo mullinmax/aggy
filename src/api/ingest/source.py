@@ -7,6 +7,11 @@ from db.feed import Feed
 from ingest.item.rss import ingest_rss_item
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
+from utils import schedule
+from constants import (
+    SCORE_ESTIMATORS_TO_INFER_QUE,
+    SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
+)
 
 
 def ingest_source(source: Source) -> None:
@@ -54,4 +59,11 @@ def ingest_source(source: Source) -> None:
 
         source.add_items(final_item)
         feed.add_items(final_item)
-    feed.trigger_score_prediction(now=True)
+
+    # get these new items scored
+    schedule(
+        que=SCORE_ESTIMATORS_TO_INFER_QUE,
+        key=feed.key,
+        interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
+        now=True,
+    )
