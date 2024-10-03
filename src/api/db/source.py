@@ -2,6 +2,8 @@ from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
 
 from .item_collection import ItemCollection
+from utils import schedule
+from constants import SOURCE_READ_INTERVAL_TIMEDELTA, SOURCES_TO_INGEST_QUE
 
 
 class Source(ItemCollection):
@@ -28,7 +30,14 @@ class Source(ItemCollection):
                 raise Exception(f"Cannot create duplicate source {self.key}")
 
             r.hset(self.key, mapping={"url": str(self.url), "name": self.name})
-            self.trigger_ingest(now=True)
+
+            # make sure this new source gets ingested right away
+            schedule(
+                que=SOURCES_TO_INGEST_QUE,
+                key=self.key,
+                interval=SOURCE_READ_INTERVAL_TIMEDELTA,
+                now=True,
+            )
         return
 
     def delete(self):
