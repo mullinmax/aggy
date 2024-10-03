@@ -10,6 +10,8 @@ from ingest.item.mercury import ingest_mercury_item
 
 
 def ingest_source(source: Source) -> None:
+    feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
+
     entries = feedparser.parse(str(source.url)).entries
 
     for entry in entries:
@@ -51,5 +53,5 @@ def ingest_source(source: Source) -> None:
             continue
 
         source.add_items(final_item)
-        feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
         feed.add_items(final_item)
+    feed.trigger_score_prediction(now=True)

@@ -6,6 +6,7 @@ dateparser
 fastapi
 feedparser
 httpx
+numpy
 ollama
 pre-commit
 PyJWT
@@ -15,4 +16,5 @@ python-multipart
 rapidfuzz
 redis
 requests
+scikit-learn
 uvicorn

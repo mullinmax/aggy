@@ -20,6 +20,8 @@ class ItemBase(AggyBaseModel):
     date_published: Optional[datetime] = None
     image_url: Optional[str] = None
     embeddings: Optional[Dict[str, List[float]]] = None
+    score_estimate: Optional[float] = None
+    score_estimate_date: Optional[datetime] = None
 
     @property
     def key(self):
