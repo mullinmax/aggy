@@ -65,17 +65,17 @@ def next_scheduled_key(
 ):
     r = get_db_con()
     if not r.exists(que):
-        return
+        yield None
+    else:
+        key, scheduled_time = r.zmpop(1, [que], min=True)[1][0]
+        scheduled_time = datetime.fromtimestamp(int(scheduled_time))
 
-    key, scheduled_time = r.zmpop(1, [que], min=True)[1][0]
-    scheduled_time = datetime.fromtimestamp(int(scheduled_time))
+        # if the source isn't due yet put it back in the queue
+        if scheduled_time <= datetime.now() + window:
+            schedule(que, key, at=scheduled_time)
+            yield None
+        else:
+            yield key
 
-    # if the source isn't due yet put it back in the queue
-    if scheduled_time <= datetime.now() + window:
-        schedule(que, key, at=scheduled_time)
-        return
-
-    yield key
-
-    if reschedule:
-        schedule(que, key, at=scheduled_time + interval)
+        if reschedule:
+            schedule(que, key, at=scheduled_time + interval)

@@ -25,6 +25,8 @@ def source_ingestion_job() -> None:
         que=SOURCES_TO_INGEST_QUE,
         interval=SOURCE_READ_INTERVAL_TIMEDELTA,
     ) as source_key:
+        if source_key is None:
+            return
         try:
             source = Source.read_by_key(source_key=source_key)
             ingest_source(source=source)

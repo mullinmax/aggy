@@ -41,6 +41,8 @@ def score_estimate_trainging_job() -> None:
         que=SCORE_ESTIMATORS_TO_TRAIN_QUE,
         interval=SCORE_ESTIMATE_TRAINING_INTERVAL_TIMEDELTA,
     ) as score_estimator_key:
+        if score_estimator_key is None:
+            return
         try:
             logging.info(f"Training score estimator for {score_estimator_key}")
             score_estimator = ScoreEstimator.read_by_key(score_estimator_key)
@@ -72,6 +74,8 @@ def score_estimate_inference_job() -> None:
         que=SCORE_ESTIMATORS_TO_INFER_QUE,
         interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
     ) as score_estimator_key:
+        if score_estimator_key is None:
+            return
         try:
             logging.info(f"Inferencing score estimator for {score_estimator_key}")
             score_estimator = ScoreEstimator.read_by_key(score_estimator_key)
