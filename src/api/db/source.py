@@ -3,7 +3,7 @@ from typing_extensions import Annotated
 
 from .item_collection import ItemCollection
 from utils import schedule
-from constants import SOURCE_READ_INTERVAL_TIMEDELTA, SOURCES_TO_INGEST_QUE
+from constants import SOURCE_READ_INTERVAL_TIMEDELTA, SOURCES_TO_INGEST_QUEUE
 
 
 class Source(ItemCollection):
@@ -33,7 +33,7 @@ class Source(ItemCollection):
 
             # make sure this new source gets ingested right away
             schedule(
-                que=SOURCES_TO_INGEST_QUE,
+                queue=SOURCES_TO_INGEST_QUEUE,
                 key=self.key,
                 interval=SOURCE_READ_INTERVAL_TIMEDELTA,
                 now=True,

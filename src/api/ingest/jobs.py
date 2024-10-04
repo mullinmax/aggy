@@ -1,6 +1,6 @@
 import logging
 
-from constants import SOURCES_TO_INGEST_QUE, SOURCE_READ_INTERVAL_TIMEDELTA
+from constants import SOURCES_TO_INGEST_QUEUE, SOURCE_READ_INTERVAL_TIMEDELTA
 from db.source import Source
 from ingest.source import ingest_source
 from db.user import User
@@ -14,7 +14,7 @@ def source_ingestion_scheduling_job() -> None:
         for feed in user.feeds:
             for source in feed.sources:
                 schedule(
-                    que=SOURCES_TO_INGEST_QUE,
+                    queue=SOURCES_TO_INGEST_QUEUE,
                     key=source.key,
                     interval=SOURCE_READ_INTERVAL_TIMEDELTA,
                 )
@@ -22,9 +22,10 @@ def source_ingestion_scheduling_job() -> None:
 
 def source_ingestion_job() -> None:
     with next_scheduled_key(
-        que=SOURCES_TO_INGEST_QUE,
+        queue=SOURCES_TO_INGEST_QUEUE,
         interval=SOURCE_READ_INTERVAL_TIMEDELTA,
     ) as source_key:
+        print("source_ingestion_job", source_key)
         if source_key is None:
             return
         try:

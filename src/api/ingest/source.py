@@ -9,7 +9,7 @@ from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 from utils import schedule
 from constants import (
-    SCORE_ESTIMATORS_TO_INFER_QUE,
+    SCORE_ESTIMATORS_TO_INFER_QUEUE,
     SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
 )
 
@@ -62,7 +62,7 @@ def ingest_source(source: Source) -> None:
 
     # get these new items scored
     schedule(
-        que=SCORE_ESTIMATORS_TO_INFER_QUE,
+        queue=SCORE_ESTIMATORS_TO_INFER_QUEUE,
         key=feed.key,
         interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
         now=True,

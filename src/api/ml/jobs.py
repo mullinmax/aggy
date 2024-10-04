@@ -4,8 +4,8 @@ from db.user import User
 from db.score_estimator import ScoreEstimator
 from utils import schedule, next_scheduled_key
 from constants import (
-    SCORE_ESTIMATORS_TO_TRAIN_QUE,
-    SCORE_ESTIMATORS_TO_INFER_QUE,
+    SCORE_ESTIMATORS_TO_TRAIN_QUEUE,
+    SCORE_ESTIMATORS_TO_INFER_QUEUE,
     SCORE_ESTIMATE_TRAINING_INTERVAL_TIMEDELTA,
     SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
 )
@@ -16,7 +16,7 @@ def score_estimate_training_scheduling_job() -> None:
     for user in users:
         for feed in user.feeds:
             schedule(
-                que=SCORE_ESTIMATORS_TO_TRAIN_QUE,
+                queue=SCORE_ESTIMATORS_TO_TRAIN_QUEUE,
                 key=feed.key,
                 interval=SCORE_ESTIMATE_TRAINING_INTERVAL_TIMEDELTA,
             )
@@ -30,7 +30,7 @@ def score_estimate_inference_scheduling_job() -> None:
                 user_hash=feed.user_hash, feed_hash=feed.name_hash
             )
             schedule(
-                que=SCORE_ESTIMATORS_TO_INFER_QUE,
+                queue=SCORE_ESTIMATORS_TO_INFER_QUEUE,
                 key=score_estimator.key,
                 interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
             )
@@ -38,7 +38,7 @@ def score_estimate_inference_scheduling_job() -> None:
 
 def score_estimate_trainging_job() -> None:
     with next_scheduled_key(
-        que=SCORE_ESTIMATORS_TO_TRAIN_QUE,
+        queue=SCORE_ESTIMATORS_TO_TRAIN_QUEUE,
         interval=SCORE_ESTIMATE_TRAINING_INTERVAL_TIMEDELTA,
     ) as score_estimator_key:
         if score_estimator_key is None:
@@ -57,7 +57,7 @@ def score_estimate_trainging_job() -> None:
 
             # schedule the next inference for now, since we have a new model
             schedule(
-                que=SCORE_ESTIMATORS_TO_INFER_QUE,
+                queue=SCORE_ESTIMATORS_TO_INFER_QUEUE,
                 key=score_estimator_key,
                 interval=SCORE_ESTIMATE_TRAINING_INTERVAL_TIMEDELTA,
                 now=True,
@@ -71,7 +71,7 @@ def score_estimate_trainging_job() -> None:
 
 def score_estimate_inference_job() -> None:
     with next_scheduled_key(
-        que=SCORE_ESTIMATORS_TO_INFER_QUE,
+        queue=SCORE_ESTIMATORS_TO_INFER_QUEUE,
         interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
     ) as score_estimator_key:
         if score_estimator_key is None:
