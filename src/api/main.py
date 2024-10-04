@@ -3,7 +3,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 from contextlib import asynccontextmanager
 import uvicorn
-from datetime import datetime
 
 from config import config
 from routers.admin import admin_router
@@ -12,12 +11,7 @@ from routers.feed import feed_router
 from routers.source_template import source_template_router
 from routers.source import source_router
 from routers.item import item_router
-from bridge.jobs import rss_bridge_get_templates_job
-from ingest.jobs import (
-    source_ingestion_scheduling_job,
-    source_ingestion_job,
-    download_embedding_model_job,
-)
+from job_registry import jobs
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
@@ -26,43 +20,9 @@ scheduler = AsyncIOScheduler()
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     logging.info("API starting up...")
-    scheduler.add_job(
-        func=source_ingestion_scheduling_job,
-        trigger="interval",
-        seconds=60 * config.get("SOURCE_INGESTION_INTERVAL_MINUTES"),
-        id="source_ingestion_scheduling_job",
-        replace_existing=False,
-        next_run_time=datetime.now(),
-    )
 
-    # add scheduler job for ingesting sources every n seconds
-    scheduler.add_job(
-        func=source_ingestion_job,
-        trigger="interval",
-        seconds=config.get("SOURCE_INGESTION_RUN_INTERVAL_SECONDS"),
-        id="source_ingestion_job",
-        replace_existing=False,
-        next_run_time=datetime.now(),
-    )
-
-    # add scheduler job for parsing the rss bridge templates every 12 hours
-    scheduler.add_job(
-        func=rss_bridge_get_templates_job,
-        trigger="interval",
-        seconds=60 * 60 * 12,
-        id="rss_bridge_get_templates_job",
-        replace_existing=False,
-        next_run_time=datetime.now(),
-    )
-
-    # add scheduler job for downloading the embedding model once at start up
-    scheduler.add_job(
-        func=download_embedding_model_job,
-        trigger="date",
-        run_date=datetime.now(),
-        id="download_embedding_model_job",
-        replace_existing=False,
-    )
+    for job in jobs:
+        scheduler.add_job(**job)
 
     scheduler.start()
 
