@@ -1,4 +1,3 @@
-import logging
 from ollama import Client
 from httpx import BasicAuth
 from datetime import datetime, timedelta
@@ -60,7 +59,6 @@ def schedule(
     r = get_db_con()
     # lt=True means that if the source is already in the list
     # it will only be updated if the new "when" is lower (sooner)
-    logging.info(f"Scheduling {key} for {when} in QUEUE {queue}")
     r.zadd(queue, mapping={key: int(when.timestamp())}, lt=True)
 
 
@@ -81,7 +79,7 @@ def next_scheduled_key(
         scheduled_time = datetime.fromtimestamp(int(scheduled_time))
 
         # if the source isn't due yet put it back in the queue
-        if scheduled_time <= datetime.now() + window:
+        if scheduled_time > datetime.now() + window:
             schedule(queue, key, at=scheduled_time)
             yield None
         else:

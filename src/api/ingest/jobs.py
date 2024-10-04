@@ -25,7 +25,6 @@ def source_ingestion_job() -> None:
         queue=SOURCES_TO_INGEST_QUEUE,
         interval=SOURCE_READ_INTERVAL_TIMEDELTA,
     ) as source_key:
-        print("source_ingestion_job", source_key)
         if source_key is None:
             return
         try:
