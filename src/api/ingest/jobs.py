@@ -4,7 +4,7 @@ from constants import SOURCES_TO_INGEST_QUEUE, SOURCE_READ_INTERVAL_TIMEDELTA
 from db.source import Source
 from ingest.source import ingest_source
 from db.user import User
-from utils import get_ollama_connection, schedule, next_scheduled_key
+from utils import get_ollama_connection, schedule, scheduled_keys
 from config import config
 
 
@@ -21,10 +21,9 @@ def source_ingestion_scheduling_job() -> None:
 
 
 def source_ingestion_job() -> None:
-    with next_scheduled_key(
-        queue=SOURCES_TO_INGEST_QUEUE,
-        interval=SOURCE_READ_INTERVAL_TIMEDELTA,
-    ) as source_key:
+    for source_key in scheduled_keys(
+        queue=SOURCES_TO_INGEST_QUEUE, interval=SOURCE_READ_INTERVAL_TIMEDELTA
+    ):
         if source_key is None:
             return
         try:

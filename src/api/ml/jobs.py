@@ -2,7 +2,7 @@ import logging
 
 from db.user import User
 from db.score_estimator import ScoreEstimator
-from utils import schedule, next_scheduled_key
+from utils import schedule, scheduled_keys
 from constants import (
     SCORE_ESTIMATORS_TO_TRAIN_QUEUE,
     SCORE_ESTIMATORS_TO_INFER_QUEUE,
@@ -37,10 +37,10 @@ def score_estimate_inference_scheduling_job() -> None:
 
 
 def score_estimate_trainging_job() -> None:
-    with next_scheduled_key(
+    for score_estimator_key in scheduled_keys(
         queue=SCORE_ESTIMATORS_TO_TRAIN_QUEUE,
         interval=SCORE_ESTIMATE_TRAINING_INTERVAL_TIMEDELTA,
-    ) as score_estimator_key:
+    ):
         if score_estimator_key is None:
             return
         try:
@@ -70,10 +70,10 @@ def score_estimate_trainging_job() -> None:
 
 
 def score_estimate_inference_job() -> None:
-    with next_scheduled_key(
+    for score_estimator_key in scheduled_keys(
         queue=SCORE_ESTIMATORS_TO_INFER_QUEUE,
         interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
-    ) as score_estimator_key:
+    ):
         if score_estimator_key is None:
             return
         try:

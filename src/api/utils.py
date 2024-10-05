@@ -1,7 +1,6 @@
 from ollama import Client
 from httpx import BasicAuth
 from datetime import datetime, timedelta
-from contextlib import contextmanager
 
 from config import config
 from db.base import get_db_con
@@ -62,28 +61,28 @@ def schedule(
     r.zadd(queue, mapping={key: int(when.timestamp())}, lt=True)
 
 
-# context manager to enable getting the next item from a queue
-# and then rescheduling it
-@contextmanager
-def next_scheduled_key(
+def scheduled_keys(
     queue: str,
     interval: timedelta,
     window: timedelta = timedelta(seconds=60),
     reschedule=True,
 ):
+    """Generator that yields the next key to be processed from the queue."""
     r = get_db_con()
-    if not r.exists(queue):
-        yield None
-    else:
+    while True:
+        if not r.exists(queue):
+            return
+
         key, scheduled_time = r.zmpop(1, [queue], min=True)[1][0]
         scheduled_time = datetime.fromtimestamp(int(scheduled_time))
 
-        # if the source isn't due yet put it back in the queue
+        # if the key isn't due yet, put it back in the queue
         if scheduled_time > datetime.now() + window:
             schedule(queue, key, at=scheduled_time)
-            yield None
+            return
         else:
             yield key
 
+        # Reschedule the key after processing
         if reschedule:
             schedule(queue, key, interval=interval, at=scheduled_time + interval)
