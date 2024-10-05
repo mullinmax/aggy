@@ -1,4 +1,5 @@
 import os
+from rapidfuzz import fuzz
 
 KNOWN_CONFIG_VALUES = [
     "SOURCE_INGESTION_INTERVAL_MINUTES",
@@ -78,7 +79,13 @@ class Config:
         return self.config[key]
 
     def set(self, key, value):
-        self.config[key] = value
+        if key not in KNOWN_CONFIG_VALUES:
+            closest_match = max(KNOWN_CONFIG_VALUES, key=lambda x: fuzz.ratio(x, key))
+            raise ConfigError(
+                f"Tried to set unknown configuration key: '{key}'. Did you mean '{closest_match}'?"
+            )
+        else:
+            self.config[key] = value
 
 
 config = Config()

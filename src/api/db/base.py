@@ -25,7 +25,7 @@ class AggyBaseModel(BaseModel):
 
     @property
     def as_dict(self) -> dict:
-        return json.loads(self.json())
+        return json.loads(self.json)
 
     @property
     def json(self) -> str:

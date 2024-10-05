@@ -22,3 +22,15 @@ def test_base_create_raises_not_implemented_error():
     model = AggyBaseModel()
     with pytest.raises(NotImplementedError):
         model.create()
+
+
+def test_as_dict():
+    model = AggyBaseModel()
+    assert isinstance(model.as_dict, dict)
+    assert model.as_dict == {}
+
+
+def test_str_and_repr():
+    model = AggyBaseModel()
+    assert str(model) == model.json
+    assert repr(model) == str(model)

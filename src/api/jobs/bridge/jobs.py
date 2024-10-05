@@ -62,7 +62,7 @@ def parse_parameters(form):
 
 def rss_bridge_get_templates_job() -> None:
     if config.get("RSS_BRIDGE_HOST") is None:
-        logging.info("RSS_BRIDGE_HOST is not set in the config")
+        logging.warning("RSS_BRIDGE_HOST is not set in the config")
         return
 
     try:
@@ -100,7 +100,7 @@ def rss_bridge_get_templates_job() -> None:
                 bridge_list.append(bridge_template)
 
         for bridge in bridge_list:
-            logging.info(f"rss-ridge template created: {bridge.user_friendly_name}")
+            logging.info(f"rss-bridge template created: {bridge.user_friendly_name}")
 
         logging.info(f"Total rss-bridge templates created: {len(bridge_list)}")
 
