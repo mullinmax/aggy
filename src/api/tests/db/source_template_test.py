@@ -5,6 +5,8 @@ from db.source_template import (
     SourceTemplateParameterType,
 )
 
+from config import config
+
 
 def test_create_source_template(unique_source_template):
     assert unique_source_template.exists() is False
@@ -61,7 +63,7 @@ def test_create_rss_url(existing_source_template):
 
     assert (
         rss_url
-        == "http://dev-aggy-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
+        == f"http://{config.get('RSS_BRIDGE_HOST')}:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
 
 
@@ -110,7 +112,7 @@ def test_create_rss_url_use_default_parameters(unique_source_template):
     rss_url = unique_source_template.create_rss_url()
     assert (
         rss_url
-        == "http://dev-aggy-rss-bridge:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=default_value"
+        == f"http://{config.get('RSS_BRIDGE_HOST')}:80/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=default_value"
     )
 
 
