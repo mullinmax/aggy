@@ -54,13 +54,13 @@ class ScoreEstimator(AggyBaseModel):
         items = []
         embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
         # get all item_states for the items
-        for item in feed.items:
+        for item in feed.query_items():
             # we can't do anything if we don't have the embeddings
             if item.embeddings is not None and embedding_model in item.embeddings:
                 item_state = ItemState.read(
                     user_hash=self.user_hash,
                     feed_hash=self.feed_hash,
-                    item_hash=item.item_hash,
+                    item_url_hash=item.url_hash,
                 )
 
                 if training:
@@ -84,7 +84,7 @@ class ScoreEstimator(AggyBaseModel):
         # TODO maybe we should estimate slightly into the future?
         if not training:
             dummy_item_state = ItemState(
-                item_hash=item.url_hash,
+                item_url_hash=item.url_hash,
                 user_hash=self.user_hash,
                 feed_hash=self.feed_hash,
                 score_date=datetime.now(),
