@@ -11,7 +11,7 @@ from routers.feed import feed_router
 from routers.source_template import source_template_router
 from routers.source import source_router
 from routers.item import item_router
-from job_registry import jobs
+from jobs.job_registry import jobs
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()

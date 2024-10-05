@@ -2,7 +2,7 @@ import logging
 
 from constants import SOURCES_TO_INGEST_QUEUE, SOURCE_READ_INTERVAL_TIMEDELTA
 from db.source import Source
-from ingest.source import ingest_source
+from .source import ingest_source
 from db.user import User
 from utils import get_ollama_connection, schedule, scheduled_keys
 from config import config

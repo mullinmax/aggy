@@ -1,14 +1,14 @@
 from datetime import datetime
 
 from config import config
-from ml.jobs import (
+from jobs.ml.jobs import (
     score_estimate_training_scheduling_job,
     score_estimate_inference_scheduling_job,
     score_estimate_trainging_job,
     score_estimate_inference_job,
 )
-from bridge.jobs import rss_bridge_get_templates_job
-from ingest.jobs import (
+from jobs.bridge.jobs import rss_bridge_get_templates_job
+from jobs.ingest.jobs import (
     source_ingestion_scheduling_job,
     source_ingestion_job,
     download_embedding_model_job,

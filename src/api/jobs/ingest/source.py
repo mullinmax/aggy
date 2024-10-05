@@ -4,9 +4,9 @@ from config import config
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
-from ingest.item.rss import ingest_rss_item
-from ingest.item.open_graph import ingest_open_graph_item
-from ingest.item.mercury import ingest_mercury_item
+from .item.rss import ingest_rss_item
+from .item.open_graph import ingest_open_graph_item
+from .item.mercury import ingest_mercury_item
 from utils import schedule
 from constants import (
     SCORE_ESTIMATORS_TO_INFER_QUEUE,
