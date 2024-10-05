@@ -46,9 +46,13 @@ app.include_router(source_router, prefix="/source", tags=["Sources"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
 
 
-if __name__ == "__main__":
+def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
