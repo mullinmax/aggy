@@ -1,12 +1,9 @@
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_score, accuracy_score
+from sklearn.linear_model import ElasticNet
 from datetime import datetime, timedelta
 from config import config
 from io import BytesIO
 import pickle
 from typing import Optional
-
-
 from .base import AggyBaseModel
 from .item_state import ItemState
 from .feed import Feed
@@ -19,8 +16,6 @@ class ScoreEstimator(AggyBaseModel):
     training_date: Optional[datetime]
     training_time: Optional[timedelta]
     inference_time: Optional[timedelta]
-    accuracy: Optional[float]
-    precision: Optional[float]
     model: Optional[bytes]
 
     @property
@@ -48,14 +43,12 @@ class ScoreEstimator(AggyBaseModel):
         return None
 
     def gather_data(self, training: bool) -> tuple[list[list[float]], list[float]]:
-        # get all items in the feed
         feed = Feed.read(user_hash=self.user_hash, name_hash=self.feed_hash)
         item_states = []
         items = []
         embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
-        # get all item_states for the items
+
         for item in feed.query_items():
-            # we can't do anything if we don't have the embeddings
             if item.embeddings is not None and embedding_model in item.embeddings:
                 item_state = ItemState.read(
                     user_hash=self.user_hash,
@@ -68,20 +61,16 @@ class ScoreEstimator(AggyBaseModel):
                         item_states.append(item_state)
                         items.append(item)
                 else:
-                    # only add if the score estimate is stale and the user hasn't already scored it
                     if (
                         not item_state
                         or item_state.score is None
-                        or item_state.score_estimate_is_stale  # no estimate is also stale
+                        or item_state.score_estimate_is_stale
                     ):
                         items.append(item)
 
-        # convert into manageable format for training
         item_data = []
         scores = []
 
-        # make sure we feed inference such that it is estimating the scores for today.
-        # TODO maybe we should estimate slightly into the future?
         if not training:
             dummy_item_state = ItemState(
                 item_url_hash=item.url_hash,
@@ -113,49 +102,40 @@ class ScoreEstimator(AggyBaseModel):
         return [i.url_hash for i in items], item_data, scores
 
     def train(self):
-        # TODO: prevent training when there's no new data since last training
+        _, item_data, scores = self.gather_data(training=True)
 
-        # gather data
-        _, item_data, scores = self.gather_training_data(training=True)
-
-        model = LogisticRegression(penalty="l2", solver="lbfgs", C=1.0)
+        # Use ElasticNet instead of LinearRegression
+        model = ElasticNet(alpha=1.0, l1_ratio=0.5)
 
         # train
         training_start_time = datetime.now()
         model.fit(item_data, scores)
         training_end_time = datetime.now()
 
-        # inference
+        # inference (on the training set)
         inference_start_time = datetime.now()
-        predictions = model.predict(item_data)
+        model.predict(item_data)
         inference_end_time = datetime.now()
 
         # evaluate
         self.training_rows = len(item_data)
-        self.precision = precision_score(scores, predictions)
-        self.accuracy = accuracy_score(scores, predictions)
         self.training_date = datetime.now()
         self.training_time = training_end_time - training_start_time
         self.inference_time = inference_end_time - inference_start_time
 
-        # save model
+        # save model as bytes
         model_buffer = BytesIO()
         pickle.dump(model, model_buffer, protocol=5)
         self.model = model_buffer.getvalue()
 
     def infer(self):
-        # TODO get confidence too?
         model = pickle.loads(self.model)
 
-        # gather data
         item_url_hashes, item_data, _ = self.gather_data(training=False)
 
-        # infer
         predictions = model.predict(item_data)
 
-        # save predictions
         for item_url_hash, prediction in zip(item_url_hashes, predictions):
-            # ensure we have no out of bounds predictions
             if prediction > 1:
                 prediction = 1
             elif prediction < -1:

@@ -12,8 +12,6 @@ def unique_score_estimator(unique_user, unique_feed) -> ScoreEstimator:
         training_date="2021-01-01",
         training_time="00:00:00",
         inference_time="00:00:00",
-        accuracy=0.8,
-        precision=0.9,
         model=b"model",
     )
 

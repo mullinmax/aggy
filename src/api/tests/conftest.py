@@ -2,6 +2,10 @@
 from tests.fixtures.feed import unique_feed, existing_feed  # noqa
 from tests.fixtures.item import unique_item_strict, existing_item_strict  # noqa
 from tests.fixtures.item_state import unique_item_state, existing_item_state  # noqa
+from tests.fixtures.score_estimator import (  # noqa
+    unique_score_estimator,  # noqa
+    existing_score_estimator,  # noqa
+)  # noqa
 from tests.fixtures.source import unique_source, existing_source  # noqa
 from tests.fixtures.source_template import (  # noqa
     unique_source_template,  # noqa
