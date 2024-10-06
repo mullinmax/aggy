@@ -1,4 +1,6 @@
 import requests
+import time
+import random
 
 # curl_request() {
 #   echo "Executing curl command: curl -sS -w '\n%{http_code}' $@"
@@ -152,6 +154,28 @@ def create_source(token, feed_hash, source_name, source_template_hash):
     return response.json()
 
 
+# get items in a feed
+# curl -X 'GET' \
+#   'https://codehostapi.doze.dev/feed/items?feed_name_hash=W92kkqdisfQCCEwbGeEwm513KqqHGVmragzkdOJ5znE' \
+def get_feed_items(token, feed_hash):
+    response = requests.get(
+        f"https://codehostapi.doze.dev/feed/items?feed_name_hash={feed_hash}",
+        headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    return response.json()
+
+
+# set item state
+# curl -X 'POST' \
+#   'https://codehostapi.doze.dev/item/set_state?feed_hash=W92kkqdisfQCCEwbGeEwm513KqqHGVmragzkdOJ5znE&item_url_hash=29b64tG1GnJ-CPcdSiEYrl83um_MDbBXe1A0ZybjY9g&score=0.5&is_read=true' \
+def set_item_state(token, feed_hash, item_hash, score, is_read):
+    response = requests.post(
+        f"https://codehostapi.doze.dev/item/set_state?feed_hash={feed_hash}&item_url_hash={item_hash}&score={score}&is_read={is_read}",
+        headers={"accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    return response.json()
+
+
 def main():
     create_user("user", "pass")
     token = login("user", "pass")
@@ -187,6 +211,17 @@ def main():
         token, feed_hash, source_template_name, source_template_hash
     )
     print("Source name hash:", source_name_hash)
+
+    time.sleep(5)
+
+    items = None
+    while items is None or len(items) == 0:
+        items = get_feed_items(token, feed_hash)
+        time.sleep(1)
+
+    # set the score to a random number between -1 and 1
+    for item in items:
+        set_item_state(token, feed_hash, item["item_hash"], random.uniform(-1, 1), True)
 
 
 if __name__ == "__main__":

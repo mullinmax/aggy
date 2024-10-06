@@ -2,6 +2,7 @@ from tests.testing_utils import build_api_request_args
 
 from db.source import Source
 from db.source_template import SourceTemplate
+from config import config
 
 
 def test_create_source_template(unique_source_template):
@@ -50,7 +51,7 @@ def test_create_source_from_template(
     assert res_data["source_name_hash"] == new_source.name_hash
     assert (
         res_data["source_url"]
-        == "http://dev-aggy-rss-bridge/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
+        == f"http://{config.get('RSS_BRIDGE_HOST')}/?action=display&bridge=test&format=Atom&context=by+user&parameter_name=value"
     )
     assert str(new_source.url) == res_data["source_url"]
     assert res_data["source_feed"] == existing_feed.name_hash

@@ -22,7 +22,6 @@ services:
       - 80
 
   dev-aggy-ollama:
-    container_name: "${DEV_NAME}-aggy-ollama"
     image: ollama/ollama:latest
     restart: unless-stopped
     ports:

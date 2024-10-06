@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime
 
 from db.item import ItemStrict
+from config import config
 
 
 @pytest.fixture(scope="function")
@@ -15,6 +16,7 @@ def unique_item_strict(unique_feed):
         domain="example.com",
         excerpt="Example excerpt",
         content="Example content",
+        embeddings={config.get("OLLAMA_EMBEDDING_MODEL"): [0, 0.5, 1]},
     )
 
     yield item

@@ -4,12 +4,19 @@ from config import config
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
-from ingest.item.rss import ingest_rss_item
-from ingest.item.open_graph import ingest_open_graph_item
-from ingest.item.mercury import ingest_mercury_item
+from .item.rss import ingest_rss_item
+from .item.open_graph import ingest_open_graph_item
+from .item.mercury import ingest_mercury_item
+from utils import schedule
+from constants import (
+    SCORE_ESTIMATORS_TO_INFER_QUEUE,
+    SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
+)
 
 
 def ingest_source(source: Source) -> None:
+    feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
+
     entries = feedparser.parse(str(source.url)).entries
 
     for entry in entries:
@@ -51,5 +58,12 @@ def ingest_source(source: Source) -> None:
             continue
 
         source.add_items(final_item)
-        feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
         feed.add_items(final_item)
+
+    # get these new items scored
+    schedule(
+        queue=SCORE_ESTIMATORS_TO_INFER_QUEUE,
+        key=feed.key,
+        interval=SCORE_ESTIMATE_INFERENCE_INTERVAL_TIMEDELTA,
+        now=True,
+    )

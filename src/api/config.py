@@ -1,8 +1,13 @@
 import os
+from rapidfuzz import fuzz
 
 KNOWN_CONFIG_VALUES = [
-    "SOURCE_READ_INTERVAL_MINUTES",
+    "SOURCE_INGESTION_INTERVAL_MINUTES",
     "SOURCE_INGESTION_RUN_INTERVAL_SECONDS",
+    "SCORE_ESTIMATE_TRAINING_INTERVAL_HOURS",
+    "SCORE_ESTIMATE_TRAINING_RUN_INTERVAL_SECONDS",
+    "SCORE_ESTIMATE_REFRESH_HOURS",
+    "SCORE_ESTIMATE_REFRESH_RUN_INTERVAL_SECONDS",
     "PYTEST_RUNTIME_TYPE",
     "JWT_ALGORITHM",
     "JWT_SECRET",
@@ -21,8 +26,12 @@ KNOWN_CONFIG_VALUES = [
 ]
 
 DEFAULT_CONFIG = {
-    "SOURCE_READ_INTERVAL_MINUTES": 30,
+    "SOURCE_INGESTION_INTERVAL_MINUTES": 30,
     "SOURCE_INGESTION_RUN_INTERVAL_SECONDS": 15,
+    "SCORE_ESTIMATE_TRAINING_INTERVAL_HOURS": 48,
+    "SCORE_ESTIMATE_TRAINING_RUN_INTERVAL_SECONDS": 15,
+    "SCORE_ESTIMATE_REFRESH_HOURS": 24,
+    "SCORE_ESTIMATE_REFRESH_RUN_INTERVAL_SECONDS": 15,
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
     "OLLAMA_PORT": 11434,
@@ -70,7 +79,13 @@ class Config:
         return self.config[key]
 
     def set(self, key, value):
-        self.config[key] = value
+        if key not in KNOWN_CONFIG_VALUES:
+            closest_match = max(KNOWN_CONFIG_VALUES, key=lambda x: fuzz.ratio(x, key))
+            raise ConfigError(
+                f"Tried to set unknown configuration key: '{key}'. Did you mean '{closest_match}'?"
+            )
+        else:
+            self.config[key] = value
 
 
 config = Config()
