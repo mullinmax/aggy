@@ -147,3 +147,4 @@ class ScoreEstimator(AggyBaseModel):
                 item_url_hash=item_url_hash,
                 score=prediction,
             )
+            # TODO also update the score in the feed/source sorted set
