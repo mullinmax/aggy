@@ -43,7 +43,7 @@ def source_ingestion_job() -> None:
         source = Source.read_by_key(source_key=source_key)
         ingest_source(source=source)
     except Exception as e:
-        logging.error(f"Ingesting of source {source_key} failed: {e}")
+        logging.exception(f"Ingesting of source {source_key} failed: {e}")
         return
 
     # reschedule the source for next go-round
