@@ -76,7 +76,8 @@ def rss_bridge_get_templates_job() -> None:
         # Find all bridge elements
         for bridge in soup.find_all("section", class_="bridge-card"):
             bridge_name = bridge.find("h2").text.strip()
-            bridge_url = bridge.find("a", href=True)["href"]
+            links = bridge.find("h2").find_all("a", href=True)
+            bridge_url = next((a["href"] for a in links if not a["href"].startswith("#")), None)
             bridge_description = bridge.find("p", class_="description").text.strip()
             bridge_short_name = bridge["data-short-name"]
 
