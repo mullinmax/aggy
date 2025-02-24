@@ -12,7 +12,7 @@ def ingest_mercury_item(item: ItemLoose) -> ItemLoose:
     try:
         res = requests.get(
             f"http://{config.get('EXTRACT_HOST')}:{config.get('EXTRACT_PORT')}/parser/",
-            params={"url": item.url, "headers": headers},
+            params={"url": str(item.url), "headers": headers},
             timeout=10,
         )
 
