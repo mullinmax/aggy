@@ -26,4 +26,4 @@ def ingest_mercury_item(item: ItemLoose) -> ItemLoose:
 
         return ItemLoose(**item_dict)
     except Exception as e:
-        logging.error(f"Error extracting content: {e}")
+        logging.exception(f"Error extracting content: {e}")
