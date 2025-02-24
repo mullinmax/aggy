@@ -5,7 +5,7 @@ from db.item import ItemLoose
 
 
 def ingest_open_graph_item(item: ItemLoose) -> ItemLoose:
-    response = requests.get(item.url)
+    response = requests.get(str(item.url))
     soup = BeautifulSoup(response.text, "html.parser")
     og_tags = soup.find_all(
         "meta", attrs={"property": lambda x: x and x.startswith("og:")}
