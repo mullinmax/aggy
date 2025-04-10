@@ -1,4 +1,8 @@
-FROM python:3.11-alpine as aggy-api
+FROM apache/airflow:2.6.3-python3.11 as aggy-api
+
+# set airflow dags folder
+ENV AIRFLOW__CORE__DAGS_FOLDER=/src/api/dags
+
 WORKDIR /src
 
 ENV TZ=America/New_York
@@ -15,5 +19,6 @@ ENV BUILD_VERSION=${BUILD_VERSION}
 
 
 EXPOSE 8000
+EXPOSE 8080
 
 CMD python /src/api/main.py

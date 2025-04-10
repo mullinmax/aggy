@@ -1,4 +1,8 @@
-FROM python:3.11-alpine as aggy-api
+FROM apache/airflow:slim-latest-python3.9
+
+# Set the Airflow DAGs folder
+ENV AIRFLOW__CORE__DAGS_FOLDER=/src/api/dags
+
 WORKDIR /src
 
 ENV TZ=America/New_York
@@ -9,6 +13,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /src/api
 
-EXPOSE 8000
+USER root
 
-CMD pytest -x /src/api/tests/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER airflow
+
+EXPOSE 8000
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]

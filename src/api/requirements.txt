@@ -1,4 +1,5 @@
-APScheduler < 4
+apache-airflow
+APScheduler<4
 bcrypt
 beautifulsoup4
 bleach
