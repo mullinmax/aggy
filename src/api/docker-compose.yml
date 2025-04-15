@@ -48,10 +48,30 @@ services:
       - OLLAMA_EMBEDDING_MODEL=mxbai-embed-large:latest
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
+
+
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=password
+      - _AIRFLOW_WWW_USER_FIRSTNAME=YourFirstName
+      - _AIRFLOW_WWW_USER_LASTNAME=YourLastName
+      - _AIRFLOW_WWW_USER_EMAIL=your_email@example.com
     labels:
       - "traefik.http.routers.codehostapi.rule=Host(`codehostapi.doze.dev`)"
       - "traefik.http.routers.codehostapi.service=codehostapi"
       - "traefik.http.services.codehostapi.loadbalancer.server.port=8000"
+
+      - "traefik.http.routers.codehostapi.rule=Host(`codehostapiairflow.doze.dev`)"
+      - "traefik.http.routers.codehostapi.service=codehostapi"
+      - "traefik.http.services.codehostapi.loadbalancer.server.port=8080"
+
+      # basic auth for airflow
+      # traefik basic auth
+      # - "traefik.http.routers.{{SERVICE_NAME}}.middlewares={{SERVICE_NAME}}-auth"
+      # set password using: htpasswd -nbB username password
+      # - "traefik.http.middlewares.{{SERVICE_NAME}}-auth.basicauth.users=username:abcd$$efg" #escape $s with $$
+
+
     depends_on:
       - dev-aggy-db
       - dev-aggy-rss-bridge

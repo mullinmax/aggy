@@ -1,4 +1,4 @@
-FROM apache/airflow:2.6.3-python3.11 as aggy-api
+FROM apache/airflow:slim-latest-python3.9 as aggy-api
 
 # set airflow dags folder
 ENV AIRFLOW__CORE__DAGS_FOLDER=/src/api/dags
@@ -13,12 +13,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /src/api
 
+ENV PYTHONPATH="/src/api:${PYTHONPATH}"
+
+
 # Set version
 ARG BUILD_VERSION=0.0.0-beta
 ENV BUILD_VERSION=${BUILD_VERSION}
 
+USER root
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER airflow
 
 EXPOSE 8000
 EXPOSE 8080
 
-CMD python /src/api/main.py
+ENTRYPOINT ["/entrypoint.sh"]
