@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Aggy{% endblock %}
+
+{% block body %}
+<div class="app-shell">
+  <!-- Top Bar -->
+  <header class="topbar">
+    <a href="/app" class="topbar-brand" style="text-decoration:none;">
+      <div class="logo">A</div>
+      <span>Aggy</span>
+    </a>
+    <div class="topbar-user">
+      <span id="usernameDisplay"></span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Sign Out</button>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="main-content">
+    <!-- Dashboard View (Feed List) -->
+    <div id="viewDashboard">
+      <div class="page-header">
+        <div>
+          <h1>Your Feeds</h1>
+          <div class="page-header-sub">Curated content, ranked by relevance</div>
+        </div>
+        <button class="btn btn-primary" onclick="showCreateFeedModal()">+ New Feed</button>
+      </div>
+      <div class="feed-grid" id="feedGrid">
+        <div class="loading-center"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- Feed Detail View (Items) -->
+    <div id="viewFeed" style="display:none">
+      <div class="breadcrumb">
+        <a href="#" onclick="showDashboard(); return false;">Feeds</a>
+        <span class="sep">/</span>
+        <span id="feedBreadcrumb"></span>
+      </div>
+
+      <div class="page-header">
+        <div>
+          <h1 id="feedTitle"></h1>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-sm" onclick="showManageSources()">Manage Sources</button>
+          <button class="btn btn-sm btn-danger" onclick="confirmDeleteFeed()">Delete Feed</button>
+        </div>
+      </div>
+
+      <div class="tab-bar">
+        <button class="tab active" data-tab="items" onclick="switchFeedTab('items', this)">Articles</button>
+        <button class="tab" data-tab="sources" onclick="switchFeedTab('sources', this)">Sources</button>
+      </div>
+
+      <!-- Items Tab -->
+      <div id="tabItems">
+        <div class="item-list" id="itemList">
+          <div class="loading-center"><div class="spinner"></div></div>
+        </div>
+        <div style="text-align:center; margin-top:16px;">
+          <button class="btn btn-sm" id="loadMoreBtn" style="display:none" onclick="loadMoreItems()">Load More</button>
+        </div>
+      </div>
+
+      <!-- Sources Tab -->
+      <div id="tabSources" style="display:none">
+        <div class="page-header" style="margin-bottom:16px;">
+          <div></div>
+          <button class="btn btn-primary btn-sm" onclick="showAddSourceModal()">+ Add Source</button>
+        </div>
+        <div id="sourceList"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Reader Overlay -->
+<div class="reader-overlay" id="readerOverlay" onclick="if(event.target===this)closeReader()">
+  <div class="reader-panel">
+    <button class="reader-close" onclick="closeReader()">&times;</button>
+    <h1 class="reader-title" id="readerTitle"></h1>
+    <div class="reader-meta" id="readerMeta"></div>
+    <img class="reader-image" id="readerImage" style="display:none">
+    <div class="reader-content" id="readerContent"></div>
+  </div>
+</div>
+
+<!-- Create Feed Modal -->
+<div class="modal-overlay" id="createFeedModal" onclick="if(event.target===this)closeModal('createFeedModal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Create New Feed</h2>
+      <button class="btn btn-icon btn-ghost" onclick="closeModal('createFeedModal')">&times;</button>
+    </div>
+    <form onsubmit="handleCreateFeed(event)">
+      <div class="form-group">
+        <label>Feed Name</label>
+        <input type="text" class="form-input" id="newFeedName" placeholder="e.g. Technology, Science, Sports..." required>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" onclick="closeModal('createFeedModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Feed</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Source Modal -->
+<div class="modal-overlay" id="addSourceModal" onclick="if(event.target===this)closeModal('addSourceModal')">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header">
+      <h2>Add Source</h2>
+      <button class="btn btn-icon btn-ghost" onclick="closeModal('addSourceModal')">&times;</button>
+    </div>
+
+    <div class="auth-tabs" style="margin-bottom:16px;">
+      <button class="auth-tab active" onclick="switchSourceTab('template')">From Template</button>
+      <button class="auth-tab" onclick="switchSourceTab('manual')">Manual URL</button>
+    </div>
+
+    <!-- Template Source -->
+    <div id="sourceTabTemplate">
+      <div class="search-bar">
+        <input type="text" class="form-input" id="templateSearch" placeholder="Search templates (e.g. Reddit, YouTube, Twitter...)" oninput="searchTemplates()">
+      </div>
+      <div class="template-list" id="templateList"></div>
+      <div class="template-params" id="templateParams" style="display:none">
+        <div class="form-group">
+          <label>Source Name</label>
+          <input type="text" class="form-input" id="templateSourceName" placeholder="Give this source a name" required>
+        </div>
+        <div id="templateParamFields"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn" onclick="clearTemplateSelection()">Back</button>
+          <button type="button" class="btn btn-primary" onclick="handleCreateSourceFromTemplate()">Add Source</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manual Source -->
+    <div id="sourceTabManual" style="display:none;">
+      <form onsubmit="handleCreateManualSource(event)">
+        <div class="form-group">
+          <label>Source Name</label>
+          <input type="text" class="form-input" id="manualSourceName" placeholder="e.g. Hacker News" required>
+        </div>
+        <div class="form-group">
+          <label>RSS Feed URL</label>
+          <input type="url" class="form-input" id="manualSourceUrl" placeholder="https://example.com/rss.xml" required>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" onclick="closeModal('addSourceModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Source</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Delete Modal -->
+<div class="modal-overlay" id="confirmModal" onclick="if(event.target===this)closeModal('confirmModal')">
+  <div class="modal" style="max-width:400px;">
+    <div class="modal-header">
+      <h2 id="confirmTitle">Confirm</h2>
+      <button class="btn btn-icon btn-ghost" onclick="closeModal('confirmModal')">&times;</button>
+    </div>
+    <p id="confirmMessage" style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:4px;"></p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('confirmModal')">Cancel</button>
+      <button class="btn btn-danger" id="confirmAction">Delete</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
+{% endblock %}

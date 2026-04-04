@@ -1,9 +1,13 @@
+from pathlib import Path
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 from contextlib import asynccontextmanager
 import uvicorn
 from datetime import datetime
+
+BASE_DIR = Path(__file__).resolve().parent
 
 from config import config
 from routers.admin import admin_router
@@ -12,6 +16,7 @@ from routers.feed import feed_router
 from routers.source_template import source_template_router
 from routers.source import source_router
 from routers.item import item_router
+from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
 from ingest.jobs import (
     source_ingestion_scheduling_job,
@@ -75,6 +80,9 @@ async def app_lifespan(app: FastAPI):
 # create app with lifespan context manager
 app = FastAPI(lifespan=app_lifespan, version=config.get("BUILD_VERSION"))
 
+# static files
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
 # routers
 app.include_router(admin_router, tags=["Admin"])
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
@@ -84,6 +92,7 @@ app.include_router(
 )
 app.include_router(source_router, prefix="/source", tags=["Sources"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
+app.include_router(web_router)
 
 
 if __name__ == "__main__":
