@@ -10,9 +10,9 @@ web_router = APIRouter()
 
 @web_router.get("/login", response_class=HTMLResponse, include_in_schema=False)
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="login.html")
 
 
 @web_router.get("/app", response_class=HTMLResponse, include_in_schema=False)
 async def app_page(request: Request):
-    return templates.TemplateResponse("app.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="app.html")
