@@ -9,7 +9,8 @@ services:
       context: .
       dockerfile: dockerfile
     environment:
-      - AGGY_API_URL=http://codehostapi.doze.dev
+      - AGGY_API_HOST=codehost-aggy-api
+      - AGGY_API_PORT=8000
     labels:
       - "traefik.http.routers.aggydevwebui.rule=Host(`devaggy.doze.dev`)"
       - "traefik.http.routers.aggydevwebui.service=aggydevwebui"

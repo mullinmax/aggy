@@ -65,7 +65,8 @@ services:
       context: ./src/webui
       dockerfile: dockerfile
     environment:
-      - AGGY_API_URL=http://${DEV_NAME}aggyapi.doze.dev
+      - AGGY_API_HOST=${DEV_NAME}-aggy-api
+      - AGGY_API_PORT=8000
     labels:
       - "traefik.http.routers.${DEV_NAME}aggy.rule=Host(`${DEV_NAME}aggy.doze.dev`)"
       - "traefik.http.routers.${DEV_NAME}aggy.service=${DEV_NAME}aggy"
