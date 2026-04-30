@@ -1,15 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dim">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Aggy{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
+<body class="min-h-screen bg-base-300">
   {% block body %}{% endblock %}
-  <div class="toast-container" id="toasts"></div>
-  <script src="/static/js/api.js"></script>
+  <div class="toast toast-end z-50" id="toasts"></div>
+  <script src="/static/js/sdk.js"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

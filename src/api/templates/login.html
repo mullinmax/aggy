@@ -2,89 +2,91 @@
 {% block title %}Aggy - Sign In{% endblock %}
 
 {% block body %}
-<div class="auth-container">
-  <div class="auth-card">
-    <div class="auth-header">
-      <div class="logo">A</div>
-      <h1>Welcome to Aggy</h1>
-      <p>Your personalized content aggregator</p>
+<div class="min-h-screen flex items-center justify-center p-4">
+  <div class="card bg-base-200 shadow-xl w-full max-w-md">
+    <div class="card-body">
+      <div class="text-center mb-4">
+        <div class="badge badge-lg badge-primary text-primary-content font-extrabold text-lg p-4 mb-4">A</div>
+        <h1 class="text-2xl font-bold">Welcome to Aggy</h1>
+        <p class="text-base-content/60 text-sm mt-1">Your personalized content aggregator</p>
+      </div>
+
+      <div role="tablist" class="tabs tabs-boxed mb-4">
+        <a role="tab" class="tab tab-active" id="tabLogin" onclick="switchTab('login')">Sign In</a>
+        <a role="tab" class="tab" id="tabSignup" onclick="switchTab('signup')">Sign Up</a>
+      </div>
+
+      <div class="alert alert-error text-sm hidden" id="authError">
+        <span id="authErrorText"></span>
+      </div>
+
+      <form id="loginForm" onsubmit="handleLogin(event)">
+        <div class="form-control mb-3">
+          <label class="label"><span class="label-text">Username</span></label>
+          <input type="text" id="loginUser" class="input input-bordered w-full" placeholder="Enter your username" required autocomplete="username">
+        </div>
+        <div class="form-control mb-4">
+          <label class="label"><span class="label-text">Password</span></label>
+          <input type="password" id="loginPass" class="input input-bordered w-full" placeholder="Enter your password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary w-full" id="loginBtn">Sign In</button>
+      </form>
+
+      <form id="signupForm" class="hidden" onsubmit="handleSignup(event)">
+        <div class="form-control mb-3">
+          <label class="label"><span class="label-text">Username</span></label>
+          <input type="text" id="signupUser" class="input input-bordered w-full" placeholder="Choose a username" required autocomplete="username">
+        </div>
+        <div class="form-control mb-3">
+          <label class="label"><span class="label-text">Password</span></label>
+          <input type="password" id="signupPass" class="input input-bordered w-full" placeholder="Choose a password" required autocomplete="new-password">
+        </div>
+        <div class="form-control mb-4">
+          <label class="label"><span class="label-text">Confirm Password</span></label>
+          <input type="password" id="signupPassConfirm" class="input input-bordered w-full" placeholder="Confirm your password" required autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn btn-primary w-full" id="signupBtn">Create Account</button>
+      </form>
     </div>
-
-    <div class="auth-tabs">
-      <button class="auth-tab active" onclick="switchTab('login')">Sign In</button>
-      <button class="auth-tab" onclick="switchTab('signup')">Sign Up</button>
-    </div>
-
-    <div class="auth-error" id="authError"></div>
-
-    <form class="auth-form" id="loginForm" onsubmit="handleLogin(event)">
-      <div class="form-group">
-        <label for="loginUser">Username</label>
-        <input type="text" id="loginUser" class="form-input" placeholder="Enter your username" required autocomplete="username">
-      </div>
-      <div class="form-group">
-        <label for="loginPass">Password</label>
-        <input type="password" id="loginPass" class="form-input" placeholder="Enter your password" required autocomplete="current-password">
-      </div>
-      <button type="submit" class="btn btn-primary" id="loginBtn">Sign In</button>
-    </form>
-
-    <form class="auth-form" id="signupForm" style="display:none" onsubmit="handleSignup(event)">
-      <div class="form-group">
-        <label for="signupUser">Username</label>
-        <input type="text" id="signupUser" class="form-input" placeholder="Choose a username" required autocomplete="username">
-      </div>
-      <div class="form-group">
-        <label for="signupPass">Password</label>
-        <input type="password" id="signupPass" class="form-input" placeholder="Choose a password" required autocomplete="new-password">
-      </div>
-      <div class="form-group">
-        <label for="signupPassConfirm">Confirm Password</label>
-        <input type="password" id="signupPassConfirm" class="form-input" placeholder="Confirm your password" required autocomplete="new-password">
-      </div>
-      <button type="submit" class="btn btn-primary" id="signupBtn">Create Account</button>
-    </form>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  // If already logged in, redirect to dashboard
+  const sdk = new AggySDK();
+
   if (localStorage.getItem('aggy_token')) {
     window.location.href = '/app';
   }
 
   function switchTab(tab) {
-    document.querySelectorAll('.auth-tab').forEach((t, i) => {
-      t.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'signup' && i === 1));
-    });
-    document.getElementById('loginForm').style.display = tab === 'login' ? 'block' : 'none';
-    document.getElementById('signupForm').style.display = tab === 'signup' ? 'block' : 'none';
-    hideError();
+    document.getElementById('tabLogin').classList.toggle('tab-active', tab === 'login');
+    document.getElementById('tabSignup').classList.toggle('tab-active', tab === 'signup');
+    document.getElementById('loginForm').classList.toggle('hidden', tab !== 'login');
+    document.getElementById('signupForm').classList.toggle('hidden', tab !== 'signup');
+    document.getElementById('authError').classList.add('hidden');
   }
 
   function showError(msg) {
     const el = document.getElementById('authError');
-    el.textContent = msg;
-    el.classList.add('visible');
-  }
-
-  function hideError() {
-    document.getElementById('authError').classList.remove('visible');
+    document.getElementById('authErrorText').textContent = msg;
+    el.classList.remove('hidden');
   }
 
   async function handleLogin(e) {
     e.preventDefault();
-    hideError();
+    document.getElementById('authError').classList.add('hidden');
     const btn = document.getElementById('loginBtn');
     btn.disabled = true;
-    btn.textContent = 'Signing in...';
+    btn.innerHTML = '<span class="loading loading-spinner loading-sm"></span> Signing in...';
     try {
-      const data = await api.login(
-        document.getElementById('loginUser').value,
-        document.getElementById('loginPass').value
-      );
+      const data = await sdk.authFormLogin({
+        formData: {
+          username: document.getElementById('loginUser').value,
+          password: document.getElementById('loginPass').value,
+        }
+      });
       localStorage.setItem('aggy_token', data.access_token);
       window.location.href = '/app';
     } catch (err) {
@@ -97,26 +99,19 @@
 
   async function handleSignup(e) {
     e.preventDefault();
-    hideError();
+    document.getElementById('authError').classList.add('hidden');
     const pass = document.getElementById('signupPass').value;
-    const confirm = document.getElementById('signupPassConfirm').value;
-    if (pass !== confirm) {
+    if (pass !== document.getElementById('signupPassConfirm').value) {
       showError('Passwords do not match');
       return;
     }
     const btn = document.getElementById('signupBtn');
     btn.disabled = true;
-    btn.textContent = 'Creating account...';
+    btn.innerHTML = '<span class="loading loading-spinner loading-sm"></span> Creating account...';
     try {
-      await api.signup(
-        document.getElementById('signupUser').value,
-        pass
-      );
-      // Auto-login after signup
-      const data = await api.login(
-        document.getElementById('signupUser').value,
-        pass
-      );
+      const username = document.getElementById('signupUser').value;
+      await sdk.authSignup({ body: { username, password: pass } });
+      const data = await sdk.authFormLogin({ formData: { username, password: pass } });
       localStorage.setItem('aggy_token', data.access_token);
       window.location.href = '/app';
     } catch (err) {
