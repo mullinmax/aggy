@@ -4,6 +4,7 @@ beautifulsoup4
 bleach
 dateparser
 fastapi
+jinja2
 feedparser
 httpx
 ollama
