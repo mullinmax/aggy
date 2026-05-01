@@ -1,3 +1,11 @@
+FROM node:20-alpine AS css-builder
+WORKDIR /build
+COPY tailwind/package.json ./
+RUN npm install --no-audit --no-fund
+COPY tailwind/tailwind.config.js tailwind/input.css ./
+COPY templates ./templates
+RUN npx tailwindcss -i ./input.css -o ./output.css --minify
+
 FROM python:3.11-alpine as aggy-api
 WORKDIR /src
 
@@ -8,6 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /src/api
+COPY --from=css-builder /build/output.css /src/api/static/css/tailwind.css
 
 # Set version
 ARG BUILD_VERSION=0.0.0-beta
