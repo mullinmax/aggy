@@ -4,14 +4,14 @@ from db.user import User
 
 
 def test_create_user(unique_user):
-    with unique_user.db_con() as r:
-        assert not unique_user.exists()
-        assert len(r.smembers("USERS")) == 0
-        unique_user.set_password("password")
-        unique_user.create()
-        assert unique_user.exists()
-        assert len(r.smembers("USERS")) == 1
-        assert unique_user.name_hash in r.smembers("USERS")
+    assert not unique_user.exists()
+    assert User.read_all() == []
+    unique_user.set_password("password")
+    unique_user.create()
+    assert unique_user.exists()
+    all_users = User.read_all()
+    assert len(all_users) == 1
+    assert all_users[0].name_hash == unique_user.name_hash
 
 
 def test_read_user(existing_user):

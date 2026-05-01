@@ -1,8 +1,26 @@
 services:
   test-aggy-db:
-    image: valkey/valkey:8.0.0-alpine
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=aggy
+      - POSTGRES_PASSWORD=aggy
+      - POSTGRES_DB=aggy
     ports:
-      - 6379
+      - 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aggy -d aggy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  test-aggy-flyway:
+    image: flyway/flyway:10-alpine
+    command: -url=jdbc:postgresql://test-aggy-db:5432/aggy -user=aggy -password=aggy -connectRetries=30 migrate
+    volumes:
+      - "./db/migrations:/flyway/sql"
+    depends_on:
+      test-aggy-db:
+        condition: service_healthy
 
   test-aggy-rss-bridge:
     image: rssbridge/rss-bridge:latest
@@ -16,11 +34,18 @@ services:
       dockerfile: dockerfile.test
     environment:
       - DB_HOST=test-aggy-db
-      - DB_PORT=6379
+      - DB_PORT=5432
+      - DB_USER=aggy
+      - DB_PASSWORD=aggy
+      - DB_NAME=aggy
       - RSS_BRIDGE_HOST=dev-aggy-rss-bridge
       - RSS_BRIDGE_PORT=80
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
     depends_on:
-      - test-aggy-db
-      - test-aggy-rss-bridge
+      test-aggy-db:
+        condition: service_healthy
+      test-aggy-flyway:
+        condition: service_completed_successfully
+      test-aggy-rss-bridge:
+        condition: service_started

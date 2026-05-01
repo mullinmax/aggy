@@ -7,23 +7,24 @@ from db.user import User
 
 
 @pytest.fixture(scope="function")
-def unique_source(unique_feed: Feed, unique_user: User) -> Source:
-    """Generates unique source data for each test"""
+def unique_source(existing_feed: Feed, existing_user: User) -> Source:
+    """Generates unique source data for each test.
+
+    Depends on ``existing_feed`` so the (user_hash, feed_hash) foreign key
+    can be satisfied if the source is persisted.
+    """
     source = Source(
-        user_hash=unique_user.name_hash,
-        feed_hash=unique_feed.name_hash,
+        user_hash=existing_user.name_hash,
+        feed_hash=existing_feed.name_hash,
         name=f"Source Name {uuid.uuid4()}",
         url="http://example.com",
     )
 
     yield source
 
-    if source.exists():
-        source.delete()
-
 
 @pytest.fixture(scope="function")
 def existing_source(unique_source: Source, existing_feed: Feed) -> Source:
-    """Generates existing source data for each test"""
-    existing_feed.add_source(unique_source)
+    if not unique_source.exists():
+        existing_feed.add_source(unique_source)
     yield unique_source

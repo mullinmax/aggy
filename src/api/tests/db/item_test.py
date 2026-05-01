@@ -65,13 +65,15 @@ def test_date_published_parsing(unique_item_strict, raw_date, expected_date):
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
 def test_bad_date_published_parsing(unique_item_strict):
-    """Tests parsing of a bad date_published string."""
-    unique_item_strict.date_published = "bad date"
-    unique_item_strict.create()
+    """Tests parsing of a bad date_published string at write time.
 
-    with pytest.raises(ValueError) as e:
-        _ = ItemStrict.read(unique_item_strict.url_hash)
-    assert "Invalid date format" in str(e.value)
+    The Postgres TIMESTAMPTZ column rejects unparseable values, so the
+    error surfaces on ``.create()`` rather than on ``.read()`` (which is
+    where it surfaced under the previous JSON-blob storage).
+    """
+    unique_item_strict.date_published = "bad date"
+    with pytest.raises(Exception):
+        unique_item_strict.create()
 
 
 def test_create_read_item(unique_item_strict):
