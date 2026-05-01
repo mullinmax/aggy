@@ -4,14 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Aggy{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', path='favicon.svg') }}" type="image/svg+xml">
   <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
 </head>
 <body class="min-h-screen bg-base-300">
   {% block body %}{% endblock %}
   <div class="toast toast-end z-50" id="toasts"></div>
-  <script src="/static/js/sdk.js"></script>
+  <script src="{{ url_for('static', path='js/sdk.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
