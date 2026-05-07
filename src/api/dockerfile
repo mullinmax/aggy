@@ -11,9 +11,14 @@ WORKDIR /src
 
 ENV TZ=America/New_York
 
+# psycopg2-binary needs libpq at runtime; build deps for any source wheels.
+RUN apk add --no-cache libpq
+
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev libpq-dev \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apk del .build-deps
 
 COPY . /src/api
 COPY --from=css-builder /build/output.css /src/api/static/css/tailwind.css

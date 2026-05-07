@@ -55,19 +55,17 @@ def test_feed_read(unique_feed):
     assert read_feed.name == unique_feed.name, "Feed name should match"
 
 
-def test_feed_read_all(unique_feed):
+def test_feed_read_all(existing_user):
     """Tests reading all feeds for a user."""
-    # Create multiple feeds for testing
     for i in range(3):
-        unique_feed.name += f" {i}"
-        unique_feed.create()
+        Feed(user_hash=existing_user.name_hash, name=f"feed-{i}").create()
 
-    feeds = Feed.read_all(unique_feed.user_hash)
+    feeds = Feed.read_all(existing_user.name_hash)
     assert len(feeds) == 3, "Should read all feeds for a user"
 
     for feed in feeds:
         assert (
-            feed.user_hash == unique_feed.user_hash
+            feed.user_hash == existing_user.name_hash
         ), "Feed should be for the correct user"
 
 
@@ -78,11 +76,10 @@ def test_get_items(unique_feed, unique_item_strict):
 
     items = [unique_item_strict.model_copy() for i in range(3)]
 
-    with unique_feed.db_con() as r:
-        for i, item in enumerate(items):
-            item.url = f"http://example.com/{i}"
-            item.create()
-            r.zadd(unique_feed.items_key, {item.url_hash: i})
+    for i, item in enumerate(items):
+        item.url = f"http://example.com/{i}"
+        item.create()
+        unique_feed.set_items_scores({item.url_hash: i})
 
     act_items = unique_feed.query_items()
     assert len(act_items) == 3, "Should get all items for a feed"
@@ -90,11 +87,6 @@ def test_get_items(unique_feed, unique_item_strict):
         assert item.url_hash in [
             i.url_hash for i in items
         ], "Should get the correct items"
-
-    unique_feed.delete()
-
-    for item in items:
-        item.delete()
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -104,11 +96,10 @@ def test_get_items_with_limit(unique_feed, unique_item_strict):
 
     items = [unique_item_strict.model_copy() for i in range(3)]
 
-    with unique_feed.db_con() as r:
-        for i, item in enumerate(items):
-            item.url = f"http://example.com/{i}"
-            item.create()
-            r.zadd(unique_feed.items_key, {item.url_hash: i})
+    for i, item in enumerate(items):
+        item.url = f"http://example.com/{i}"
+        item.create()
+        unique_feed.set_items_scores({item.url_hash: i})
 
     act_items = unique_feed.query_items(limit=2)
     assert len(act_items) == 2, "Should get all items for a feed"
@@ -116,11 +107,6 @@ def test_get_items_with_limit(unique_feed, unique_item_strict):
         assert item.url_hash in [
             i.url_hash for i in items
         ], "Should get the correct items"
-
-    unique_feed.delete()
-
-    for item in items:
-        item.delete()
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -130,11 +116,10 @@ def test_get_items_with_skip(unique_feed, unique_item_strict):
 
     items = [unique_item_strict.model_copy() for i in range(3)]
 
-    with unique_feed.db_con() as r:
-        for i, item in enumerate(items):
-            item.url = f"http://example.com/{i}"
-            item.create()
-            r.zadd(unique_feed.items_key, {item.url_hash: i})
+    for i, item in enumerate(items):
+        item.url = f"http://example.com/{i}"
+        item.create()
+        unique_feed.set_items_scores({item.url_hash: i})
 
     act_items = unique_feed.query_items(skip=1)
     assert len(act_items) == 2, "Should get all items for a feed"
@@ -142,11 +127,6 @@ def test_get_items_with_skip(unique_feed, unique_item_strict):
         assert item.url_hash in [
             i.url_hash for i in items
         ], "Should get the correct items"
-
-    unique_feed.delete()
-
-    for item in items:
-        item.delete()
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -156,11 +136,10 @@ def test_get_items_with_skip_and_limit(unique_feed, unique_item_strict):
 
     items = [unique_item_strict.model_copy() for i in range(3)]
 
-    with unique_feed.db_con() as r:
-        for i, item in enumerate(items):
-            item.url = f"http://example.com/{i}"
-            item.create()
-            r.zadd(unique_feed.items_key, {item.url_hash: i})
+    for i, item in enumerate(items):
+        item.url = f"http://example.com/{i}"
+        item.create()
+        unique_feed.set_items_scores({item.url_hash: i})
 
     act_items = unique_feed.query_items(skip=1, limit=1)
     assert len(act_items) == 1, "Should get all items for a feed"
@@ -168,11 +147,6 @@ def test_get_items_with_skip_and_limit(unique_feed, unique_item_strict):
         assert item.url_hash in [
             i.url_hash for i in items
         ], "Should get the correct items"
-
-    unique_feed.delete()
-
-    for item in items:
-        item.delete()
 
 
 def test_sources(unique_feed, unique_source):
@@ -195,20 +169,12 @@ def test_delete_feed_removes_sources(unique_feed, unique_source):
     unique_feed.create()
     unique_feed.add_source(unique_source)
 
-    with unique_feed.db_con() as r:
-        assert r.exists(unique_feed.sources_key)
-        assert not r.exists(unique_feed.items_key)
-        assert r.exists(unique_feed.key)
-        assert r.exists(unique_source.key)
+    assert unique_feed.exists()
+    assert unique_source.exists()
 
     unique_feed.delete()
     assert not unique_source.exists()
     assert not unique_feed.exists()
-    with unique_feed.db_con() as r:
-        assert not r.exists(unique_feed.sources_key)
-        assert not r.exists(unique_feed.items_key)
-        assert not r.exists(unique_feed.key)
-        assert not r.exists(unique_source.key)
 
 
 def test_remove_items(unique_feed, unique_item_strict):
@@ -221,8 +187,4 @@ def test_remove_items(unique_feed, unique_item_strict):
 
     unique_feed.remove_items(unique_item_strict)
     assert unique_item_strict not in unique_feed.query_items()
-    assert unique_item_strict.exists()
-
-    unique_feed.delete()
-    assert not unique_feed.exists()
     assert unique_item_strict.exists()

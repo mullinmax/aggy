@@ -1,3 +1,5 @@
+import pytest
+
 # fixtures
 from tests.fixtures.feed import unique_feed, existing_feed  # noqa
 from tests.fixtures.item import unique_item_strict, existing_item_strict  # noqa
@@ -13,4 +15,12 @@ from tests.fixtures.token import token  # noqa
 
 from db.base import db_init
 
+
 db_init()
+
+
+@pytest.fixture(autouse=True)
+def _wipe_db_between_tests():
+    """Truncate all aggy tables between tests for isolation."""
+    db_init(flush=True)
+    yield

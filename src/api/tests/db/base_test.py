@@ -1,6 +1,6 @@
 import pytest
-import redis
-from db.base import AggyBaseModel
+
+from db.base import AggyBaseModel, get_db_con
 
 
 def test_key_property_raises_not_implemented_error():
@@ -11,11 +11,10 @@ def test_key_property_raises_not_implemented_error():
 
 
 def test_db_con():
-    model = AggyBaseModel()
-
-    with model.db_con() as r:
-        assert isinstance(r, redis.Redis)
-        r.ping()
+    with get_db_con() as cur:
+        cur.execute("SELECT 1 AS one")
+        row = cur.fetchone()
+        assert row["one"] == 1
 
 
 def test_base_create_raises_not_implemented_error():

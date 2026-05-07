@@ -21,20 +21,12 @@ class User(AggyBaseModel):
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     @property
-    def feeds_key(self):
-        return f"USER:{self.name_hash}:FEEDS"
+    def feeds(self):
+        return Feed.read_all(user_hash=self.name_hash)
 
     @property
     def feed_hashes(self):
-        with self.db_con() as r:
-            return r.smembers(self.feeds_key)
-
-    @property
-    def feeds(self):
-        return [
-            Feed.read(user_hash=self.name_hash, name_hash=name_hash)
-            for name_hash in self.feed_hashes
-        ]
+        return {f.name_hash for f in self.feeds}
 
     def set_password(self, password: str):
         # TODO password complexity check
@@ -45,16 +37,26 @@ class User(AggyBaseModel):
             password.encode("utf-8"), self.hashed_password.encode("utf-8")
         )
 
+    def exists(self) -> bool:
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT 1 FROM users WHERE name_hash = %s", (self.name_hash,)
+            )
+            return cur.fetchone() is not None
+
     def create(self):
-        with self.db_con() as r:
-            if self.hashed_password is None:
-                raise Exception("Password is required to create a user")
+        if self.hashed_password is None:
+            raise Exception("Password is required to create a user")
 
-            if self.exists():
-                raise Exception(f"User with name {self.name} already exists")
+        if self.exists():
+            raise Exception(f"User with name {self.name} already exists")
 
-            r.hset(self.key, mapping=self.model_dump())
-            r.sadd("USERS", self.name_hash)
+        with self.db_con() as cur:
+            cur.execute(
+                "INSERT INTO users (name_hash, name, hashed_password) "
+                "VALUES (%s, %s, %s)",
+                (self.name_hash, self.name, self.hashed_password),
+            )
 
         return self.key
 
@@ -65,57 +67,50 @@ class User(AggyBaseModel):
                 raise Exception("name or name_hash is required")
             name_hash = User(name=name).name_hash
 
-        with cls.db_con() as r:
-            user_data = r.hgetall(f"USER:{name_hash}")
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT name, hashed_password FROM users WHERE name_hash = %s",
+                (name_hash,),
+            )
+            row = cur.fetchone()
 
-        if not user_data:
+        if not row:
             raise Exception(f"User with name_hash {name_hash} does not exist")
 
-        return cls(**user_data)
+        return cls(name=row["name"], hashed_password=row["hashed_password"])
 
     @classmethod
     def read_all(cls) -> list["User"]:
-        with cls.db_con() as r:
-            user_hashes = r.smembers("USERS")
+        with cls.db_con() as cur:
+            cur.execute("SELECT name, hashed_password FROM users")
+            rows = cur.fetchall()
 
-        if not user_hashes:
-            return []
-
-        return [cls.read(name_hash=name_hash) for name_hash in user_hashes]
+        return [
+            cls(name=row["name"], hashed_password=row["hashed_password"])
+            for row in rows
+        ]
 
     def update(self):
-        with self.db_con() as r:
-            if not self.exists():
-                raise Exception(f"User withname {self.name} does not exist")
+        if not self.exists():
+            raise Exception(f"User withname {self.name} does not exist")
 
-            r.hset(
-                self.key,
-                mapping=self.model_dump(),
+        with self.db_con() as cur:
+            cur.execute(
+                "UPDATE users SET name = %s, hashed_password = %s "
+                "WHERE name_hash = %s",
+                (self.name, self.hashed_password, self.name_hash),
             )
 
     def delete(self):
-        with self.db_con() as r:
-            # delete all feeds
-            for feed in self.feeds:
-                feed.delete()
-
-            # remove user from list of users
-            r.srem("USERS", self.name_hash)
-
-            # delete self
-            r.delete(self.key)
+        # ON DELETE CASCADE on feeds (and their dependents) handles cleanup.
+        with self.db_con() as cur:
+            cur.execute("DELETE FROM users WHERE name_hash = %s", (self.name_hash,))
 
     def add_feed(self, feed: Feed):
-        with self.db_con() as r:
-            if feed.user_hash != self.name_hash:
-                raise Exception("Feed does not belong to user")
-            if not feed.exists():
-                feed.create()
-            r.sadd(self.feeds_key, feed.name_hash)
+        if feed.user_hash != self.name_hash:
+            raise Exception("Feed does not belong to user")
+        if not feed.exists():
+            feed.create()
 
     def remove_feed(self, feed: Feed):
-        with self.db_con() as r:
-            # get the feed
-            feed.delete()
-            # delete feed
-            r.srem(self.feeds_key, feed.name_hash)
+        feed.delete()

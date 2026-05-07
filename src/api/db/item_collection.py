@@ -2,44 +2,93 @@ from typing import List, Union
 
 from .base import AggyBaseModel
 from .item import ItemStrict
-from utils import skip_limit_to_start_end
 
 
 class ItemCollection(AggyBaseModel):
+    """Mixin for objects that own an ordered set of items.
+
+    Subclasses must implement ``_items_filter`` returning a SQL fragment and
+    parameter tuple identifying the rows in the join table that belong to
+    this collection, and ``_items_table`` naming the join table itself.
+    """
+
     @property
-    def items_key(self) -> str:
+    def _items_table(self) -> str:
+        raise NotImplementedError
+
+    def _items_filter(self) -> tuple[str, tuple]:
         raise NotImplementedError
 
     def query_items(self, skip=None, limit=None) -> List[ItemStrict]:
-        start, end = skip_limit_to_start_end(skip, limit)
-        with self.db_con() as r:
-            url_hashes = r.zrange(self.items_key, start=start, end=end)
-        items = [ItemStrict.read(url_hash) for url_hash in url_hashes]
-        items = [i for i in items if i]
-        return items
+        where, params = self._items_filter()
+        sql = (
+            f"SELECT i.* FROM items i "
+            f"JOIN {self._items_table} c ON c.item_url_hash = i.url_hash "
+            f"WHERE {where} "
+            f"ORDER BY c.score ASC, c.added_at ASC"
+        )
+        if limit is not None and limit >= 0:
+            sql += " LIMIT %s"
+            params = params + (limit,)
+        if skip is not None and skip > 0:
+            sql += " OFFSET %s"
+            params = params + (skip,)
+
+        with self.db_con() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+        return [ItemStrict.from_row(row) for row in rows if row]
 
     def add_items(self, items: Union[ItemStrict, List[ItemStrict]]) -> None:
         if isinstance(items, ItemStrict):
-            items = {items.url_hash: 0}
-        elif isinstance(items, list):
-            items = {item.url_hash: 0 for item in items}
-        else:
+            items = [items]
+        if not isinstance(items, list):
             raise ValueError(f"Invalid type for items: {type(items)}")
 
-        with self.db_con() as r:
-            r.zadd(self.items_key, items)
+        self.set_items_scores({item.url_hash: 0 for item in items})
 
-    def set_items_scores(self, items: dict[str, int]) -> None:
-        with self.db_con() as r:
-            r.zadd(self.items_key, items)
+    def set_items_scores(self, items: dict[str, float]) -> None:
+        if not items:
+            return
+        cols, key_params = self._collection_keys()
+        placeholders = ", ".join(["(" + ", ".join(["%s"] * (len(cols) + 2)) + ")"] * len(items))
+        params: list = []
+        for url_hash, score in items.items():
+            params.extend(key_params)
+            params.append(url_hash)
+            params.append(float(score))
+        col_list = ", ".join(cols + ["item_url_hash", "score"])
+        sql = (
+            f"INSERT INTO {self._items_table} ({col_list}) VALUES {placeholders} "
+            f"ON CONFLICT ({', '.join(cols + ['item_url_hash'])}) DO UPDATE "
+            f"SET score = EXCLUDED.score"
+        )
+        with self.db_con() as cur:
+            cur.execute(sql, params)
 
     def remove_items(self, items: Union[ItemStrict, List[ItemStrict]]) -> None:
-        with self.db_con() as r:
-            if isinstance(items, ItemStrict):
-                items = [items]
+        if isinstance(items, ItemStrict):
+            items = [items]
+        where, params = self._items_filter()
+        with self.db_con() as cur:
             for item in items:
-                r.zrem(self.items_key, item.url_hash)
+                cur.execute(
+                    f"DELETE FROM {self._items_table} "
+                    f"WHERE {where} AND item_url_hash = %s",
+                    params + (item.url_hash,),
+                )
 
     def count_items(self) -> int:
-        with self.db_con() as r:
-            return r.zcard(self.items_key)
+        where, params = self._items_filter()
+        with self.db_con() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) AS n FROM {self._items_table} WHERE {where}",
+                params,
+            )
+            return cur.fetchone()["n"]
+
+    def _collection_keys(self) -> tuple[list[str], tuple]:
+        """Return the column list and corresponding values that identify this
+        collection in its items join table."""
+        raise NotImplementedError

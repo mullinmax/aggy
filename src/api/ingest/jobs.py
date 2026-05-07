@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from constants import SOURCES_TO_INGEST_KEY, SOURCE_READ_INTERVAL_TIMEDELTA
+from constants import SOURCE_READ_INTERVAL_TIMEDELTA
 from db.base import get_db_con
 from db.source import Source
 from ingest.source import ingest_source
@@ -19,37 +19,43 @@ def source_ingestion_scheduling_job() -> None:
 
 
 def source_ingestion_job() -> None:
-    r = get_db_con()
+    """Pop the next due source and ingest it.
 
-    if not r.exists(SOURCES_TO_INGEST_KEY):
-        return
+    Mirrors the previous Redis ZMPOP-based queue: pick the source with the
+    smallest ``next_ingest_at``, only proceed if it's actually due, and then
+    bump its next ingest time forward.
+    """
+    cutoff = datetime.now() + timedelta(minutes=1)
 
-    res = r.zmpop(1, [SOURCES_TO_INGEST_KEY], min=True)[1][0]
-    source_key, scheduled_time = res
-    scheduled_time = datetime.fromtimestamp(int(scheduled_time))
-
-    # if the source isn't due yet
-    if scheduled_time > datetime.now() + timedelta(minutes=1):
-        # replace the source without altering it
-        # take the sooner of the values if a source already exists
-        r.zadd(
-            SOURCES_TO_INGEST_KEY,
-            mapping={source_key: int(scheduled_time.timestamp())},
-            lt=True,
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT user_hash, feed_hash, name_hash, next_ingest_at "
+            "FROM sources WHERE next_ingest_at <= %s "
+            "ORDER BY next_ingest_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+            (cutoff,),
         )
-        return
+        row = cur.fetchone()
+
+        if not row:
+            return
+
+        next_run = row["next_ingest_at"] + SOURCE_READ_INTERVAL_TIMEDELTA
+        cur.execute(
+            "UPDATE sources SET next_ingest_at = %s "
+            "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
+            (next_run, row["user_hash"], row["feed_hash"], row["name_hash"]),
+        )
 
     try:
-        source = Source.read_by_key(source_key=source_key)
+        source = Source.read(
+            user_hash=row["user_hash"],
+            feed_hash=row["feed_hash"],
+            source_hash=row["name_hash"],
+        )
         ingest_source(source=source)
     except Exception as e:
-        logging.exception(f"Ingesting of source {source_key} failed: {e}")
+        logging.exception(f"Ingesting of source {row['name_hash']} failed: {e}")
         return
-
-    # reschedule the source for next go-round
-    next_process_time = scheduled_time + SOURCE_READ_INTERVAL_TIMEDELTA
-    next_process_time = int(next_process_time.timestamp())
-    r.zadd(SOURCES_TO_INGEST_KEY, mapping={source_key: next_process_time}, lt=True)
 
 
 def download_embedding_model_job() -> None:

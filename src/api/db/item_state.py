@@ -33,39 +33,76 @@ class ItemState(AggyBaseModel):
     def key(self) -> str:
         return f"USER:{self.user_hash}:FEED:{self.feed_hash}:ITEM:{self.item_url_hash}:ITEM_STATE"
 
+    def exists(self) -> bool:
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT 1 FROM item_states "
+                "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+                (self.user_hash, self.feed_hash, self.item_url_hash),
+            )
+            return cur.fetchone() is not None
+
     def create(self) -> None:
-        with self.db_con() as r:
-            # check user exists
-            User.read(self.user_hash)  # raises ValueError if user does not exist
+        # check user exists (raises if missing)
+        User.read(self.user_hash)
 
-            # check feed exists
-            feed = Feed.read(user_hash=self.user_hash, name_hash=self.feed_hash)
-            if not feed:
-                raise ValueError(f"Feed with hash {self.feed_hash} does not exist")
+        feed = Feed.read(user_hash=self.user_hash, name_hash=self.feed_hash)
+        if not feed:
+            raise ValueError(f"Feed with hash {self.feed_hash} does not exist")
 
-            item = ItemLoose.read(self.item_url_hash)
-            if not item:
-                raise ValueError(f"Item with hash {self.item_url_hash} does not exist")
+        item = ItemLoose.read(self.item_url_hash)
+        if not item:
+            raise ValueError(f"Item with hash {self.item_url_hash} does not exist")
 
-            r.set(self.key, self.json)
+        with self.db_con() as cur:
+            cur.execute(
+                "INSERT INTO item_states (user_hash, feed_hash, item_url_hash, "
+                "score, score_date, is_read) VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (user_hash, feed_hash, item_url_hash) DO UPDATE SET "
+                "score = EXCLUDED.score, score_date = EXCLUDED.score_date, "
+                "is_read = EXCLUDED.is_read",
+                (
+                    self.user_hash,
+                    self.feed_hash,
+                    self.item_url_hash,
+                    self.score,
+                    self.score_date,
+                    self.is_read,
+                ),
+            )
 
     def update(self) -> None:
         self.create()
 
     def delete(self) -> None:
-        with self.db_con() as r:
-            r.delete(self.key)
+        with self.db_con() as cur:
+            cur.execute(
+                "DELETE FROM item_states "
+                "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+                (self.user_hash, self.feed_hash, self.item_url_hash),
+            )
 
     @classmethod
     def read(cls, user_hash, feed_hash, item_url_hash) -> "ItemState":
-        with cls.db_con() as r:
-            item_vote_json = r.get(
-                f"USER:{user_hash}:FEED:{feed_hash}:ITEM:{item_url_hash}:ITEM_STATE"
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT score, score_date, is_read FROM item_states "
+                "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+                (user_hash, feed_hash, item_url_hash),
             )
+            row = cur.fetchone()
 
-        if item_vote_json:
-            return cls.model_validate_json(item_vote_json)
-        return None
+        if not row:
+            return None
+
+        return cls(
+            user_hash=user_hash,
+            feed_hash=feed_hash,
+            item_url_hash=item_url_hash,
+            score=row["score"],
+            score_date=row["score_date"],
+            is_read=row["is_read"],
+        )
 
     @classmethod
     def set_state(

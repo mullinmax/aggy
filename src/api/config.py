@@ -8,6 +8,9 @@ KNOWN_CONFIG_VALUES = [
     "JWT_SECRET",
     "DB_HOST",
     "DB_PORT",
+    "DB_USER",
+    "DB_PASSWORD",
+    "DB_NAME",
     "EXTRACT_HOST",
     "EXTRACT_PORT",
     "OLLAMA_HOST",
@@ -28,6 +31,9 @@ DEFAULT_CONFIG = {
     "OLLAMA_PORT": 11434,
     "RSS_BRIDGE_PORT": 80,
     "BUILD_VERSION": "0.0.0-beta",
+    "DB_PORT": 5432,
+    "DB_USER": "aggy",
+    "DB_NAME": "aggy",
 }
 
 

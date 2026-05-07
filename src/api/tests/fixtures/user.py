@@ -14,11 +14,9 @@ def unique_user() -> User:
 
     yield user
 
-    if user.exists():
-        user.delete()
-
 
 @pytest.fixture(scope="function")
 def existing_user(unique_user) -> User:
-    unique_user.create()
+    if not unique_user.exists():
+        unique_user.create()
     yield unique_user

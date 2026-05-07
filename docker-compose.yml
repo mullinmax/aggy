@@ -6,9 +6,50 @@ networks:
 services:
   aggy-db:
     container_name: "${DEV_NAME}-aggy-db"
-    image: valkey/valkey:7.2.5-alpine
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=aggy
+      - POSTGRES_PASSWORD=aggy
+      - POSTGRES_DB=aggy
     ports:
-      - 6379
+      - 5432
+    volumes:
+      - "aggy-db-data:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aggy -d aggy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  aggy-flyway:
+    container_name: "${DEV_NAME}-aggy-flyway"
+    image: flyway/flyway:10-alpine
+    command: -url=jdbc:postgresql://${DEV_NAME}-aggy-db:5432/aggy -user=aggy -password=aggy -connectRetries=30 migrate
+    volumes:
+      - "./src/api/db/migrations:/flyway/sql"
+    depends_on:
+      aggy-db:
+        condition: service_healthy
+
+  aggy-pgadmin:
+    container_name: "${DEV_NAME}-aggy-pgadmin"
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@aggy.local
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - 80
+    volumes:
+      - "aggy-pgadmin-data:/var/lib/pgadmin"
+    labels:
+      - "traefik.http.routers.${DEV_NAME}aggypgadmin.rule=Host(`${DEV_NAME}aggypgadmin.doze.dev`)"
+      - "traefik.http.routers.${DEV_NAME}aggypgadmin.service=${DEV_NAME}aggypgadmin"
+      - "traefik.http.services.${DEV_NAME}aggypgadmin.loadbalancer.server.port=80"
+    depends_on:
+      - aggy-db
 
   aggy-extract:
     container_name: "${DEV_NAME}-aggy-extract"
@@ -43,7 +84,10 @@ services:
       - 8000
     environment:
       - DB_HOST=${DEV_NAME}-aggy-db
-      - DB_PORT=6379
+      - DB_PORT=5432
+      - DB_USER=aggy
+      - DB_PASSWORD=aggy
+      - DB_NAME=aggy
       - RSS_BRIDGE_HOST=${DEV_NAME}-aggy-bridge
       - RSS_BRIDGE_PORT=80
       - OLLAMA_HOST=${DEV_NAME}-aggy-ollama
@@ -55,9 +99,14 @@ services:
       - "traefik.http.routers.${DEV_NAME}aggyapi.service=${DEV_NAME}aggyapi"
       - "traefik.http.services.${DEV_NAME}aggyapi.loadbalancer.server.port=8000"
     depends_on:
-      - aggy-db
-      - aggy-extract
-      - aggy-bridge
+      aggy-db:
+        condition: service_healthy
+      aggy-flyway:
+        condition: service_completed_successfully
+      aggy-extract:
+        condition: service_started
+      aggy-bridge:
+        condition: service_started
 
   aggy-webui:
     container_name: "${DEV_NAME}-aggy-webui"
@@ -76,3 +125,5 @@ services:
 
 volumes:
   aggy-ollama-data:
+  aggy-db-data:
+  aggy-pgadmin-data:

@@ -3,11 +3,8 @@ from typing import List, Optional
 from typing_extensions import Annotated
 
 from .item_collection import ItemCollection
-from .source import Source
 
 
-# TODO write unit test that ensures we are using hashes where we should be
-# (ie. user_hash, name_hash, etc. should be so many characters and of a certain set)
 class Feed(ItemCollection):
     user_hash: str
     name: Annotated[str, StringConstraints(strict=True, min_length=1)]
@@ -21,97 +18,118 @@ class Feed(ItemCollection):
         return f"{self.key}:SOURCES"
 
     @property
+    def items_key(self):
+        return f"{self.key}:ITEMS"
+
+    @property
     def name_hash(self):
         return self.__insecure_hash__(self.name)
 
     @property
-    def source_hashes(self):
-        with self.db_con() as r:
-            return list(r.smembers(self.sources_key))
+    def _items_table(self) -> str:
+        return "feed_items"
+
+    def _items_filter(self) -> tuple[str, tuple]:
+        return (
+            "c.user_hash = %s AND c.feed_hash = %s",
+            (self.user_hash, self.name_hash),
+        )
+
+    def _collection_keys(self) -> tuple[list[str], tuple]:
+        return (["user_hash", "feed_hash"], (self.user_hash, self.name_hash))
 
     @property
-    def sources(self) -> List[Source]:
-        return [
-            Source.read(
-                user_hash=self.user_hash,
-                feed_hash=self.name_hash,
-                source_hash=source_hash,
+    def source_hashes(self) -> List[str]:
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT name_hash FROM sources "
+                "WHERE user_hash = %s AND feed_hash = %s",
+                (self.user_hash, self.name_hash),
             )
-            for source_hash in self.source_hashes
+            return [row["name_hash"] for row in cur.fetchall()]
+
+    @property
+    def sources(self):
+        # Local import to avoid a circular dependency at module load time.
+        from .source import Source
+
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT user_hash, feed_hash, name_hash, name, url FROM sources "
+                "WHERE user_hash = %s AND feed_hash = %s",
+                (self.user_hash, self.name_hash),
+            )
+            rows = cur.fetchall()
+
+        return [
+            Source(
+                user_hash=row["user_hash"],
+                feed_hash=row["feed_hash"],
+                name=row["name"],
+                url=row["url"],
+            )
+            for row in rows
         ]
 
-    @property
-    def items_key(self):
-        return f"{self.key}:ITEMS"
+    def exists(self) -> bool:
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT 1 FROM feeds WHERE user_hash = %s AND name_hash = %s",
+                (self.user_hash, self.name_hash),
+            )
+            return cur.fetchone() is not None
 
     def create(self):
-        with self.db_con() as r:
-            if self.exists():
-                raise Exception(f"Feed with name {self.name} already exists")
+        if self.exists():
+            raise Exception(f"Feed with name {self.name} already exists")
 
-            r.hset(self.key, mapping={"name": self.name})
-            r.sadd(f"USER:{self.user_hash}:FEEDS", self.name_hash)
+        with self.db_con() as cur:
+            cur.execute(
+                "INSERT INTO feeds (user_hash, name_hash, name) VALUES (%s, %s, %s)",
+                (self.user_hash, self.name_hash, self.name),
+            )
 
         return self.key
 
     def delete(self):
-        with self.db_con() as r:
-            # remove feed from list of user's feeds
-            r.srem(f"USER:{self.user_hash}:FEEDS", self.name_hash)
-
-            # delete each source then remove list
-            for source_hash in self.source_hashes:
-                try:
-                    source = Source.read(
-                        user_hash=self.user_hash,
-                        feed_hash=self.name_hash,
-                        source_hash=source_hash,
-                    )
-                    source.delete()
-                except ValueError:
-                    # source does not exist
-                    pass
-            r.delete(self.sources_key)
-
-            # delete list of feed items
-            r.delete(f"{self.key}:ITEMS")
-
-            # delete self
-            r.delete(self.key)
+        # ON DELETE CASCADE removes sources, feed_items, source_items, and
+        # item_states tied to this feed.
+        with self.db_con() as cur:
+            cur.execute(
+                "DELETE FROM feeds WHERE user_hash = %s AND name_hash = %s",
+                (self.user_hash, self.name_hash),
+            )
 
     @classmethod
     def read(cls, user_hash, name_hash) -> Optional["Feed"]:
-        key = f"USER:{user_hash}:FEED:{name_hash}"
-        with cls.db_con() as r:
-            feed_data = r.hgetall(key)
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT name FROM feeds WHERE user_hash = %s AND name_hash = %s",
+                (user_hash, name_hash),
+            )
+            row = cur.fetchone()
 
-        if feed_data:
-            feed_data["name_hash"] = name_hash
-            feed_data["user_hash"] = user_hash
-            return Feed(**feed_data)
+        if row:
+            return cls(user_hash=user_hash, name=row["name"])
 
         return None
 
     @classmethod
     def read_all(cls, user_hash) -> List["Feed"]:
-        with cls.db_con() as r:
-            feed_name_hashs = r.smembers(f"USER:{user_hash}:FEEDS")
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT name FROM feeds WHERE user_hash = %s",
+                (user_hash,),
+            )
+            rows = cur.fetchall()
 
-        feeds = []
-        for name_hash in feed_name_hashs:
-            feeds.append(cls.read(user_hash=user_hash, name_hash=name_hash))
+        return [cls(user_hash=user_hash, name=row["name"]) for row in rows]
 
-        return feeds
+    def add_source(self, source):
+        source.user_hash = self.user_hash
+        source.feed_hash = self.name_hash
+        if not source.exists():
+            source.create()
 
-    def add_source(self, source: Source):
-        with self.db_con() as r:
-            source.user_hash = self.user_hash
-            source.feed_hash = self.name_hash
-            if not source.exists():
-                source.create()
-            r.sadd(f"{self.key}:SOURCES", source.name_hash)
-
-    def delete_source(self, source: Source):
-        with self.db_con() as r:
-            source.delete()
-            r.srem(f"{self.key}:SOURCES", source.name_hash)
+    def delete_source(self, source):
+        source.delete()

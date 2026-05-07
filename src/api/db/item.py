@@ -4,6 +4,7 @@ import dateparser
 from bleach import clean
 from typing import Optional, List, Dict
 import html
+import json
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
@@ -30,24 +31,68 @@ class ItemBase(AggyBaseModel):
         return self.__insecure_hash__(str(self.url))
 
     def exists(self) -> bool:
-        with self.db_con() as r:
-            return r.strlen(self.key) > 0
+        with self.db_con() as cur:
+            cur.execute("SELECT 1 FROM items WHERE url_hash = %s", (self.url_hash,))
+            return cur.fetchone() is not None
+
+    def _row_values(self) -> dict:
+        data = self.model_dump()
+        return {
+            "url_hash": self.url_hash,
+            "url": str(self.url),
+            "title": data.get("title"),
+            "author": data.get("author"),
+            "domain": data.get("domain"),
+            "excerpt": data.get("excerpt"),
+            "content": data.get("content"),
+            "image_url": data.get("image_url"),
+            "date_published": data.get("date_published"),
+            "embeddings": json.dumps(data["embeddings"])
+            if data.get("embeddings") is not None
+            else None,
+        }
 
     def create(self, overwrite=False):
         if not overwrite and self.exists():
             raise ValueError(f"Item with url_hash {self.key} already exists")
 
-        with self.db_con() as r:
-            r.set(self.key, self.model_dump_json())
+        v = self._row_values()
+        with self.db_con() as cur:
+            cur.execute(
+                "INSERT INTO items (url_hash, url, title, author, domain, excerpt, "
+                "content, image_url, date_published, embeddings) "
+                "VALUES (%(url_hash)s, %(url)s, %(title)s, %(author)s, %(domain)s, "
+                "%(excerpt)s, %(content)s, %(image_url)s, %(date_published)s, "
+                "%(embeddings)s) "
+                "ON CONFLICT (url_hash) DO UPDATE SET "
+                "url = EXCLUDED.url, title = EXCLUDED.title, author = EXCLUDED.author, "
+                "domain = EXCLUDED.domain, excerpt = EXCLUDED.excerpt, "
+                "content = EXCLUDED.content, image_url = EXCLUDED.image_url, "
+                "date_published = EXCLUDED.date_published, "
+                "embeddings = EXCLUDED.embeddings",
+                v,
+            )
+
+    @classmethod
+    def from_row(cls, row):
+        if row is None:
+            return None
+        data = dict(row)
+        data.pop("url_hash", None)
+        data.pop("created_at", None)
+        return cls(**data)
 
     @classmethod
     def read(cls, url_hash):
-        with cls.db_con() as r:
-            item_json = r.get(f"ITEM:{url_hash}")
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT url, title, author, domain, excerpt, content, image_url, "
+                "date_published, embeddings FROM items WHERE url_hash = %s",
+                (url_hash,),
+            )
+            row = cur.fetchone()
 
-        if item_json:
-            return cls.model_validate_json(item_json)
-        return None
+        return cls.from_row(row)
 
     def update(self, **updates):
         for field, value in updates.items():
@@ -55,8 +100,8 @@ class ItemBase(AggyBaseModel):
         self.create(overwrite=True)
 
     def delete(self):
-        with self.db_con() as r:
-            r.delete(self.key)
+        with self.db_con() as cur:
+            cur.execute("DELETE FROM items WHERE url_hash = %s", (self.url_hash,))
 
     @model_validator(mode="after")
     def sanitize_and_fix_links(self):
