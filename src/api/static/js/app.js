@@ -47,7 +47,7 @@ function bindControls() {
   });
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
-  $('addSourceBtn').onclick = () => showModal('addSourceModal');
+  $('addSourceBtn').onclick = openAddSourceModal;
   $('srcTabTemplate').onclick = () => switchSourceTab('template');
   $('srcTabManual').onclick = () => switchSourceTab('manual');
   $('templateSearch').oninput = debounce(searchTemplates, 300);
@@ -195,7 +195,7 @@ async function showFeed(hash) {
   if (onboardingContinue) {
     onboardingContinue = false;
     switchFeedTab('sources');
-    showModal('addSourceModal');
+    openAddSourceModal();
     toast('Feed created! Now add a source — search a template or paste an RSS URL.', 'alert-info');
     return;
   }
@@ -228,7 +228,7 @@ async function loadFeedItems() {
     if (!items.length && itemSkip === 0) {
       render(list, emptyState('\u{1F4F0}', 'No articles yet',
         'Add some sources and articles will appear here once ingested',
-        h('button', { class: 'btn btn-primary btn-sm', onclick: () => showModal('addSourceModal') }, '+ Add Source')));
+        h('button', { class: 'btn btn-primary btn-sm', onclick: openAddSourceModal }, '+ Add Source')));
       $('loadMoreBtn').classList.add('hidden');
       return;
     }
@@ -339,7 +339,7 @@ async function loadSources() {
     if (!sources.length) {
       render(list, emptyState('\u{1F517}', 'No sources',
         'Add sources to pull content into this feed',
-        h('button', { class: 'btn btn-primary btn-sm', onclick: () => showModal('addSourceModal') }, '+ Add Source')));
+        h('button', { class: 'btn btn-primary btn-sm', onclick: openAddSourceModal }, '+ Add Source')));
       return;
     }
     render(list, sources.map(sourceRow));
@@ -401,12 +401,19 @@ async function handleCreateManualSource(e) {
 }
 
 // ---------- source templates ----------
+function openAddSourceModal() {
+  showModal('addSourceModal');
+  clearTemplateSelection();
+  searchTemplates();
+}
+
 async function searchTemplates() {
+  // An empty query returns the full template list (alphabetized); a query
+  // filters and sorts it by fuzzy-match relevance.
   const query = $('templateSearch').value.trim();
   const list = $('templateList');
-  if (!query) { render(list); return; }
   try {
-    const templates = await sdk.sourceTemplateSearch({ query, limit: 20 });
+    const templates = await sdk.sourceTemplateSearch({ query });
     if (!templates.length) {
       render(list, h('div', { class: 'p-4 text-center text-sm text-base-content/50' }, 'No templates found'));
       return;
