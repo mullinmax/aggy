@@ -1,4 +1,6 @@
 import logging
+from urllib.parse import urljoin
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -72,38 +74,55 @@ def rss_bridge_get_templates_job() -> None:
 
         soup = BeautifulSoup(response.content, "html.parser")
         bridge_list = []
+        failures = 0
 
-        # Find all bridge elements
+        # Find all bridge elements. Each bridge is parsed independently so
+        # one malformed bridge card can't abort the rest of the catalog.
         for bridge in soup.find_all("section", class_="bridge-card"):
-            bridge_name = bridge.find("h2").text.strip()
-            links = bridge.find("h2").find_all("a", href=True)
-            bridge_url = next((a["href"] for a in links if not a["href"].startswith("#")), None)
-            bridge_description = bridge.find("p", class_="description").text.strip()
-            bridge_short_name = bridge["data-short-name"]
-
-            for form in bridge.find_all("form", class_="bridge-form"):
-                context = None
-
-                context_input = form.find("input", {"name": "context"})
-                if context_input is not None:
-                    context = context_input.get("value")
-
-                bridge_template = SourceTemplate(
-                    name=bridge_name,
-                    bridge_short_name=bridge_short_name,
-                    url=bridge_url,
-                    description=bridge_description,
-                    context=context,
-                    parameters=parse_parameters(form),
+            try:
+                bridge_name = bridge.find("h2").text.strip()
+                links = bridge.find("h2").find_all("a", href=True)
+                bridge_url = next(
+                    (a["href"] for a in links if not a["href"].startswith("#")), None
                 )
+                # bridges without a site link get the rss-bridge URL itself;
+                # relative links are resolved against it
+                bridge_url = urljoin(url, bridge_url) if bridge_url else url
+                description_el = bridge.find("p", class_="description")
+                bridge_description = (
+                    description_el.text.strip() if description_el else bridge_name
+                )
+                bridge_short_name = bridge["data-short-name"]
 
-                bridge_template.create()
-                bridge_list.append(bridge_template)
+                for form in bridge.find_all("form", class_="bridge-form"):
+                    context = None
+
+                    context_input = form.find("input", {"name": "context"})
+                    if context_input is not None:
+                        context = context_input.get("value")
+
+                    bridge_template = SourceTemplate(
+                        name=bridge_name,
+                        bridge_short_name=bridge_short_name,
+                        url=bridge_url,
+                        description=bridge_description,
+                        context=context,
+                        parameters=parse_parameters(form),
+                    )
+
+                    bridge_template.create()
+                    bridge_list.append(bridge_template)
+            except Exception as e:
+                failures += 1
+                logging.warning(f"Failed to parse rss-bridge card: {e}")
 
         for bridge in bridge_list:
-            logging.info(f"rss-ridge template created: {bridge.user_friendly_name}")
+            logging.info(f"rss-bridge template created: {bridge.user_friendly_name}")
 
-        logging.info(f"Total rss-bridge templates created: {len(bridge_list)}")
+        logging.info(
+            f"Total rss-bridge templates created: {len(bridge_list)} "
+            f"({failures} bridge cards failed to parse)"
+        )
 
     except Exception as e:
         logging.error(f"Failed to get RSS bridge templates: {e}")

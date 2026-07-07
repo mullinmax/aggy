@@ -106,38 +106,89 @@ def create_source_with_nonexistent_template(
     assert response.status_code == 404
 
 
-def search_source_templates(
-    client,
-    existing_source_template,
-    token,
-):
-    # make some dummy source templates
-    for i in range(5):
-        source_template = SourceTemplate(
+def _make_dummy_templates(count):
+    templates = []
+    for i in range(count):
+        template = SourceTemplate(
             name=f"test_template_{i}",
             context="test",
             bridge_short_name="test",
+            url="http://example.com",
+            description="Dummy template",
+            parameters={},
         )
-        source_template.create()
+        template.create()
+        templates.append(template)
+    return templates
 
-    args = build_api_request_args(
-        path="/source_template/search",
-        token=token,
-        params={
-            "query": existing_source_template.name,
-            "limit": "3",
-        },
-    )
 
-    response = client.get(**args)
+def test_search_source_templates(client, existing_source_template, token):
+    dummies = _make_dummy_templates(5)
 
-    assert response.status_code == 200
-    res_data = response.json()
+    try:
+        args = build_api_request_args(
+            path="/source_template/search",
+            token=token,
+            params={
+                "query": existing_source_template.name,
+                "limit": "3",
+            },
+        )
 
-    assert existing_source_template.exists() is True
-    assert isinstance(res_data, list)
-    assert len(res_data) == 3
-    assert res_data[0]["name"] == existing_source_template.name
+        response = client.get(**args)
 
-    # check that the next template in the response is one of the dummy templates
-    assert "test_template_" in res_data[1]["name"]
+        assert response.status_code == 200
+        res_data = response.json()
+
+        assert isinstance(res_data, list)
+        assert len(res_data) == 3
+        # best match first, and the hash is included for follow-up requests
+        assert res_data[0]["name"] == existing_source_template.name
+        assert res_data[0]["name_hash"] == existing_source_template.name_hash
+    finally:
+        for template in dummies:
+            template.delete()
+
+
+def test_search_without_query_returns_all(client, existing_source_template, token):
+    dummies = _make_dummy_templates(3)
+
+    try:
+        args = build_api_request_args(path="/source_template/search", token=token)
+
+        response = client.get(**args)
+
+        assert response.status_code == 200
+        res_data = response.json()
+
+        names = [t["name"] for t in res_data]
+        assert existing_source_template.name in names
+        for template in dummies:
+            assert template.name in names
+        # alphabetized by user-friendly name
+        friendly = [t["user_friendly_name"].lower() for t in res_data]
+        assert friendly == sorted(friendly)
+    finally:
+        for template in dummies:
+            template.delete()
+
+
+def test_search_returns_minimum_results_for_bad_query(
+    client, existing_source_template, token
+):
+    dummies = _make_dummy_templates(5)
+
+    try:
+        args = build_api_request_args(
+            path="/source_template/search",
+            token=token,
+            params={"query": "zzzzqqqqxxxx no such thing 12345"},
+        )
+
+        response = client.get(**args)
+
+        assert response.status_code == 200
+        assert len(response.json()) >= 4
+    finally:
+        for template in dummies:
+            template.delete()

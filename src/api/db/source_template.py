@@ -1,5 +1,5 @@
-from pydantic import HttpUrl
-from typing import Dict, Any, Optional, List, Union
+from pydantic import HttpUrl, computed_field
+from typing import ClassVar, Dict, Any, Optional, List, Union
 from enum import Enum
 import urllib
 import json
@@ -39,12 +39,14 @@ class SourceTemplate(AggyBaseModel):
     def key(self):
         return f"SOURCE_TEMPLATE:{self.name_hash}"
 
+    @computed_field  # serialized so API clients can reference templates by hash
     @property
-    def name_hash(self):
+    def name_hash(self) -> str:
         return self.__insecure_hash__(self.user_friendly_name)
 
+    @computed_field
     @property
-    def user_friendly_name(self):
+    def user_friendly_name(self) -> str:
         if self.context:
             return f"{self.name} ({self.context})"
         return self.name
@@ -192,19 +194,42 @@ class SourceTemplate(AggyBaseModel):
 
         return [cls._from_row(row) for row in rows]
 
+    # Matches scoring below this are dropped from search results, except that
+    # the top SEARCH_MIN_RESULTS matches are always kept regardless of score.
+    SEARCH_SCORE_THRESHOLD: ClassVar[int] = 50
+    SEARCH_MIN_RESULTS: ClassVar[int] = 4
+
     @classmethod
     def search(
-        cls, query: str, skip: Union[int, None] = None, limit: Union[int, None] = None
+        cls,
+        query: Union[str, None] = None,
+        skip: Union[int, None] = None,
+        limit: Union[int, None] = None,
     ) -> List["SourceTemplate"]:
-        templates = cls.read_all()
+        templates = sorted(cls.read_all(), key=lambda t: t.user_friendly_name.lower())
+        query = (query or "").strip().lower()
 
-        scored = [(t, fuzz.ratio(query.lower(), t.name.lower())) for t in templates]
-        scored.sort(key=lambda x: x[1], reverse=True)
+        if query:
+
+            def score(t: "SourceTemplate") -> float:
+                # description matches are weighted below name matches so a
+                # template whose name matches always outranks one where the
+                # query only appears in the description
+                return max(
+                    fuzz.WRatio(query, t.user_friendly_name.lower()),
+                    fuzz.WRatio(query, (t.description or "").lower()) * 0.6,
+                )
+
+            scored = sorted(
+                ((t, score(t)) for t in templates), key=lambda x: x[1], reverse=True
+            )
+            templates = [
+                t
+                for i, (t, s) in enumerate(scored)
+                if s >= cls.SEARCH_SCORE_THRESHOLD or i < cls.SEARCH_MIN_RESULTS
+            ]
 
         start, end = skip_limit_to_start_end(skip, limit)
         if end == -1:
-            paginated = scored[start:]
-        else:
-            paginated = scored[start : end + 1]
-
-        return [t for t, _ in paginated]
+            return templates[start:]
+        return templates[start : end + 1]

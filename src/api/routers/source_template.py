@@ -80,7 +80,7 @@ def create_source_from_template(
     response_model=List[SourceTemplate],
 )
 def search_source_templates(
-    query: str,
+    query: str = "",
     skip: Union[int, None] = None,
     limit: Union[int, None] = None,
     user: User = Depends(authenticate),
