@@ -1,6 +1,5 @@
 services:
   aggy-db:
-    container_name: aggy-db
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -16,7 +15,6 @@ services:
       retries: 10
 
   aggy-flyway:
-    container_name: aggy-flyway
     image: flyway/flyway:10-alpine
     command: -url=jdbc:postgresql://aggy-db:5432/aggy -user=aggy -password=aggy -connectRetries=30 migrate
     volumes:
@@ -26,7 +24,6 @@ services:
         condition: service_healthy
 
   aggy-pgadmin:
-    container_name: aggy-pgadmin
     image: dpage/pgadmin4:latest
     restart: unless-stopped
     environment:
@@ -39,28 +36,20 @@ services:
       - aggy-db
 
   aggy-extract:
-    container_name: aggy-extract
     image: wangqiru/mercury-parser-api
 
   aggy-bridge:
-    container_name: aggy-bridge
-    build:
-      context: ./src/bridge
-      dockerfile: dockerfile
+    image: ghcr.io/mullinmax/aggy/aggy-bridge:latest
     restart: unless-stopped
 
   aggy-ollama:
-    container_name: aggy-ollama
     image: ollama/ollama:latest
     restart: unless-stopped
     volumes:
       - "aggy-ollama-data:/root/.ollama"
 
   aggy-api:
-    container_name: aggy-api
-    build:
-      context: ./src/api
-      dockerfile: dockerfile
+    image: ghcr.io/mullinmax/aggy/aggy-api:latest
     environment:
       - DB_HOST=aggy-db
       - DB_PORT=5432
@@ -88,7 +77,6 @@ services:
         condition: service_started
 
   cloudflared:
-    container_name: aggy-cloudflared
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel --no-autoupdate run
