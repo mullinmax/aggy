@@ -5,7 +5,9 @@ from config import config
 
 
 def get_ollama_connection() -> Client:
-    ollama_args = {"host": config.get("OLLAMA_HOST") + ":" + config.get("OLLAMA_PORT")}
+    ollama_args = {
+        "host": f"{config.get('OLLAMA_HOST')}:{config.get_int('OLLAMA_PORT')}"
+    }
 
     auth_user = config.get("OLLAMA_USER", False)
     auth_password = config.get("OLLAMA_PASSWORD", False)

@@ -38,7 +38,7 @@ class ItemResponse(BaseRouteModel):
         return cls(
             item_hash=db_model.url_hash,
             item_url=db_model.url,
-            item_item_author=db_model.author,
+            item_author=db_model.author,
             item_date_published=db_model.date_published,
             item_image_url=db_model.image_url,
             item_title=db_model.title,

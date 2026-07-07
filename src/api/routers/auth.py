@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import jwt
 
 from db.user import User
@@ -19,6 +19,9 @@ auth_router = APIRouter()
     "/signup", summary="Create a user", response_model=AcknowledgeResponse
 )
 def signup(signup_user: AuthUser) -> AcknowledgeResponse:
+    if not config.get_bool("SIGNUP_ENABLED"):
+        raise HTTPException(status_code=403, detail="Signups are disabled")
+
     user = User(name=signup_user.username)
     if user.exists():
         raise HTTPException(status_code=400, detail="Username already registered")
@@ -36,15 +39,18 @@ def form_login(form_data: OAuth2PasswordRequestForm = Depends()) -> TokenRespons
 
 @auth_router.post("/login", summary="Login with AuthUser", response_model=TokenResponse)
 def login(form_data: AuthUser) -> TokenResponse:
+    # A uniform 401 for unknown users and bad passwords avoids leaking
+    # which usernames exist.
     try:
         user = User.read(name=form_data.username)
     except Exception:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
 
     if user.check_password(password=form_data.password):
+        expiration_days = config.get_int("JWT_EXPIRATION_DAYS")
         to_encode = {
             "user": user.name_hash,
-            "exp": datetime.utcnow() + timedelta(days=7),  # TODO make this configurable
+            "exp": datetime.now(timezone.utc) + timedelta(days=expiration_days),
         }
         token = jwt.encode(
             to_encode, config.get("JWT_SECRET"), algorithm=config.get("JWT_ALGORITHM")

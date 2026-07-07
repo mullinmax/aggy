@@ -36,12 +36,15 @@ def ingest_source(source: Source) -> None:
                 logging.error("failed to parse best item into strict item")
                 logging.error(str(best_item))
                 # TODO make sure we don't attempt this url over and over
+                continue
 
-        # generate embedding if it doesn't exist
-        try:
-            final_item.add_embedding(model_name=config.get("OLLAMA_EMBEDDING_MODEL"))
-        except Exception as e:
-            logging.error(f"Error adding embedding to item: {e}")
+        # generate embedding if a model is configured and it doesn't exist yet
+        embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
+        if embedding_model is not None:
+            try:
+                final_item.add_embedding(model_name=embedding_model)
+            except Exception as e:
+                logging.error(f"Error adding embedding to item: {e}")
 
         # write item to db
         try:

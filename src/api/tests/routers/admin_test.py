@@ -10,3 +10,10 @@ def test_get_version(client):
     response = client.get("/version")
     assert response.status_code == 200
     assert response.json() == {"version": "0.0.0-beta"}
+
+
+def test_health(client):
+    """Tests the health check route."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"message": "success"}
