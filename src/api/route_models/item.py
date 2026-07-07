@@ -17,6 +17,7 @@ class ItemResponse(BaseRouteModel):
     item_domain: Optional[str] = None
     item_excerpt: Optional[str] = None
     item_content: Optional[str] = None
+    item_source_name: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {
@@ -34,8 +35,9 @@ class ItemResponse(BaseRouteModel):
     }
 
     @classmethod
-    def from_db_model(cls, db_model: ItemLoose):
+    def from_db_model(cls, db_model: ItemLoose, source_name: str = None):
         return cls(
+            item_source_name=source_name,
             item_hash=db_model.url_hash,
             item_url=db_model.url,
             item_author=db_model.author,

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from pydantic import confloat
 
 from .item import ItemLoose
@@ -25,9 +26,9 @@ class ItemState(AggyBaseModel):
     item_url_hash: str
     user_hash: str
     feed_hash: str
-    score: confloat(ge=-1, le=1) = None
-    score_date: datetime = None
-    is_read: bool = None
+    score: Optional[confloat(ge=-1, le=1)] = None
+    score_date: Optional[datetime] = None
+    is_read: Optional[bool] = None
 
     @property
     def key(self) -> str:

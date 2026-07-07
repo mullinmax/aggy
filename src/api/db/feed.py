@@ -71,6 +71,57 @@ class Feed(ItemCollection):
             for row in rows
         ]
 
+    def sources_with_stats(self) -> List[dict]:
+        """Sources in this feed plus item count and last ingest time."""
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT s.name, s.url, s.name_hash, s.feed_hash, s.last_ingested_at, "
+                "(SELECT COUNT(*) FROM source_items si "
+                " WHERE si.user_hash = s.user_hash AND si.feed_hash = s.feed_hash "
+                " AND si.source_hash = s.name_hash) AS item_count "
+                "FROM sources s WHERE s.user_hash = %s AND s.feed_hash = %s "
+                "ORDER BY s.name",
+                (self.user_hash, self.name_hash),
+            )
+            return cur.fetchall()
+
+    def query_items_with_sources(self, skip=None, limit=None):
+        """Like ``query_items`` but pairs each item with the name of a source
+        in this feed that produced it (None if untracked)."""
+        from .item import ItemStrict
+
+        sql = (
+            "SELECT i.*, ("
+            " SELECT s.name FROM source_items si"
+            " JOIN sources s ON s.user_hash = si.user_hash"
+            "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+            " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+            "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
+            "FROM items i "
+            "JOIN feed_items c ON c.item_url_hash = i.url_hash "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s "
+            "ORDER BY c.score DESC, c.added_at DESC"
+        )
+        params: tuple = (self.user_hash, self.name_hash)
+        if limit is not None and limit >= 0:
+            sql += " LIMIT %s"
+            params = params + (limit,)
+        if skip is not None and skip > 0:
+            sql += " OFFSET %s"
+            params = params + (skip,)
+
+        with self.db_con() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+        results = []
+        for row in rows:
+            if not row:
+                continue
+            source_name = row.pop("source_name", None)
+            results.append((ItemStrict.from_row(row), source_name))
+        return results
+
     def exists(self) -> bool:
         with self.db_con() as cur:
             cur.execute(

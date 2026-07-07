@@ -1,6 +1,5 @@
 from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
-from datetime import datetime
 
 from constants import SOURCE_READ_INTERVAL_TIMEDELTA
 from .item_collection import ItemCollection
@@ -75,18 +74,44 @@ class Source(ItemCollection):
             )
 
     def trigger_ingest(self, now=False):
+        # Compare against the database clock (next_ingest_at is TIMESTAMPTZ);
+        # a naive Python datetime here breaks when app/DB timezones differ.
         if now:
-            target = datetime.now()
+            target_sql = "NOW()"
+            params = ()
         else:
-            target = datetime.now() + SOURCE_READ_INTERVAL_TIMEDELTA
+            target_sql = "NOW() + %s"
+            params = (SOURCE_READ_INTERVAL_TIMEDELTA,)
 
         # Mirrors the Redis ZADD lt=True semantics: only move next_ingest_at
         # earlier, never later.
         with self.db_con() as cur:
             cur.execute(
-                "UPDATE sources SET next_ingest_at = LEAST(next_ingest_at, %s) "
+                f"UPDATE sources SET next_ingest_at = LEAST(next_ingest_at, {target_sql}) "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
-                (target, self.user_hash, self.feed_hash, self.name_hash),
+                params + (self.user_hash, self.feed_hash, self.name_hash),
+            )
+
+    def push_next_ingest(self):
+        """Push the next scheduled ingest a full interval out from now."""
+        with self.db_con() as cur:
+            cur.execute(
+                "UPDATE sources SET next_ingest_at = NOW() + %s "
+                "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
+                (
+                    SOURCE_READ_INTERVAL_TIMEDELTA,
+                    self.user_hash,
+                    self.feed_hash,
+                    self.name_hash,
+                ),
+            )
+
+    def mark_ingested(self):
+        with self.db_con() as cur:
+            cur.execute(
+                "UPDATE sources SET last_ingested_at = NOW() "
+                "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
+                (self.user_hash, self.feed_hash, self.name_hash),
             )
 
     @classmethod
