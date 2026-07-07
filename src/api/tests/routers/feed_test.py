@@ -190,7 +190,8 @@ def test_get_some_items(
 
     response = client.get(**args)
 
+    # items come back highest score first; skip=2 lands on the 3rd best
     assert response.status_code == 200
     assert len(response.json()) == 2
-    assert response.json()[0]["item_url"] == "http://example.com/2/"
-    assert response.json()[1]["item_url"] == "http://example.com/3/"
+    assert response.json()[0]["item_url"] == "http://example.com/7/"
+    assert response.json()[1]["item_url"] == "http://example.com/6/"

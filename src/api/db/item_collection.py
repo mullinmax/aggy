@@ -25,7 +25,7 @@ class ItemCollection(AggyBaseModel):
             f"SELECT i.* FROM items i "
             f"JOIN {self._items_table} c ON c.item_url_hash = i.url_hash "
             f"WHERE {where} "
-            f"ORDER BY c.score ASC, c.added_at ASC"
+            f"ORDER BY c.score DESC, c.added_at DESC"
         )
         if limit is not None and limit >= 0:
             sql += " LIMIT %s"

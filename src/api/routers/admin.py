@@ -1,11 +1,25 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 import re
 
 from config import config
+from db.base import get_db_con
+from route_models.acknowledge import AcknowledgeResponse
 from route_models.version import Version
 
 admin_router = APIRouter()
+
+
+# health check for container orchestration; verifies DB connectivity
+@admin_router.get("/health", response_model=AcknowledgeResponse)
+def health():
+    try:
+        with get_db_con() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return AcknowledgeResponse()
 
 
 # Route to redirect the root to /docs

@@ -31,10 +31,13 @@ scheduler = AsyncIOScheduler()
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     logging.info("API starting up...")
+
+    # Fail fast on missing critical config instead of erroring on first login.
+    config.get("JWT_SECRET")
     scheduler.add_job(
         func=source_ingestion_scheduling_job,
         trigger="interval",
-        seconds=60 * config.get("SOURCE_READ_INTERVAL_MINUTES"),
+        seconds=60 * config.get_int("SOURCE_READ_INTERVAL_MINUTES"),
         id="source_ingestion_scheduling_job",
         replace_existing=False,
         next_run_time=datetime.now(),
@@ -44,7 +47,7 @@ async def app_lifespan(app: FastAPI):
     scheduler.add_job(
         func=source_ingestion_job,
         trigger="interval",
-        seconds=config.get("SOURCE_INGESTION_RUN_INTERVAL_SECONDS"),
+        seconds=config.get_int("SOURCE_INGESTION_RUN_INTERVAL_SECONDS"),
         id="source_ingestion_job",
         replace_existing=False,
         next_run_time=datetime.now(),

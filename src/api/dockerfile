@@ -4,6 +4,7 @@ COPY tailwind/package.json ./
 RUN npm install --no-audit --no-fund
 COPY tailwind/tailwind.config.js tailwind/input.css ./
 COPY templates ./templates
+COPY static/js ./static/js
 RUN npx tailwindcss -i ./input.css -o ./output.css --minify
 
 FROM python:3.11-alpine as aggy-api

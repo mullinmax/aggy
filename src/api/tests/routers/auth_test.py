@@ -27,6 +27,18 @@ def test_create_user_duplicate(client, unique_user):
     assert response.json() == {"detail": "Username already registered"}
 
 
+def test_create_user_signup_disabled(client, unique_user):
+    config.set("SIGNUP_ENABLED", "false")
+    try:
+        response = client.post(
+            "/auth/signup", json={"username": unique_user.name, "password": "password"}
+        )
+        assert response.status_code == 403
+        assert response.json() == {"detail": "Signups are disabled"}
+    finally:
+        config.set("SIGNUP_ENABLED", True)
+
+
 def test_create_user_no_username(client, unique_user):
     response = client.post("/auth/signup", json={"password": "password"})
     assert response.status_code == 422
@@ -67,10 +79,12 @@ def test_get_token_bad_user(client, unique_user):
     )
     assert response.status_code == 200
 
+    # unknown users get the same 401 as bad passwords (no user enumeration)
     response = client.post(
         "/auth/login", json={"username": "bad_user", "password": "password"}
     )
-    assert response.status_code == 404
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Incorrect username or password"}
 
 
 def test_get_token_bad_password(client, unique_user):

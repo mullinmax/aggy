@@ -21,6 +21,8 @@ KNOWN_CONFIG_VALUES = [
     "RSS_BRIDGE_HOST",
     "RSS_BRIDGE_PORT",
     "BUILD_VERSION",
+    "JWT_EXPIRATION_DAYS",
+    "SIGNUP_ENABLED",
 ]
 
 DEFAULT_CONFIG = {
@@ -34,7 +36,11 @@ DEFAULT_CONFIG = {
     "DB_PORT": 5432,
     "DB_USER": "aggy",
     "DB_NAME": "aggy",
+    "JWT_EXPIRATION_DAYS": 7,
+    "SIGNUP_ENABLED": True,
 }
+
+FALSEY_STRINGS = {"", "0", "false", "no", "off"}
 
 
 class ConfigError(Exception):
@@ -74,6 +80,16 @@ class Config:
                 )
 
         return self.config[key]
+
+    def get_int(self, key, default=None):
+        # env values always come back as strings; coerce for numeric config
+        return int(self.get(key, default=default))
+
+    def get_bool(self, key, default=None):
+        value = self.get(key, default=default)
+        if isinstance(value, str):
+            return value.strip().lower() not in FALSEY_STRINGS
+        return bool(value)
 
     def set(self, key, value):
         self.config[key] = value

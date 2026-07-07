@@ -1,11 +1,17 @@
+import logging
+from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
 from db.item import ItemLoose
 
 
-def ingest_open_graph_item(item: ItemLoose) -> ItemLoose:
-    response = requests.get(str(item.url))
+def ingest_open_graph_item(item: ItemLoose) -> Optional[ItemLoose]:
+    try:
+        response = requests.get(str(item.url), timeout=10)
+    except Exception as e:
+        logging.exception(f"Error fetching open graph data for {item.url}: {e}")
+        return None
     soup = BeautifulSoup(response.text, "html.parser")
     og_tags = soup.find_all(
         "meta", attrs={"property": lambda x: x and x.startswith("og:")}

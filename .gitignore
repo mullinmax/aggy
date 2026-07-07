@@ -8,32 +8,13 @@ coverage.xml
 #JavaScript
 **/node_modules/
 
-# Expo
-src/react/assets/aggy/.expo/
-aggy/src/react/dist/
-aggy/src/react/web-build/
-
-# Native
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
-
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
 # macOS
 .DS_Store
 *.pem
+*.key
 
 # local env files
+.env
 .env*.local
 
 # typescript
