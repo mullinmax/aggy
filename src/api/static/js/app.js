@@ -10,6 +10,7 @@ const PAGE_SIZE = 20;
 let currentFeed = null;
 let itemSkip = 0;
 let selectedTemplate = null;
+let onboardingContinue = false; // set when the user creates their very first feed
 
 // ---------- boot ----------
 document.addEventListener('DOMContentLoaded', async () => {
@@ -73,10 +74,7 @@ async function loadFeeds() {
   try {
     const feeds = await sdk.feedList();
     if (!feeds.length) {
-      render(grid, h('div', { class: 'col-span-full' },
-        emptyState('\u{1F4E1}', 'No feeds yet',
-          'Create your first feed to start aggregating content',
-          h('button', { class: 'btn btn-primary btn-sm', onclick: () => showModal('createFeedModal') }, '+ Create Feed'))));
+      render(grid, h('div', { class: 'col-span-full' }, onboardingWelcome()));
       return;
     }
     render(grid, feeds.map(feedCard));
@@ -84,6 +82,34 @@ async function loadFeeds() {
     render(grid, h('div', { class: 'col-span-full text-center py-16 text-base-content/50' }, 'Failed to load feeds'));
     toast(err.message, 'alert-error');
   }
+}
+
+// First-run onboarding shown in place of the feed grid when the user has no feeds.
+function onboardingWelcome() {
+  const step = (num, title, message, active) =>
+    h('li', { class: 'flex gap-4 items-start' },
+      h('div', {
+        class: `badge ${active ? 'badge-primary' : 'badge-ghost'} badge-lg font-bold flex-shrink-0`,
+      }, String(num)),
+      h('div', {},
+        h('div', { class: `font-semibold text-sm ${active ? '' : 'text-base-content/50'}` }, title),
+        h('div', { class: 'text-xs text-base-content/60 mt-0.5' }, message)));
+
+  return h('div', { class: 'card bg-base-200 border border-base-300 max-w-lg mx-auto mt-8' },
+    h('div', { class: 'card-body' },
+      h('p', { class: 'text-4xl mb-1' }, '\u{1F44B}'),
+      h('h2', { class: 'card-title' }, 'Welcome to Aggy!'),
+      h('p', { class: 'text-sm text-base-content/60 mb-4' },
+        'Aggy pulls articles from sources you choose into feeds, then learns what you like as you vote. Getting set up takes three quick steps:'),
+      h('ul', { class: 'flex flex-col gap-4 mb-5' },
+        step(1, 'Create a feed', 'A feed is a topic bucket, like "Technology" or "Sports".', true),
+        step(2, 'Add sources', 'Point the feed at websites via templates or RSS URLs.', false),
+        step(3, 'Read & vote', 'Articles roll in; upvote and downvote to tune your ranking.', false)),
+      h('div', { class: 'card-actions' },
+        h('button', {
+          class: 'btn btn-primary w-full',
+          onclick: () => { onboardingContinue = true; showModal('createFeedModal'); $('newFeedName').focus(); },
+        }, 'Create your first feed'))));
 }
 
 function feedCard(feed) {
@@ -163,6 +189,17 @@ async function showFeed(hash) {
 
   $('feedTitle').textContent = currentFeed.feed_name;
   $('feedBreadcrumb').textContent = currentFeed.feed_name;
+
+  // Continue first-run onboarding: land the user on the next step (adding
+  // a source) instead of an empty articles list.
+  if (onboardingContinue) {
+    onboardingContinue = false;
+    switchFeedTab('sources');
+    showModal('addSourceModal');
+    toast('Feed created! Now add a source — search a template or paste an RSS URL.', 'alert-info');
+    return;
+  }
+
   switchFeedTab('items');
   loadFeedItems();
 }
