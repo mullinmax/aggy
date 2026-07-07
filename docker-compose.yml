@@ -15,10 +15,8 @@ services:
       retries: 10
 
   aggy-flyway:
-    image: flyway/flyway:10-alpine
+    image: ghcr.io/mullinmax/aggy/aggy-migrations:latest
     command: -url=jdbc:postgresql://aggy-db:5432/aggy -user=aggy -password=aggy -connectRetries=30 migrate
-    volumes:
-      - "./src/api/db/migrations:/flyway/sql"
     depends_on:
       aggy-db:
         condition: service_healthy

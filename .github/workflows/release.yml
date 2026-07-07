@@ -20,7 +20,13 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: ['api', 'bridge']
+        include:
+          - service: api
+            context: ./src/api
+          - service: bridge
+            context: ./src/bridge
+          - service: migrations
+            context: ./src/api/db/migrations
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -63,8 +69,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ./src/${{ matrix.service }}
-          file: ./src/${{ matrix.service }}/dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
