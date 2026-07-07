@@ -31,6 +31,15 @@ def ingest_source(source: Source) -> None:
             detail = f" ({parsed.bozo_exception})"
         raise Exception(f"Feed returned no entries{detail}")
 
+    # rss-bridge reports bridge failures as a 200 OK feed containing a single
+    # item titled "Bridge returned error <code>! (<id>)". Treat that as a
+    # failed ingest instead of ingesting the error as an article.
+    bridge_errors = [
+        e for e in entries if str(e.get("title", "")).startswith("Bridge returned error")
+    ]
+    if bridge_errors:
+        raise Exception(f"rss-bridge failed: {bridge_errors[0].get('title')}")
+
     logging.info(f"Source '{source.name}': feed has {len(entries)} entries")
 
     for entry in entries:
