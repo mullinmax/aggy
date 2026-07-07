@@ -5,14 +5,14 @@
 <!-- Navbar -->
 <div class="navbar bg-base-200 border-b border-base-300 sticky top-0 z-40">
   <div class="flex-1">
-    <a href="/app" class="btn btn-ghost text-xl font-bold gap-2">
+    <a href="#/" class="btn btn-ghost text-xl font-bold gap-2">
       <div class="badge badge-primary text-primary-content font-extrabold p-2">A</div>
       Aggy
     </a>
   </div>
   <div class="flex-none gap-2">
     <span class="text-sm text-base-content/60" id="usernameDisplay"></span>
-    <button class="btn btn-ghost btn-sm" onclick="logout()">Sign Out</button>
+    <button class="btn btn-ghost btn-sm" id="logoutBtn">Sign Out</button>
   </div>
 </div>
 
@@ -26,18 +26,16 @@
         <h1 class="text-2xl font-bold">Your Feeds</h1>
         <p class="text-sm text-base-content/60 mt-1">Curated content, ranked by relevance</p>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="showModal('createFeedModal')">+ New Feed</button>
+      <button class="btn btn-primary btn-sm" id="newFeedBtn">+ New Feed</button>
     </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="feedGrid">
-      <div class="flex justify-center col-span-full py-16"><span class="loading loading-spinner loading-lg"></span></div>
-    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="feedGrid"></div>
   </div>
 
   <!-- Feed Detail View -->
   <div id="viewFeed" class="hidden">
     <div class="breadcrumbs text-sm mb-4">
       <ul>
-        <li><a onclick="showDashboard()">Feeds</a></li>
+        <li><a href="#/">Feeds</a></li>
         <li id="feedBreadcrumb"></li>
       </ul>
     </div>
@@ -45,30 +43,28 @@
     <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
       <h1 class="text-2xl font-bold" id="feedTitle"></h1>
       <div class="flex gap-2">
-        <button class="btn btn-ghost btn-sm" onclick="switchFeedTab('sources')">Manage Sources</button>
-        <button class="btn btn-error btn-ghost btn-sm" onclick="confirmDeleteFeed()">Delete</button>
+        <button class="btn btn-ghost btn-sm" id="manageSourcesBtn">Manage Sources</button>
+        <button class="btn btn-error btn-ghost btn-sm" id="deleteFeedBtn">Delete</button>
       </div>
     </div>
 
     <div role="tablist" class="tabs tabs-bordered mb-5">
-      <a role="tab" class="tab tab-active" data-tab="items" onclick="switchFeedTab('items', this)">Articles</a>
-      <a role="tab" class="tab" data-tab="sources" onclick="switchFeedTab('sources', this)">Sources</a>
+      <a role="tab" class="tab tab-active" data-tab="items">Articles</a>
+      <a role="tab" class="tab" data-tab="sources">Sources</a>
     </div>
 
     <!-- Items Tab -->
     <div id="tabItems">
-      <div class="flex flex-col gap-2" id="itemList">
-        <div class="flex justify-center py-16"><span class="loading loading-spinner loading-lg"></span></div>
-      </div>
+      <div class="flex flex-col gap-2" id="itemList"></div>
       <div class="text-center mt-4">
-        <button class="btn btn-ghost btn-sm hidden" id="loadMoreBtn" onclick="loadMoreItems()">Load More</button>
+        <button class="btn btn-ghost btn-sm hidden" id="loadMoreBtn">Load More</button>
       </div>
     </div>
 
     <!-- Sources Tab -->
     <div id="tabSources" class="hidden">
       <div class="flex justify-end mb-3">
-        <button class="btn btn-primary btn-sm" onclick="showModal('addSourceModal')">+ Add Source</button>
+        <button class="btn btn-primary btn-sm" id="addSourceBtn">+ Add Source</button>
       </div>
       <div id="sourceList"></div>
     </div>
@@ -91,13 +87,13 @@
 <dialog class="modal" id="createFeedModal">
   <div class="modal-box">
     <h3 class="text-lg font-bold mb-4">Create New Feed</h3>
-    <form onsubmit="handleCreateFeed(event)">
+    <form id="createFeedForm">
       <div class="form-control mb-4">
-        <label class="label"><span class="label-text">Feed Name</span></label>
+        <label class="label" for="newFeedName"><span class="label-text">Feed Name</span></label>
         <input type="text" class="input input-bordered w-full" id="newFeedName" placeholder="e.g. Technology, Science, Sports..." required>
       </div>
       <div class="modal-action">
-        <button type="button" class="btn btn-ghost" onclick="closeModal('createFeedModal')">Cancel</button>
+        <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
         <button type="submit" class="btn btn-primary">Create Feed</button>
       </div>
     </form>
@@ -111,40 +107,40 @@
     <h3 class="text-lg font-bold mb-4">Add Source</h3>
 
     <div role="tablist" class="tabs tabs-boxed mb-4">
-      <a role="tab" class="tab tab-active" id="srcTabTemplate" onclick="switchSourceTab('template')">From Template</a>
-      <a role="tab" class="tab" id="srcTabManual" onclick="switchSourceTab('manual')">Manual URL</a>
+      <a role="tab" class="tab tab-active" id="srcTabTemplate">From Template</a>
+      <a role="tab" class="tab" id="srcTabManual">Manual URL</a>
     </div>
 
     <!-- Template Tab -->
     <div id="sourceTabTemplate">
-      <input type="text" class="input input-bordered w-full mb-3" id="templateSearch" placeholder="Search templates (e.g. Reddit, YouTube...)" oninput="searchTemplates()">
+      <input type="text" class="input input-bordered w-full mb-3" id="templateSearch" placeholder="Search templates (e.g. Reddit, YouTube...)">
       <div class="max-h-60 overflow-y-auto border border-base-300 rounded-lg" id="templateList"></div>
       <div id="templateParams" class="hidden mt-3">
         <div class="form-control mb-3">
-          <label class="label"><span class="label-text">Source Name</span></label>
+          <label class="label" for="templateSourceName"><span class="label-text">Source Name</span></label>
           <input type="text" class="input input-bordered w-full" id="templateSourceName" placeholder="Give this source a name" required>
         </div>
         <div id="templateParamFields"></div>
         <div class="flex gap-2 justify-end mt-4">
-          <button class="btn btn-ghost btn-sm" onclick="clearTemplateSelection()">Back</button>
-          <button class="btn btn-primary btn-sm" onclick="handleCreateSourceFromTemplate()">Add Source</button>
+          <button class="btn btn-ghost btn-sm" id="templateBackBtn">Back</button>
+          <button class="btn btn-primary btn-sm" id="templateAddBtn">Add Source</button>
         </div>
       </div>
     </div>
 
     <!-- Manual Tab -->
     <div id="sourceTabManual" class="hidden">
-      <form onsubmit="handleCreateManualSource(event)">
+      <form id="manualSourceForm">
         <div class="form-control mb-3">
-          <label class="label"><span class="label-text">Source Name</span></label>
+          <label class="label" for="manualSourceName"><span class="label-text">Source Name</span></label>
           <input type="text" class="input input-bordered w-full" id="manualSourceName" placeholder="e.g. Hacker News" required>
         </div>
         <div class="form-control mb-4">
-          <label class="label"><span class="label-text">RSS Feed URL</span></label>
+          <label class="label" for="manualSourceUrl"><span class="label-text">RSS Feed URL</span></label>
           <input type="url" class="input input-bordered w-full" id="manualSourceUrl" placeholder="https://example.com/rss.xml" required>
         </div>
         <div class="modal-action">
-          <button type="button" class="btn btn-ghost" onclick="closeModal('addSourceModal')">Cancel</button>
+          <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary">Add Source</button>
         </div>
       </form>
@@ -159,7 +155,7 @@
     <h3 class="text-lg font-bold" id="confirmTitle">Confirm</h3>
     <p class="py-4 text-sm text-base-content/70" id="confirmMessage"></p>
     <div class="modal-action">
-      <button class="btn btn-ghost" onclick="closeModal('confirmModal')">Cancel</button>
+      <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
       <button class="btn btn-error" id="confirmAction">Delete</button>
     </div>
   </div>

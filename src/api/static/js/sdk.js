@@ -35,11 +35,8 @@ class AggySDK {
     }
 
     const resp = await fetch(url, opts);
-    if (resp.status === 401) {
-      this.token = null;
-      throw new Error('Unauthorized');
-    }
     if (!resp.ok) {
+      if (resp.status === 401) this.token = null;
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.detail || `Request failed (${resp.status})`);
     }
@@ -101,6 +98,11 @@ class AggySDK {
   /** List all sources in a feed */
   async feedSources({ feed_name_hash }) {
     return this._request("GET", "/feed/sources", { query: { feed_name_hash } });
+  }
+
+  /** Health */
+  async health() {
+    return this._request("GET", "/health");
   }
 
   /** Get State */
