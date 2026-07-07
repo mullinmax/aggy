@@ -49,6 +49,12 @@ class ConfigError(Exception):
     pass
 
 
+# Sentinel distinguishing "no default given" from an explicit default of None,
+# so config.get(key, None) on an unset optional key returns None instead of
+# raising (which aborted ingestion on deployments without e.g. Ollama).
+_UNSET = object()
+
+
 class Config:
     _instance = None
 
@@ -60,7 +66,7 @@ class Config:
     def __init__(self):
         self.config = {}
 
-    def get(self, key, default=None):
+    def get(self, key, default=_UNSET):
         if key not in KNOWN_CONFIG_VALUES:
             raise ConfigError(
                 f"Tried to get unknown configuration key: '{key}'. Are you sure this is correct?"
@@ -72,7 +78,7 @@ class Config:
                 self.config[key] = env_value
             elif key in DEFAULT_CONFIG:
                 self.config[key] = DEFAULT_CONFIG[key]
-            elif default is not None:
+            elif default is not _UNSET:
                 return default
             else:
                 raise ConfigError(
@@ -81,11 +87,11 @@ class Config:
 
         return self.config[key]
 
-    def get_int(self, key, default=None):
+    def get_int(self, key, default=_UNSET):
         # env values always come back as strings; coerce for numeric config
         return int(self.get(key, default=default))
 
-    def get_bool(self, key, default=None):
+    def get_bool(self, key, default=_UNSET):
         value = self.get(key, default=default)
         if isinstance(value, str):
             return value.strip().lower() not in FALSEY_STRINGS

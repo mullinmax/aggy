@@ -64,7 +64,11 @@ def create_source_from_template(
     if not source_template:
         raise HTTPException(status_code=404, detail="Source template not found")
 
-    source_url = source_template.create_rss_url(**sf_template.parameters)
+    try:
+        source_url = source_template.create_rss_url(**sf_template.parameters)
+    except Exception as e:
+        # bad/missing template parameters — tell the user what's wrong
+        raise HTTPException(status_code=422, detail=str(e))
     source = Source(
         user_hash=user.name_hash,
         feed_hash=sf_template.feed_hash,

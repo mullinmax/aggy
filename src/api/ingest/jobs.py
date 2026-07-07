@@ -51,6 +51,7 @@ def source_ingestion_job() -> None:
             ),
         )
 
+    source = None
     try:
         source = Source.read(
             user_hash=row["user_hash"],
@@ -62,6 +63,8 @@ def source_ingestion_job() -> None:
         source.mark_ingested()
     except Exception as e:
         logging.exception(f"Ingesting of source {row['name_hash']} failed: {e}")
+        if source is not None:
+            source.mark_ingest_error(str(e))
         return
 
 
@@ -78,6 +81,7 @@ def ingest_source_now(source: Source) -> None:
         source.mark_ingested()
     except Exception as e:
         logging.exception(f"Initial ingest of source '{source.name}' failed: {e}")
+        source.mark_ingest_error(str(e))
 
 
 def download_embedding_model_job() -> None:

@@ -14,6 +14,7 @@ class SourceRouteModel(BaseRouteModel):
     source_feed: str
     source_item_count: int = 0
     source_last_ingested_at: Optional[datetime] = None
+    source_last_ingest_error: Optional[str] = None
 
     @classmethod
     def from_db_model(cls, db_model: Source):
@@ -33,4 +34,5 @@ class SourceRouteModel(BaseRouteModel):
             source_feed=feed_hash,
             source_item_count=row["item_count"],
             source_last_ingested_at=row["last_ingested_at"],
+            source_last_ingest_error=row["last_ingest_error"],
         )

@@ -1,5 +1,6 @@
 import logging
 import feedparser
+import requests
 from config import config
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
@@ -10,7 +11,27 @@ from ingest.item.mercury import ingest_mercury_item
 
 
 def ingest_source(source: Source) -> None:
-    entries = feedparser.parse(str(source.url)).entries
+    # Fetch the feed ourselves so failures produce a useful error instead of
+    # feedparser silently returning zero entries (rss-bridge answers bad
+    # parameters with an HTML error page, for example).
+    try:
+        response = requests.get(str(source.url), timeout=60)
+    except requests.RequestException as e:
+        raise Exception(f"Could not fetch feed: {e}") from e
+
+    if response.status_code != 200:
+        raise Exception(f"Feed request returned HTTP {response.status_code}")
+
+    parsed = feedparser.parse(response.content)
+    entries = parsed.entries
+
+    if not entries:
+        detail = ""
+        if parsed.bozo and parsed.get("bozo_exception"):
+            detail = f" ({parsed.bozo_exception})"
+        raise Exception(f"Feed returned no entries{detail}")
+
+    logging.info(f"Source '{source.name}': feed has {len(entries)} entries")
 
     for entry in entries:
         # if the item already exists in the database, skip scraping

@@ -356,7 +356,9 @@ function sourceRow(source) {
       h('div', { class: 'font-medium text-sm' }, source.source_name),
       h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url),
       h('div', { class: 'text-xs text-base-content/60 mt-1' },
-        `${count} article${count === 1 ? '' : 's'} · ${checked}`)),
+        `${count} article${count === 1 ? '' : 's'} · ${checked}`),
+      source.source_last_ingest_error && h('div', { class: 'text-xs text-error mt-1' },
+        `Last check failed: ${source.source_last_ingest_error}`)),
     h('button', {
       class: 'btn btn-ghost btn-xs text-error flex-shrink-0',
       onclick: () => confirmDeleteSource(source),
@@ -398,6 +400,8 @@ async function handleCreateManualSource(e) {
     $('manualSourceName').value = '';
     $('manualSourceUrl').value = '';
     loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
   } catch (err) {
     toast(err.message, 'alert-error');
   }
@@ -491,9 +495,20 @@ async function handleCreateSourceFromTemplate() {
   if (!name) { toast('Please enter a source name', 'alert-error'); return; }
 
   const parameters = {};
+  let missing = null;
+  $('templateParamFields').querySelectorAll('.input-error').forEach((el) => el.classList.remove('input-error'));
   $('templateParamFields').querySelectorAll('input, select').forEach((el) => {
-    parameters[el.name] = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value;
+    const value = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value.trim();
+    if (el.required && !value && !missing) missing = el;
+    parameters[el.name] = value;
   });
+  if (missing) {
+    missing.classList.add('input-error');
+    missing.focus();
+    const label = (selectedTemplate.parameters[missing.name] || {}).title || missing.name;
+    toast(`"${label}" is required`, 'alert-error');
+    return;
+  }
 
   try {
     await sdk.sourceTemplateCreate({
@@ -507,6 +522,8 @@ async function handleCreateSourceFromTemplate() {
     closeModal('addSourceModal');
     toast(`Source "${name}" added`);
     loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
   } catch (err) {
     toast(err.message, 'alert-error');
   }

@@ -55,7 +55,10 @@ class SourceTemplate(AggyBaseModel):
         validation_issues = []
 
         for name, parameter in self.parameters.items():
-            if name in kwargs and kwargs[name] is not None:
+            # empty strings count as missing: rss-bridge treats blank required
+            # parameters as errors, which used to slip through and create
+            # sources that could never ingest anything
+            if name in kwargs and kwargs[name] is not None and kwargs[name] != "":
                 if (
                     parameter.options is not None
                     and kwargs[name] not in parameter.options

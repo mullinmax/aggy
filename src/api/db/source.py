@@ -109,9 +109,17 @@ class Source(ItemCollection):
     def mark_ingested(self):
         with self.db_con() as cur:
             cur.execute(
-                "UPDATE sources SET last_ingested_at = NOW() "
+                "UPDATE sources SET last_ingested_at = NOW(), last_ingest_error = NULL "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (self.user_hash, self.feed_hash, self.name_hash),
+            )
+
+    def mark_ingest_error(self, error: str):
+        with self.db_con() as cur:
+            cur.execute(
+                "UPDATE sources SET last_ingested_at = NOW(), last_ingest_error = %s "
+                "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
+                (error[:500], self.user_hash, self.feed_hash, self.name_hash),
             )
 
     @classmethod
