@@ -1,19 +1,12 @@
-networks:
-  default:
-    external: true
-    name: "traefik_default"
-
 services:
   aggy-db:
-    container_name: "${DEV_NAME}-aggy-db"
+    container_name: aggy-db
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       - POSTGRES_USER=aggy
       - POSTGRES_PASSWORD=aggy
       - POSTGRES_DB=aggy
-    ports:
-      - 5432
     volumes:
       - "aggy-db-data:/var/lib/postgresql/data"
     healthcheck:
@@ -23,9 +16,9 @@ services:
       retries: 10
 
   aggy-flyway:
-    container_name: "${DEV_NAME}-aggy-flyway"
+    container_name: aggy-flyway
     image: flyway/flyway:10-alpine
-    command: -url=jdbc:postgresql://${DEV_NAME}-aggy-db:5432/aggy -user=aggy -password=aggy -connectRetries=30 migrate
+    command: -url=jdbc:postgresql://aggy-db:5432/aggy -user=aggy -password=aggy -connectRetries=30 migrate
     volumes:
       - "./src/api/db/migrations:/flyway/sql"
     depends_on:
@@ -33,75 +26,57 @@ services:
         condition: service_healthy
 
   aggy-pgadmin:
-    container_name: "${DEV_NAME}-aggy-pgadmin"
+    container_name: aggy-pgadmin
     image: dpage/pgadmin4:latest
     restart: unless-stopped
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin@aggy.local
       - PGADMIN_DEFAULT_PASSWORD=admin
       - PGADMIN_CONFIG_SERVER_MODE=False
-    ports:
-      - 80
     volumes:
       - "aggy-pgadmin-data:/var/lib/pgadmin"
-    labels:
-      - "traefik.http.routers.${DEV_NAME}aggypgadmin.rule=Host(`${DEV_NAME}aggypgadmin.doze.dev`)"
-      - "traefik.http.routers.${DEV_NAME}aggypgadmin.service=${DEV_NAME}aggypgadmin"
-      - "traefik.http.services.${DEV_NAME}aggypgadmin.loadbalancer.server.port=80"
     depends_on:
       - aggy-db
 
   aggy-extract:
-    container_name: "${DEV_NAME}-aggy-extract"
+    container_name: aggy-extract
     image: wangqiru/mercury-parser-api
-    ports:
-      - 3000
 
   aggy-bridge:
-    container_name: "${DEV_NAME}-aggy-bridge"
+    container_name: aggy-bridge
     build:
       context: ./src/bridge
       dockerfile: dockerfile
     restart: unless-stopped
-    ports:
-      - 80
 
   aggy-ollama:
-    container_name: "${DEV_NAME}-aggy-ollama"
+    container_name: aggy-ollama
     image: ollama/ollama:latest
     restart: unless-stopped
-    ports:
-      - 11434
     volumes:
       - "aggy-ollama-data:/root/.ollama"
 
   aggy-api:
-    container_name: "${DEV_NAME}-aggy-api"
+    container_name: aggy-api
     build:
       context: ./src/api
       dockerfile: dockerfile
-    ports:
-      - 8000
     environment:
-      - DB_HOST=${DEV_NAME}-aggy-db
+      - DB_HOST=aggy-db
       - DB_PORT=5432
       - DB_USER=aggy
       - DB_PASSWORD=aggy
       - DB_NAME=aggy
-      - RSS_BRIDGE_HOST=${DEV_NAME}-aggy-bridge
+      - RSS_BRIDGE_HOST=aggy-bridge
       - RSS_BRIDGE_PORT=80
-      - EXTRACT_HOST=${DEV_NAME}-aggy-extract
+      - EXTRACT_HOST=aggy-extract
       - EXTRACT_PORT=3000
-      - OLLAMA_HOST=${DEV_NAME}-aggy-ollama
+      - OLLAMA_HOST=aggy-ollama
       - OLLAMA_PORT=11434
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (generate with `openssl rand -hex 32`)}
       - SIGNUP_ENABLED=${SIGNUP_ENABLED:-true}
-    labels:
-      - "traefik.http.routers.${DEV_NAME}aggyapi.rule=Host(`${DEV_NAME}aggyapi.doze.dev`)"
-      - "traefik.http.routers.${DEV_NAME}aggyapi.service=${DEV_NAME}aggyapi"
-      - "traefik.http.services.${DEV_NAME}aggyapi.loadbalancer.server.port=8000"
     depends_on:
       aggy-db:
         condition: service_healthy
@@ -111,6 +86,16 @@ services:
         condition: service_started
       aggy-bridge:
         condition: service_started
+
+  cloudflared:
+    container_name: aggy-cloudflared
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - aggy-api
 
 volumes:
   aggy-ollama-data:
