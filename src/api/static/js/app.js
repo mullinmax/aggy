@@ -434,6 +434,10 @@ async function selectTemplate(hash) {
   try {
     const tmpl = await sdk.sourceTemplateGet({ name_hash: hash });
     selectedTemplate = tmpl;
+    // swap the modal from browse mode to a clean configure view
+    $('addSourceTitle').textContent = `Configure ${tmpl.user_friendly_name || tmpl.name}`;
+    $('sourceTabs').classList.add('hidden');
+    $('templateSearch').classList.add('hidden');
     $('templateList').classList.add('hidden');
     $('templateParams').classList.remove('hidden');
     $('templateSourceName').value = tmpl.user_friendly_name || tmpl.name || '';
@@ -471,6 +475,9 @@ function templateParamField(key, param) {
 
 function clearTemplateSelection() {
   selectedTemplate = null;
+  $('addSourceTitle').textContent = 'Add Source';
+  $('sourceTabs').classList.remove('hidden');
+  $('templateSearch').classList.remove('hidden');
   $('templateList').classList.remove('hidden');
   $('templateParams').classList.add('hidden');
 }
