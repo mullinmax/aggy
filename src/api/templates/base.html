@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Aggy{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/css/tailwind.css">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/style.css') }}">
 </head>
 <body class="min-h-screen bg-base-300">
   {% block body %}{% endblock %}
   <div class="toast toast-end z-50" id="toasts"></div>
-  <script src="/static/js/core.js"></script>
-  <script src="/static/js/sdk.js"></script>
+  <script src="{{ static_url('js/core.js') }}"></script>
+  <script src="{{ static_url('js/sdk.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
