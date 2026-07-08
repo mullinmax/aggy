@@ -1,6 +1,5 @@
 from config import config
-from datetime import timedelta
 
-SOURCE_READ_INTERVAL_TIMEDELTA = timedelta(
-    minutes=config.get_int("SOURCE_READ_INTERVAL_MINUTES")
-)
+# Server-wide default for how often sources are checked; individual sources
+# can override it via sources.ingest_interval_minutes.
+SOURCE_READ_INTERVAL_MINUTES = config.get_int("SOURCE_READ_INTERVAL_MINUTES")

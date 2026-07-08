@@ -27,6 +27,29 @@ def test_content_sanitization(html_input, expected_output, unique_item_strict):
     assert item.content == expected_output
 
 
+def test_media_roundtrip(unique_item_strict):
+    """Media entries survive a write/read cycle through the JSONB column."""
+    media = [
+        {"type": "gif", "url": "https://i.redd.it/example.mp4"},
+        {"type": "image", "url": "https://i.redd.it/example.jpg"},
+    ]
+    unique_item_strict.media = media
+    unique_item_strict.create()
+
+    item = ItemLoose.read(unique_item_strict.url_hash)
+    assert item.media == media
+
+
+def test_merge_items_prefers_media(unique_item_strict):
+    """Merging keeps the first non-null media list."""
+    item1 = unique_item_strict.model_copy()
+    item2 = unique_item_strict.model_copy()
+    item2.media = [{"type": "video", "url": "https://v.redd.it/example/DASH_720.mp4"}]
+
+    merged_item = ItemLoose.merge_instances([item1, item2])
+    assert merged_item.media == item2.media
+
+
 def test_merge_items(unique_item_strict):
     """Tests merging of multiple loose items."""
     item1 = unique_item_strict

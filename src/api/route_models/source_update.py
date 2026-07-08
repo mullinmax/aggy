@@ -1,5 +1,7 @@
 from typing import Dict, Optional
 
+from pydantic import Field
+
 from .base import BaseRouteModel
 
 
@@ -12,6 +14,9 @@ class SourceUpdate(BaseRouteModel):
     # Template sources: new parameter values; the URL is rebuilt from the
     # source's template.
     parameters: Optional[Dict[str, str]] = None
+    # How often to check this source, in minutes. Send null to reset to the
+    # server default; omit the field entirely to leave it unchanged.
+    ingest_interval_minutes: Optional[int] = Field(default=None, ge=1, le=10080)
 
     model_config = {
         "json_schema_extra": {
@@ -21,6 +26,7 @@ class SourceUpdate(BaseRouteModel):
                 "source_name": "Example Source Name",
                 "source_url": "https://example.com/rss.xml",
                 "parameters": {"parameter_name": "value"},
+                "ingest_interval_minutes": 60,
             }
         }
     }

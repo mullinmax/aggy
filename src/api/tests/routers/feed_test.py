@@ -146,6 +146,7 @@ def test_sources(client, existing_user, existing_feed, existing_source, token):
             "source_last_ingest_error": None,
             "source_template_name_hash": None,
             "source_template_parameters": None,
+            "source_ingest_interval_minutes": None,
         }
     ]
 

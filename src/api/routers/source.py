@@ -100,7 +100,17 @@ def update_source(
         new_url = update.source_url
 
     url_changed = new_url != str(source.url)
-    source.update(name=new_name, url=new_url, template_parameters=new_parameters)
+    update_kwargs = {}
+    # null means "reset to server default", so only apply the interval when
+    # the field was actually sent
+    if "ingest_interval_minutes" in update.model_fields_set:
+        update_kwargs["ingest_interval"] = update.ingest_interval_minutes
+    source.update(
+        name=new_name,
+        url=new_url,
+        template_parameters=new_parameters,
+        **update_kwargs,
+    )
 
     if url_changed:
         # fetch the new URL right away instead of waiting for the schedule

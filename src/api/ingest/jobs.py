@@ -1,6 +1,6 @@
 import logging
 
-from constants import SOURCE_READ_INTERVAL_TIMEDELTA
+from constants import SOURCE_READ_INTERVAL_MINUTES
 from db.base import get_db_con
 from db.source import Source
 from ingest.source import ingest_source
@@ -41,10 +41,11 @@ def source_ingestion_job() -> None:
             return
 
         cur.execute(
-            "UPDATE sources SET next_ingest_at = NOW() + %s "
+            "UPDATE sources SET next_ingest_at = NOW() + "
+            "make_interval(mins => COALESCE(ingest_interval_minutes, %s)) "
             "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
             (
-                SOURCE_READ_INTERVAL_TIMEDELTA,
+                SOURCE_READ_INTERVAL_MINUTES,
                 row["user_hash"],
                 row["feed_hash"],
                 row["name_hash"],

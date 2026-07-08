@@ -55,6 +55,11 @@ function bindControls() {
   $('templateAddBtn').onclick = handleCreateSourceFromTemplate;
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
+
+  // stop autoplaying gifs/videos when the reader closes
+  $('readerModal').addEventListener('close', () => {
+    $('readerMedia').querySelectorAll('video').forEach((v) => v.pause());
+  });
 }
 
 function setView(name) {
@@ -265,17 +270,75 @@ function cleanExcerpt(item) {
   return text;
 }
 
+// ---------- media ----------
+
+const isVideoFile = (url) => /\.(mp4|webm)(\?|$)/i.test(url || '');
+
+// Pause autoplaying gifs while they're offscreen so a feed full of them
+// doesn't churn bandwidth and CPU.
+const gifVisibility = new IntersectionObserver((entries) => {
+  entries.forEach(({ target, isIntersecting }) => {
+    if (isIntersecting) target.play().catch(() => {});
+    else target.pause();
+  });
+}, { rootMargin: '200px' });
+
+// One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
+// and loop like the reddit app; videos get controls, so their clicks must
+// reach the player instead of opening the reader.
+function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
+  if (m.type === 'video' || (m.type === 'gif' && isVideoFile(m.url))) {
+    const isGif = m.type === 'gif';
+    const video = h('video', {
+      class: cls, src: m.url, poster: m.poster || null,
+      loop: isGif, autoplay: isGif, controls: !isGif,
+      playsinline: true, preload: isGif ? 'auto' : 'metadata',
+      onclick: isGif ? null : (e) => e.stopPropagation(),
+    });
+    // autoplay is only allowed when the muted IDL property is set; the
+    // attribute alone isn't enough in Chrome
+    video.muted = true;
+    if (isGif) gifVisibility.observe(video);
+    return video;
+  }
+  return h('img', { class: cls, src: m.url, alt: '', loading: 'lazy' });
+}
+
+// A media list -> single element or a swipeable snap-scrolling gallery
+// strip with an index badge.
+function mediaGallery(mediaList) {
+  if (mediaList.length === 1) return mediaElement(mediaList[0]);
+  const counter = h('div', {
+    class: 'badge badge-neutral badge-sm absolute top-2 right-2 pointer-events-none',
+  }, `1/${mediaList.length}`);
+  const strip = h('div', { class: 'flex overflow-x-auto snap-x snap-mandatory' },
+    mediaList.map((m) =>
+      h('div', { class: 'w-full flex-none snap-center flex items-center justify-center bg-base-300' },
+        mediaElement(m))));
+  strip.addEventListener('scroll', () => {
+    const index = Math.min(Math.round(strip.scrollLeft / strip.clientWidth) + 1, mediaList.length);
+    counter.textContent = `${index}/${mediaList.length}`;
+  }, { passive: true });
+  return h('div', { class: 'relative' }, strip, counter);
+}
+
+// Reddit-app-style card: meta row and title up top, full-feed-width media
+// below, then the vote row.
 function itemCard(item) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
-  const imageUrl = item.item_image_url || parseItemContent(item).imageUrl;
+  const media = (item.item_media || []).length ? item.item_media : null;
+  const imageUrl = media ? null : (item.item_image_url || parseItemContent(item).imageUrl);
+  const excerpt = cleanExcerpt(item);
 
-  const image = imageUrl
-    ? h('figure', { class: 'w-24 h-24 flex-shrink-0 rounded-lg overflow-hidden bg-base-300 hidden sm:block' },
-        h('img', {
-          src: imageUrl, class: 'w-full h-full object-cover', alt: '',
-          onerror: (e) => { e.target.parentElement.style.display = 'none'; },
-        }))
-    : null;
+  const mediaBlock = media
+    ? h('figure', { class: 'bg-base-300' }, mediaGallery(media))
+    : imageUrl
+      ? h('figure', { class: 'bg-base-300' },
+          h('img', {
+            src: imageUrl, class: 'w-full max-h-[70vh] object-contain', alt: '', loading: 'lazy',
+            onerror: (e) => { e.target.closest('figure').remove(); },
+          }))
+      : null;
 
   const voteButton = (label, score, title) =>
     h('button', {
@@ -285,21 +348,20 @@ function itemCard(item) {
     }, label);
 
   return h('div', {
-    class: 'card card-side bg-base-200 border border-base-300 hover:border-primary/50 transition-colors cursor-pointer',
+    class: 'card bg-base-200 border border-base-300 hover:border-primary/50 transition-colors cursor-pointer overflow-hidden',
     onclick: () => openReader(item),
   },
-    h('div', { class: 'card-body p-4 flex-row gap-4' },
-      image,
-      h('div', { class: 'flex-1 min-w-0' },
-        h('h3', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, item.item_title || 'Untitled'),
-        h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, cleanExcerpt(item)),
-        h('div', { class: 'flex flex-wrap items-center gap-2 mt-2' },
-          item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
-          item.item_author && h('span', { class: 'text-xs text-base-content/40' }, item.item_author),
-          published && h('span', { class: 'text-xs text-base-content/40' }, published))),
-      h('div', { class: 'flex flex-col items-center gap-0 flex-shrink-0' },
-        voteButton('▲', 1, 'Upvote'),
-        voteButton('▼', -1, 'Downvote'))));
+    h('div', { class: 'px-4 pt-3 pb-2' },
+      h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-base-content/50 mb-1' },
+        item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
+        item.item_author && h('span', {}, item.item_author),
+        published && h('span', {}, published)),
+      h('h3', { class: 'font-semibold leading-snug' }, item.item_title || 'Untitled'),
+      !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
+    mediaBlock,
+    h('div', { class: 'flex items-center px-2 py-1' },
+      voteButton('▲', 1, 'Upvote'),
+      voteButton('▼', -1, 'Downvote')));
 }
 
 async function voteItem(item, score, btn) {
@@ -355,27 +417,34 @@ function openReader(item) {
     h('a', { href: item.item_url, target: '_blank', rel: 'noopener', class: 'link link-primary ml-auto' },
       host ? `Open on ${host} ↗` : 'Open original ↗'));
 
-  // Non-reddit articles keep their images inline in the content; only
-  // promote a content image to the hero slot for reddit-style posts.
-  const heroUrl = item.item_image_url || (parsed.isReddit ? parsed.imageUrl : null);
-  const img = $('readerImage');
-  if (heroUrl) {
-    img.src = heroUrl;
-    img.classList.remove('hidden');
-    img.onerror = () => img.classList.add('hidden');
+  // Ingested media (gifs, videos, galleries) takes the hero slot. Otherwise
+  // non-reddit articles keep their images inline in the content and only
+  // reddit-style posts promote a content image to the hero.
+  const media = item.item_media || [];
+  const heroUrl = media.length
+    ? null
+    : item.item_image_url || (parsed.isReddit ? parsed.imageUrl : null);
+  const mediaHost = $('readerMedia');
+  if (media.length) {
+    render(mediaHost, mediaGallery(media));
+  } else if (heroUrl) {
+    render(mediaHost, h('img', {
+      src: heroUrl, class: 'rounded-lg max-w-full max-h-[60vh] object-contain mx-auto',
+      alt: '', onerror: (e) => e.target.remove(),
+    }));
   } else {
-    img.classList.add('hidden');
+    render(mediaHost);
   }
 
   // item_content is sanitized server-side (bleach) before storage; it is the
   // only place raw HTML is intentionally rendered.
   if (parsed.isReddit) {
-    // the hero image above already shows the content image
-    stripRedditBoilerplate(parsed.root, parsed.imageFromContent);
+    // the hero media above already shows the content image
+    stripRedditBoilerplate(parsed.root, media.length > 0 || parsed.imageFromContent);
   }
   if (parsed.root.textContent.trim() || parsed.root.querySelector('img')) {
     $('readerContent').innerHTML = parsed.root.innerHTML;
-  } else if (!heroUrl) {
+  } else if (!heroUrl && !media.length) {
     render($('readerContent'), h('p', {}, cleanExcerpt(item) || 'No content available.'));
   } else {
     render($('readerContent'));
@@ -410,17 +479,26 @@ async function loadSources() {
   }
 }
 
+// "60" -> "every hour", "1440" -> "daily" — for the source list row.
+function intervalLabel(mins) {
+  if (!mins) return '';
+  if (mins % 1440 === 0) { const days = mins / 1440; return days === 1 ? 'daily' : `every ${days} days`; }
+  if (mins % 60 === 0) { const hours = mins / 60; return hours === 1 ? 'hourly' : `every ${hours} hours`; }
+  return `every ${mins} min`;
+}
+
 function sourceRow(source) {
   const count = source.source_item_count ?? 0;
   const checked = source.source_last_ingested_at
     ? `checked ${timeAgo(source.source_last_ingested_at)}`
     : 'not checked yet';
+  const interval = intervalLabel(source.source_ingest_interval_minutes);
   return h('div', { class: 'flex items-center justify-between gap-3 p-3 bg-base-200 border border-base-300 rounded-lg mb-2' },
     h('div', { class: 'min-w-0' },
       h('div', { class: 'font-medium text-sm' }, source.source_name),
       h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url),
       h('div', { class: 'text-xs text-base-content/60 mt-1' },
-        `${count} article${count === 1 ? '' : 's'} · ${checked}`),
+        `${count} article${count === 1 ? '' : 's'} · ${checked}${interval ? ` · checks ${interval}` : ''}`),
       source.source_last_ingest_error && h('div', { class: 'text-xs text-error mt-1' },
         `Last check failed: ${source.source_last_ingest_error}`)),
     h('div', { class: 'flex gap-1 flex-shrink-0' },
@@ -439,6 +517,15 @@ async function openEditSourceModal(source) {
   editingTemplate = null;
   $('editSourceTitle').textContent = `Edit ${source.source_name}`;
   $('editSourceName').value = source.source_name;
+
+  // custom intervals (set via the API) get their own option so they survive
+  // a save that doesn't touch the frequency
+  const intervalSelect = $('editSourceInterval');
+  const saved = source.source_ingest_interval_minutes;
+  if (saved && !Array.from(intervalSelect.options).some((o) => o.value === String(saved))) {
+    intervalSelect.append(h('option', { value: String(saved) }, `Every ${saved} minutes`));
+  }
+  intervalSelect.value = saved ? String(saved) : '';
 
   const fields = $('editSourceFields');
   if (source.source_template_name_hash) {
@@ -474,10 +561,13 @@ async function handleUpdateSource() {
   const name = $('editSourceName').value.trim();
   if (!name) { toast('Please enter a source name', 'alert-error'); return; }
 
+  const intervalValue = $('editSourceInterval').value;
   const body = {
     feed_name_hash: currentFeed.feed_name_hash,
     source_name_hash: editingSource.source_name_hash,
     source_name: name,
+    // null resets the source to the server default frequency
+    ingest_interval_minutes: intervalValue ? Number(intervalValue) : null,
   };
 
   const urlInput = $('editSourceFields').querySelector('input[name="source_url"]');
@@ -606,17 +696,23 @@ async function selectTemplate(hash) {
     render($('templateParamFields'),
       Object.entries(tmpl.parameters || {}).map(([key, param]) => templateParamField(key, param)));
 
-    // Suggest a distinct name from the first required text parameter (e.g.
-    // "Reddit Subreddit - selfhosted") until the user edits the name field,
-    // so adding several sources from the same template doesn't collide.
+    // Suggest a distinct name from the first required text parameter until
+    // the user edits the name field, so adding several sources from the same
+    // template doesn't collide. Reddit sources read best as "r/name" and
+    // "u/name"; other templates get "Template - value".
     let nameEdited = false;
     nameInput.oninput = () => { nameEdited = true; };
     const firstParam = $('templateParamFields').querySelector('input[type="text"][required]');
     if (firstParam) {
+      const suggestName = (value) => {
+        if (!value) return baseName;
+        if (firstParam.name === 'subreddit') return `r/${value.replace(/^\/?r\//i, '')}`;
+        if (firstParam.name === 'username' && /reddit/i.test(baseName)) return `u/${value.replace(/^\/?u\//i, '')}`;
+        return `${baseName} - ${value}`;
+      };
       firstParam.addEventListener('input', () => {
         if (nameEdited) return;
-        const v = firstParam.value.trim();
-        nameInput.value = v ? `${baseName} - ${v}` : baseName;
+        nameInput.value = suggestName(firstParam.value.trim());
       });
     }
   } catch (err) {

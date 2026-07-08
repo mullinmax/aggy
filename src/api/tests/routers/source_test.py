@@ -211,6 +211,68 @@ def test_update_source_rename_conflict(client, existing_feed, existing_source, t
     assert response.status_code == 409
 
 
+def test_update_source_ingest_interval(client, existing_feed, existing_source, token):
+    args = build_api_request_args(
+        path="/source/update",
+        data={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": existing_source.name_hash,
+            "source_name": existing_source.name,
+            "ingest_interval_minutes": 120,
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+    assert response.status_code == 200
+    assert response.json()["source_ingest_interval_minutes"] == 120
+
+    # omitting the field leaves the interval unchanged
+    args = build_api_request_args(
+        path="/source/update",
+        data={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": existing_source.name_hash,
+            "source_name": existing_source.name,
+        },
+        token=token,
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    assert response.json()["source_ingest_interval_minutes"] == 120
+
+    # an explicit null resets to the server default
+    args = build_api_request_args(
+        path="/source/update",
+        data={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": existing_source.name_hash,
+            "source_name": existing_source.name,
+            "ingest_interval_minutes": None,
+        },
+        token=token,
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    assert response.json()["source_ingest_interval_minutes"] is None
+
+
+def test_update_source_invalid_interval(client, existing_feed, existing_source, token):
+    args = build_api_request_args(
+        path="/source/update",
+        data={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": existing_source.name_hash,
+            "source_name": existing_source.name,
+            "ingest_interval_minutes": 0,
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+    assert response.status_code == 422
+
+
 def test_update_source_not_found(client, existing_feed, token):
     args = build_api_request_args(
         path="/source/update",

@@ -20,6 +20,9 @@ class ItemBase(AggyBaseModel):
     author: Optional[str] = None
     date_published: Optional[datetime] = None
     image_url: Optional[str] = None
+    # Rich media extracted at ingest time (gifs, videos, galleries): a list
+    # of {"type": "image"|"gif"|"video", "url": ..., "poster": ...} dicts.
+    media: Optional[List[Dict[str, Optional[str]]]] = None
     embeddings: Optional[Dict[str, List[float]]] = None
 
     @property
@@ -46,6 +49,9 @@ class ItemBase(AggyBaseModel):
             "excerpt": data.get("excerpt"),
             "content": data.get("content"),
             "image_url": data.get("image_url"),
+            "media": json.dumps(data["media"])
+            if data.get("media") is not None
+            else None,
             "date_published": data.get("date_published"),
             "embeddings": json.dumps(data["embeddings"])
             if data.get("embeddings") is not None
@@ -60,14 +66,15 @@ class ItemBase(AggyBaseModel):
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO items (url_hash, url, title, author, domain, excerpt, "
-                "content, image_url, date_published, embeddings) "
+                "content, image_url, media, date_published, embeddings) "
                 "VALUES (%(url_hash)s, %(url)s, %(title)s, %(author)s, %(domain)s, "
-                "%(excerpt)s, %(content)s, %(image_url)s, %(date_published)s, "
-                "%(embeddings)s) "
+                "%(excerpt)s, %(content)s, %(image_url)s, %(media)s, "
+                "%(date_published)s, %(embeddings)s) "
                 "ON CONFLICT (url_hash) DO UPDATE SET "
                 "url = EXCLUDED.url, title = EXCLUDED.title, author = EXCLUDED.author, "
                 "domain = EXCLUDED.domain, excerpt = EXCLUDED.excerpt, "
                 "content = EXCLUDED.content, image_url = EXCLUDED.image_url, "
+                "media = EXCLUDED.media, "
                 "date_published = EXCLUDED.date_published, "
                 "embeddings = EXCLUDED.embeddings",
                 v,
@@ -87,7 +94,7 @@ class ItemBase(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT url, title, author, domain, excerpt, content, image_url, "
-                "date_published, embeddings FROM items WHERE url_hash = %s",
+                "media, date_published, embeddings FROM items WHERE url_hash = %s",
                 (url_hash,),
             )
             row = cur.fetchone()
@@ -171,7 +178,7 @@ class ItemBase(AggyBaseModel):
         return v
 
     def __str__(self):
-        non_printable = ["url_hash", "key", "embeddings"]
+        non_printable = ["url_hash", "key", "embeddings", "media"]
         # all fields besides url_hash, key, and item_embeddings
         print_attrs = [
             f"{k.upper()} {getattr(self, k)}"
@@ -229,6 +236,7 @@ class ItemLoose(ItemStrict):
             date_published=items[0].date_published,
             title=items[0].title,
             image_url=items[0].image_url,
+            media=items[0].media,
             domain=items[0].domain,
             excerpt=items[0].excerpt,
             content=items[0].content,
@@ -244,6 +252,7 @@ class ItemLoose(ItemStrict):
             # prefer non-null values
             best.title = best.title or item.title
             best.image_url = best.image_url or item.image_url
+            best.media = best.media or item.media
             best.domain = best.domain or item.domain
             best.excerpt = best.excerpt or item.excerpt
             best.content = best.content or item.content

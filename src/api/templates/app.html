@@ -78,7 +78,7 @@
     <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
     <h2 class="text-xl font-bold pr-8 mb-2" id="readerTitle"></h2>
     <div class="flex flex-wrap gap-3 text-xs text-base-content/50 mb-4 pb-3 border-b border-base-300" id="readerMeta"></div>
-    <img id="readerImage" class="rounded-lg max-w-full max-h-[60vh] object-contain mx-auto mb-4 hidden">
+    <div id="readerMedia" class="mb-4 empty:hidden"></div>
     <div class="prose prose-sm max-w-none" id="readerContent"></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
@@ -157,6 +157,19 @@
     <div class="form-control mb-3">
       <label class="label" for="editSourceName"><span class="label-text">Source Name</span></label>
       <input type="text" class="input input-bordered w-full" id="editSourceName" required>
+    </div>
+    <div class="form-control mb-3">
+      <label class="label" for="editSourceInterval"><span class="label-text">Check for new posts</span></label>
+      <select class="select select-bordered w-full" id="editSourceInterval">
+        <option value="">Server default</option>
+        <option value="15">Every 15 minutes</option>
+        <option value="30">Every 30 minutes</option>
+        <option value="60">Every hour</option>
+        <option value="180">Every 3 hours</option>
+        <option value="360">Every 6 hours</option>
+        <option value="720">Every 12 hours</option>
+        <option value="1440">Once a day</option>
+      </select>
     </div>
     <div id="editSourceFields"></div>
     <div class="modal-action">
