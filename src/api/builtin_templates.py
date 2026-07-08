@@ -3,26 +3,18 @@ import logging
 from db.source_template import SourceTemplate, SourceTemplateParameter
 
 
-def _reddit_sort_param() -> SourceTemplateParameter:
-    return SourceTemplateParameter(
-        name="Sort",
-        title="Sort order",
-        required=False,
-        type="select",
-        default="hot",
-        options={"hot": "Hot", "new": "New", "top": "Top", "rising": "Rising"},
-    )
-
-
 BUILTIN_TEMPLATES = [
     SourceTemplate(
         name="Reddit Subreddit",
         url="https://www.reddit.com",
-        url_template="https://www.reddit.com/r/{subreddit}/{sort}.rss",
+        # Locked to "top today": reddit rate-limits hard, so we check each
+        # subreddit only ~twice a day and pull the day's top posts, which
+        # captures nearly everything worth surfacing without other sorts.
+        url_template="https://www.reddit.com/r/{subreddit}/top.rss?t=day",
         description=(
-            "Posts from a subreddit via Reddit's native RSS feed. "
-            "Fetches reddit.com directly, without rss-bridge, which avoids "
-            "the API rate limits that block RedditBridge."
+            "The day's top posts from a subreddit via Reddit's native RSS "
+            "feed. Fetches reddit.com directly, without rss-bridge, which "
+            "avoids the API rate limits that block RedditBridge."
         ),
         parameters={
             "subreddit": SourceTemplateParameter(
@@ -32,7 +24,6 @@ BUILTIN_TEMPLATES = [
                 type="text",
                 example="selfhosted",
             ),
-            "sort": _reddit_sort_param(),
         },
     ),
     SourceTemplate(

@@ -79,6 +79,35 @@ def test_source_update_ingest_interval(unique_source):
     assert read_back().ingest_interval_minutes is None
 
 
+def test_reddit_source_defaults_to_reddit_interval(unique_source):
+    from constants import REDDIT_SOURCE_READ_INTERVAL_MINUTES
+
+    unique_source.url = "https://www.reddit.com/r/pics/top.rss?t=day"
+    unique_source.create()
+
+    read_source = Source.read(
+        user_hash=unique_source.user_hash,
+        feed_hash=unique_source.feed_hash,
+        source_hash=unique_source.name_hash,
+    )
+    assert (
+        read_source.ingest_interval_minutes == REDDIT_SOURCE_READ_INTERVAL_MINUTES
+    )
+
+
+def test_reddit_source_keeps_explicit_interval(unique_source):
+    unique_source.url = "https://www.reddit.com/r/pics/top.rss?t=day"
+    unique_source.ingest_interval_minutes = 30
+    unique_source.create()
+
+    read_source = Source.read(
+        user_hash=unique_source.user_hash,
+        feed_hash=unique_source.feed_hash,
+        source_hash=unique_source.name_hash,
+    )
+    assert read_source.ingest_interval_minutes == 30
+
+
 def test_source_add_items(unique_source, unique_item_strict):
     unique_source.create()
     unique_item_strict.create()

@@ -192,7 +192,7 @@ def test_ingest_reddit_item_fetches_post_json(monkeypatch):
         captured["url"] = url
         return FakeResponse()
 
-    monkeypatch.setattr("ingest.item.reddit.requests.get", fake_get)
+    monkeypatch.setattr("ingest.item.reddit.reddit_get", fake_get)
 
     item = ItemLoose(url="https://www.reddit.com/r/pics/comments/abc123/a_gif_post/")
     result = ingest_reddit_item(item)

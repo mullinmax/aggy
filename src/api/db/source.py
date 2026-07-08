@@ -5,7 +5,11 @@ from typing import Dict, Optional
 from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
 
-from constants import SOURCE_READ_INTERVAL_MINUTES
+from constants import (
+    REDDIT_SOURCE_READ_INTERVAL_MINUTES,
+    SOURCE_READ_INTERVAL_MINUTES,
+)
+from ingest.reddit_rate_limit import is_reddit_url
 from .item_collection import ItemCollection
 
 # Sentinel for update(): distinguishes "leave unchanged" from an explicit
@@ -90,6 +94,11 @@ class Source(ItemCollection):
 
         if self.color is None:
             self.color = random.choice(SOURCE_COLORS)
+
+        # Reddit sources default to the slower reddit cadence unless the caller
+        # picked an explicit interval; a user can still override it afterwards.
+        if self.ingest_interval_minutes is None and is_reddit_url(self.url):
+            self.ingest_interval_minutes = REDDIT_SOURCE_READ_INTERVAL_MINUTES
 
         with self.db_con() as cur:
             cur.execute(
