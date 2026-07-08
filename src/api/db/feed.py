@@ -76,7 +76,7 @@ class Feed(ItemCollection):
         with self.db_con() as cur:
             cur.execute(
                 "SELECT s.name, s.url, s.name_hash, s.feed_hash, s.last_ingested_at, "
-                "s.last_ingest_error, "
+                "s.last_ingest_error, s.template_name_hash, s.template_parameters, "
                 "(SELECT COUNT(*) FROM source_items si "
                 " WHERE si.user_hash = s.user_hash AND si.feed_hash = s.feed_hash "
                 " AND si.source_hash = s.name_hash) AS item_count "

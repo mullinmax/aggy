@@ -192,3 +192,90 @@ def test_search_returns_minimum_results_for_bad_query(
     finally:
         for template in dummies:
             template.delete()
+
+
+def test_create_duplicate_source_from_template_conflict(
+    client, existing_source_template, existing_feed, token, unique_source
+):
+    data = {
+        "source_template_name_hash": existing_source_template.name_hash,
+        "feed_hash": existing_feed.name_hash,
+        "source_name": unique_source.name,
+        "parameters": {"parameter_name": "value"},
+    }
+    args = build_api_request_args(path="/source_template/create", token=token, data=data)
+
+    response = client.post(**args)
+    assert response.status_code == 200
+
+    # same name again — must be rejected instead of silently ignored
+    response = client.post(**args)
+    assert response.status_code == 409
+
+
+def test_update_source_template_parameters(
+    client, existing_source_template, existing_feed, token, unique_source
+):
+    args = build_api_request_args(
+        path="/source_template/create",
+        token=token,
+        data={
+            "source_template_name_hash": existing_source_template.name_hash,
+            "feed_hash": existing_feed.name_hash,
+            "source_name": unique_source.name,
+            "parameters": {"parameter_name": "value"},
+        },
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    created = response.json()
+    assert created["source_template_name_hash"] == existing_source_template.name_hash
+    assert created["source_template_parameters"] == {"parameter_name": "value"}
+
+    # change the parameter; the source URL is rebuilt from the template
+    args = build_api_request_args(
+        path="/source/update",
+        token=token,
+        data={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": created["source_name_hash"],
+            "source_name": created["source_name"],
+            "parameters": {"parameter_name": "other_value"},
+        },
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    updated = response.json()
+    assert "parameter_name=other_value" in updated["source_url"]
+    assert updated["source_template_parameters"] == {"parameter_name": "other_value"}
+
+
+def test_update_source_template_bad_parameters(
+    client, existing_source_template, existing_feed, token, unique_source
+):
+    args = build_api_request_args(
+        path="/source_template/create",
+        token=token,
+        data={
+            "source_template_name_hash": existing_source_template.name_hash,
+            "feed_hash": existing_feed.name_hash,
+            "source_name": unique_source.name,
+            "parameters": {"parameter_name": "value"},
+        },
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    created = response.json()
+
+    args = build_api_request_args(
+        path="/source/update",
+        token=token,
+        data={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": created["source_name_hash"],
+            "source_name": created["source_name"],
+            "parameters": {"parameter_name": "not_an_option"},
+        },
+    )
+    response = client.post(**args)
+    assert response.status_code == 422
