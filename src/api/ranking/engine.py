@@ -1,0 +1,229 @@
+"""Train/evaluate vote-prediction models for a feed and cache predictions.
+
+`rank_feed` is the entry point: it cross-validates every model on the feed's
+votes, persists the per-model stats (for the stats UI), then trains the best
+model on all labels and writes a predicted score + confidence to every item
+in the feed. `feed/items` sorts read straight from those cached columns.
+"""
+
+import json
+import logging
+from typing import List, Optional
+
+import numpy as np
+
+from db.base import get_db_con
+from db.feed import Feed
+from .models import (
+    ItemFeatures,
+    ModelStats,
+    all_models,
+    evaluate_models,
+)
+
+MIN_LABELS_TO_RANK = 3
+
+
+def _parse_embedding(embeddings) -> Optional[np.ndarray]:
+    """items.embeddings is a JSONB dict of {model_name: vector}; use the
+    first vector present (only one embedding model runs per deployment)."""
+    if not embeddings:
+        return None
+    if isinstance(embeddings, str):
+        try:
+            embeddings = json.loads(embeddings)
+        except (TypeError, ValueError):
+            return None
+    for vector in embeddings.values():
+        if vector:
+            return np.asarray(vector, dtype=float)
+    return None
+
+
+def _row_to_features(row) -> ItemFeatures:
+    media = row.get("media")
+    if isinstance(media, str):
+        try:
+            media = json.loads(media)
+        except (TypeError, ValueError):
+            media = None
+    return ItemFeatures(
+        url_hash=row["url_hash"],
+        embedding=_parse_embedding(row.get("embeddings")),
+        source=row.get("source_name"),
+        author=row.get("author"),
+        date_published=row.get("date_published"),
+        has_image=bool(row.get("image_url")),
+        has_media=bool(media),
+        label=row.get("vote"),
+        label_date=row.get("vote_date"),
+    )
+
+
+_FEED_ITEMS_SQL = (
+    "SELECT i.url_hash, i.author, i.date_published, i.image_url, i.media, "
+    "i.embeddings, st.score AS vote, st.score_date AS vote_date, ("
+    " SELECT s.name FROM source_items si"
+    " JOIN sources s ON s.user_hash = si.user_hash"
+    "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+    " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+    "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
+    "FROM feed_items c "
+    "JOIN items i ON i.url_hash = c.item_url_hash "
+    "LEFT JOIN item_states st ON st.user_hash = c.user_hash "
+    " AND st.feed_hash = c.feed_hash AND st.item_url_hash = c.item_url_hash "
+    "WHERE c.user_hash = %s AND c.feed_hash = %s"
+)
+
+
+def load_feed_features(feed: Feed) -> List[ItemFeatures]:
+    with get_db_con() as cur:
+        cur.execute(_FEED_ITEMS_SQL, (feed.user_hash, feed.name_hash))
+        rows = cur.fetchall()
+    return [_row_to_features(row) for row in rows]
+
+
+def save_model_stats(feed: Feed, stats: List[ModelStats]) -> None:
+    with get_db_con() as cur:
+        for s in stats:
+            cur.execute(
+                "INSERT INTO ranking_model_stats (user_hash, feed_hash, "
+                "model_name, n_labels, mae, rmse, sign_accuracy, chosen, "
+                "computed_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW()) "
+                "ON CONFLICT (user_hash, feed_hash, model_name) DO UPDATE SET "
+                "n_labels = EXCLUDED.n_labels, mae = EXCLUDED.mae, "
+                "rmse = EXCLUDED.rmse, sign_accuracy = EXCLUDED.sign_accuracy, "
+                "chosen = EXCLUDED.chosen, computed_at = EXCLUDED.computed_at",
+                (
+                    feed.user_hash,
+                    feed.name_hash,
+                    s.model_name,
+                    s.n_labels,
+                    s.mae,
+                    s.rmse,
+                    s.sign_accuracy,
+                    s.chosen,
+                ),
+            )
+
+
+def load_model_stats(feed: Feed) -> List[dict]:
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT model_name, n_labels, mae, rmse, sign_accuracy, chosen, "
+            "computed_at FROM ranking_model_stats "
+            "WHERE user_hash = %s AND feed_hash = %s ORDER BY mae ASC NULLS LAST",
+            (feed.user_hash, feed.name_hash),
+        )
+        return cur.fetchall()
+
+
+def _write_predictions(
+    feed: Feed, items: List[ItemFeatures], scores, confs, model_name: str
+) -> None:
+    with get_db_con() as cur:
+        for item, score, conf in zip(items, scores, confs):
+            cur.execute(
+                "UPDATE feed_items SET predicted_score = %s, "
+                "predicted_confidence = %s, predicted_model = %s, "
+                "predicted_at = NOW() "
+                "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+                (
+                    float(score),
+                    float(conf),
+                    model_name,
+                    feed.user_hash,
+                    feed.name_hash,
+                    item.url_hash,
+                ),
+            )
+
+
+def rank_feed(feed: Feed) -> List[ModelStats]:
+    """Evaluate all models on this feed's votes, persist their stats, then
+    predict a vote for every item with the winner. Returns the stats."""
+    features = load_feed_features(feed)
+    labeled = [f for f in features if f.label is not None]
+
+    stats = evaluate_models(labeled)
+    save_model_stats(feed, stats)
+
+    if len(labeled) < MIN_LABELS_TO_RANK:
+        return stats
+
+    winner_name = next((s.model_name for s in stats if s.chosen), None)
+    if winner_name is None:
+        return stats
+    winner = next(m for m in all_models() if m.name == winner_name)
+
+    winner.fit(labeled)
+    # candidate items get fresh predictions; labeled ones too, so the
+    # "include read" view still sorts sensibly
+    for f in features:
+        f.label_date = None  # predict ages as-of now
+    scores, confs = winner.predict(features)
+    _write_predictions(feed, features, scores, confs, winner_name)
+    logging.info(
+        f"Ranked feed {feed.name} with model '{winner_name}' "
+        f"({len(labeled)} labels, {len(features)} items)"
+    )
+    return stats
+
+
+def feeds_needing_rank() -> List[Feed]:
+    """Feeds with at least one vote where votes or items are newer than the
+    latest prediction (or no prediction exists yet)."""
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT f.user_hash, f.name FROM feeds f WHERE EXISTS ("
+            " SELECT 1 FROM item_states st"
+            " WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash"
+            "  AND st.score IS NOT NULL"
+            ") AND ("
+            " EXISTS (SELECT 1 FROM feed_items c"
+            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash"
+            "   AND c.predicted_at IS NULL)"
+            " OR COALESCE((SELECT MAX(st.score_date) FROM item_states st"
+            "  WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash),"
+            "  'epoch') > COALESCE((SELECT MAX(c.predicted_at) FROM feed_items c"
+            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
+            "  'epoch'))",
+        )
+        rows = cur.fetchall()
+    return [Feed(user_hash=row["user_hash"], name=row["name"]) for row in rows]
+
+
+def feed_ranking_job() -> None:
+    """Scheduled job: re-rank every feed whose votes or items changed."""
+    for feed in feeds_needing_rank():
+        try:
+            rank_feed(feed)
+        except Exception as e:
+            logging.exception(f"Ranking feed {feed.name} failed: {e}")
+
+
+def label_counts(feed: Feed) -> dict:
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FILTER (WHERE score > 0) AS up, "
+            "COUNT(*) FILTER (WHERE score < 0) AS down, "
+            "COUNT(*) FILTER (WHERE score = 0) AS neutral "
+            "FROM item_states WHERE user_hash = %s AND feed_hash = %s "
+            "AND score IS NOT NULL",
+            (feed.user_hash, feed.name_hash),
+        )
+        counts = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) AS total, "
+            "COUNT(*) FILTER (WHERE predicted_score IS NOT NULL) AS predicted "
+            "FROM feed_items WHERE user_hash = %s AND feed_hash = %s",
+            (feed.user_hash, feed.name_hash),
+        )
+        items = cur.fetchone()
+    return {
+        "up": counts["up"],
+        "down": counts["down"],
+        "neutral": counts["neutral"],
+        "total_items": items["total"],
+        "predicted_items": items["predicted"],
+    }

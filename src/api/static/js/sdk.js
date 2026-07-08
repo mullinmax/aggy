@@ -86,13 +86,23 @@ class AggySDK {
   }
 
   /** List all items in a feed */
-  async feedItems({ feed_name_hash, skip, limit }) {
-    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit } });
+  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, text_only }) {
+    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, text_only } });
   }
 
   /** List feeds a user has created */
   async feedList() {
     return this._request("GET", "/feed/list");
+  }
+
+  /** Vote-prediction model performance for a feed */
+  async feedRankingStats({ feed_name_hash }) {
+    return this._request("GET", "/feed/ranking_stats", { query: { feed_name_hash } });
+  }
+
+  /** Re-evaluate prediction models and re-rank a feed now */
+  async feedRerank({ feed_name_hash }) {
+    return this._request("POST", "/feed/rerank", { query: { feed_name_hash } });
   }
 
   /** List all sources in a feed */

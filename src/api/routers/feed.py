@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from typing import List, Union
+from typing import List, Optional, Union
 
-from db.feed import Feed
+from db.feed import Feed, ITEM_SORTS
 from db.user import User
 from route_models.feed import FeedResponse
 from route_models.source import SourceRouteModel
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
+from route_models.ranking import ModelStatsResponse, RankingStatsResponse
 from routers.auth import authenticate
+from ranking.engine import label_counts, load_model_stats, rank_feed
 
 feed_router = APIRouter()
 
@@ -89,10 +91,7 @@ def sources(
     ]
 
 
-
 # get all items in a feed
-# TODO sort method (best, worst, newest, oldest, previous favorites, etc.)
-# TODO filter method (read, unread, etc.)
 @feed_router.get(
     "/items",
     summary="List all items in a feed",
@@ -102,6 +101,17 @@ def get_feed_items(
     feed_name_hash: str,
     skip: Union[int, None] = None,
     limit: Union[int, None] = None,
+    sort: str = Query(
+        "best",
+        description="best, predicted, predicted_asc, controversial, newest, oldest",
+    ),
+    include_read: bool = True,
+    sources: Optional[str] = Query(
+        None, description="Comma-separated source name hashes to include"
+    ),
+    text_only: Optional[bool] = Query(
+        None, description="true: only text posts, false: only posts with media"
+    ),
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
@@ -109,10 +119,75 @@ def get_feed_items(
     if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
+    if sort not in ITEM_SORTS:
+        raise HTTPException(status_code=422, detail=f"Unknown sort '{sort}'")
+
+    source_hashes = (
+        [s for s in sources.split(",") if s] if sources is not None else None
+    )
+
     return [
-        ItemResponse.from_db_model(item, source_name=source_name)
-        for item, source_name in feed.query_items_with_sources(skip=skip, limit=limit)
+        ItemResponse.from_db_model(item, **meta)
+        for item, meta in feed.query_items_with_sources(
+            skip=skip,
+            limit=limit,
+            sort=sort,
+            include_read=include_read,
+            source_hashes=source_hashes,
+            text_only=text_only,
+        )
     ]
+
+
+@feed_router.get(
+    "/ranking_stats",
+    summary="Vote-prediction model performance for a feed",
+    response_model=RankingStatsResponse,
+)
+def get_ranking_stats(
+    feed_name_hash: str, user: User = Depends(authenticate)
+) -> RankingStatsResponse:
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    counts = label_counts(feed)
+    return RankingStatsResponse(
+        models=[ModelStatsResponse(**row) for row in load_model_stats(feed)],
+        up_votes=counts["up"],
+        down_votes=counts["down"],
+        neutral_votes=counts["neutral"],
+        total_items=counts["total_items"],
+        predicted_items=counts["predicted_items"],
+    )
+
+
+@feed_router.post(
+    "/rerank",
+    summary="Re-evaluate prediction models and re-rank a feed now",
+    response_model=RankingStatsResponse,
+)
+def rerank_feed(
+    feed_name_hash: str, user: User = Depends(authenticate)
+) -> RankingStatsResponse:
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    stats = rank_feed(feed)
+    counts = label_counts(feed)
+    return RankingStatsResponse(
+        models=[
+            ModelStatsResponse(
+                model_name=s.model_name,
+                n_labels=s.n_labels,
+                mae=s.mae,
+                rmse=s.rmse,
+                sign_accuracy=s.sign_accuracy,
+                chosen=s.chosen,
+            )
+            for s in stats
+        ],
+        up_votes=counts["up"],
+        down_votes=counts["down"],
+        neutral_votes=counts["neutral"],
+        total_items=counts["total_items"],
+        predicted_items=counts["predicted_items"],
+    )
 
 
 # TODO search items in a feed
