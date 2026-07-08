@@ -74,7 +74,19 @@ def create_source_from_template(
         feed_hash=sf_template.feed_hash,
         name=sf_template.source_name,
         url=source_url,
+        template_name_hash=source_template.name_hash,
+        template_parameters=sf_template.parameters,
     )
+    if source.exists():
+        # add_source() silently no-ops on duplicates, which used to leave the
+        # new source's items attributed to the old source of the same name
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f'A source named "{sf_template.source_name}" already exists '
+                "in this feed. Pick a different name."
+            ),
+        )
     feed.add_source(source)
 
     # kick off the first ingest right away instead of waiting for the schedule

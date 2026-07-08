@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import HttpUrl
 
@@ -15,6 +15,8 @@ class SourceRouteModel(BaseRouteModel):
     source_item_count: int = 0
     source_last_ingested_at: Optional[datetime] = None
     source_last_ingest_error: Optional[str] = None
+    source_template_name_hash: Optional[str] = None
+    source_template_parameters: Optional[Dict[str, str]] = None
 
     @classmethod
     def from_db_model(cls, db_model: Source):
@@ -23,6 +25,8 @@ class SourceRouteModel(BaseRouteModel):
             source_name_hash=db_model.name_hash,
             source_url=db_model.url,
             source_feed=db_model.feed_hash,
+            source_template_name_hash=db_model.template_name_hash,
+            source_template_parameters=db_model.template_parameters,
         )
 
     @classmethod
@@ -35,4 +39,6 @@ class SourceRouteModel(BaseRouteModel):
             source_item_count=row["item_count"],
             source_last_ingested_at=row["last_ingested_at"],
             source_last_ingest_error=row["last_ingest_error"],
+            source_template_name_hash=row.get("template_name_hash"),
+            source_template_parameters=row.get("template_parameters"),
         )

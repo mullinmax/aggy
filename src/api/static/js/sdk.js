@@ -130,6 +130,11 @@ class AggySDK {
     return this._request("GET", "/source/items", { query: { feed_name_hash, source_name_hash, skip, limit } });
   }
 
+  /** Update a source's name, URL, or template parameters */
+  async sourceUpdate({ body }) {
+    return this._request("POST", "/source/update", { body });
+  }
+
   /** Create a source from a template */
   async sourceTemplateCreate({ body }) {
     return this._request("POST", "/source_template/create", { body });
