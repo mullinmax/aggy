@@ -628,14 +628,15 @@ function itemCard(item) {
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
     mediaBlock,
     h('div', { class: 'flex items-center gap-1 px-2 py-1.5' },
-      voteButton('▲', 1, 'Upvote'),
-      voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
-      voteButton('▼', -1, 'Downvote'),
-      h('div', { class: 'flex flex-wrap items-center justify-end gap-2 text-xs text-base-content/50 ml-auto min-w-0 pr-2' },
+      h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-base-content/50 min-w-0 pl-2' },
         sourceBadge(item.item_source_name, item.item_source_color),
         item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
         published && h('span', { class: 'whitespace-nowrap' }, published),
-        predictedBadge)));
+        predictedBadge),
+      h('div', { class: 'flex items-center gap-1 ml-auto' },
+        voteButton('▲', 1, 'Upvote'),
+        voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
+        voteButton('▼', -1, 'Downvote'))));
 }
 
 // Animate a voted card shrinking away, then drop it from the DOM.
