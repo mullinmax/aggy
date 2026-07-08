@@ -153,6 +153,21 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 
+<!-- Why Recommended Modal -->
+<dialog class="modal" id="explainModal">
+  <div class="modal-box max-w-md">
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
+    <h3 class="text-lg font-bold mb-1">Why this article?</h3>
+    <p class="text-xs text-base-content/60 mb-4">
+      Each field is scored by how much it pushes this recommendation up
+      (<span class="text-success font-bold">+</span>) or down
+      (<span class="text-error font-bold">−</span>), compared to average content.
+    </p>
+    <div id="explainBody"></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
 <!-- Create Feed Modal -->
 <dialog class="modal" id="createFeedModal">
   <div class="modal-box">
