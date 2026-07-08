@@ -4,6 +4,18 @@ from typing_extensions import Annotated
 
 from .item_collection import ItemCollection
 
+# sort name -> ORDER BY clause; "best" is the pre-prediction default.
+# Module-level because pydantic would treat an underscored class attribute
+# as a private attr.
+ITEM_SORTS = {
+    "best": "c.score DESC, c.added_at DESC",
+    "predicted": "c.predicted_score DESC NULLS LAST, c.added_at DESC",
+    "predicted_asc": "c.predicted_score ASC NULLS LAST, c.added_at DESC",
+    "controversial": "c.predicted_confidence ASC NULLS LAST, c.added_at DESC",
+    "newest": "i.date_published DESC NULLS LAST, c.added_at DESC",
+    "oldest": "i.date_published ASC NULLS LAST, c.added_at ASC",
+}
+
 
 class Feed(ItemCollection):
     user_hash: str
@@ -87,13 +99,33 @@ class Feed(ItemCollection):
             )
             return cur.fetchall()
 
-    def query_items_with_sources(self, skip=None, limit=None):
-        """Like ``query_items`` but pairs each item with the name of a source
-        in this feed that produced it (None if untracked)."""
+    def query_items_with_sources(
+        self,
+        skip=None,
+        limit=None,
+        sort: str = "best",
+        include_read: bool = True,
+        source_hashes: Optional[List[str]] = None,
+        text_only: Optional[bool] = None,
+    ):
+        """Like ``query_items`` but pairs each item with its source name and
+        the user's item state / model prediction.
+
+        Returns (item, meta) tuples where meta carries source_name,
+        user_score, is_read, predicted_score, predicted_confidence.
+
+        - ``include_read=False`` hides items the user has already voted on.
+        - ``source_hashes`` restricts to items produced by those sources.
+        - ``text_only=True`` keeps only items with no image or media;
+          ``False`` keeps only items that have some; ``None`` keeps all.
+        """
         from .item import ItemStrict
 
+        order_by = ITEM_SORTS.get(sort, ITEM_SORTS["best"])
+
         sql = (
-            "SELECT i.*, ("
+            "SELECT i.*, c.predicted_score, c.predicted_confidence, "
+            "st.score AS user_score, st.is_read AS is_read, ("
             " SELECT s.name FROM source_items si"
             " JOIN sources s ON s.user_hash = si.user_hash"
             "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
@@ -101,10 +133,33 @@ class Feed(ItemCollection):
             "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
             "FROM items i "
             "JOIN feed_items c ON c.item_url_hash = i.url_hash "
-            "WHERE c.user_hash = %s AND c.feed_hash = %s "
-            "ORDER BY c.score DESC, c.added_at DESC"
+            "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+            " AND st.feed_hash = c.feed_hash"
+            " AND st.item_url_hash = c.item_url_hash "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s"
         )
         params: tuple = (self.user_hash, self.name_hash)
+
+        if not include_read:
+            sql += " AND st.score IS NULL"
+        if source_hashes is not None:
+            sql += (
+                " AND EXISTS (SELECT 1 FROM source_items sf"
+                " WHERE sf.user_hash = c.user_hash AND sf.feed_hash = c.feed_hash"
+                " AND sf.item_url_hash = c.item_url_hash"
+                " AND sf.source_hash = ANY(%s))"
+            )
+            params = params + (list(source_hashes),)
+        has_visual = (
+            "(i.image_url IS NOT NULL OR (i.media IS NOT NULL"
+            " AND i.media::text NOT IN ('null', '[]')))"
+        )
+        if text_only is True:
+            sql += f" AND NOT {has_visual}"
+        elif text_only is False:
+            sql += f" AND {has_visual}"
+
+        sql += f" ORDER BY {order_by}"
         if limit is not None and limit >= 0:
             sql += " LIMIT %s"
             params = params + (limit,)
@@ -120,8 +175,14 @@ class Feed(ItemCollection):
         for row in rows:
             if not row:
                 continue
-            source_name = row.pop("source_name", None)
-            results.append((ItemStrict.from_row(row), source_name))
+            meta = {
+                "source_name": row.pop("source_name", None),
+                "user_score": row.pop("user_score", None),
+                "is_read": row.pop("is_read", None),
+                "predicted_score": row.pop("predicted_score", None),
+                "predicted_confidence": row.pop("predicted_confidence", None),
+            }
+            results.append((ItemStrict.from_row(row), meta))
         return results
 
     def exists(self) -> bool:

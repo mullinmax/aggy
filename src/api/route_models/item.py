@@ -19,6 +19,10 @@ class ItemResponse(BaseRouteModel):
     item_excerpt: Optional[str] = None
     item_content: Optional[str] = None
     item_source_name: Optional[str] = None
+    item_user_score: Optional[float] = None
+    item_is_read: Optional[bool] = None
+    item_predicted_score: Optional[float] = None
+    item_predicted_confidence: Optional[float] = None
 
     model_config = {
         "json_schema_extra": {
@@ -36,9 +40,21 @@ class ItemResponse(BaseRouteModel):
     }
 
     @classmethod
-    def from_db_model(cls, db_model: ItemLoose, source_name: str = None):
+    def from_db_model(
+        cls,
+        db_model: ItemLoose,
+        source_name: str = None,
+        user_score: float = None,
+        is_read: bool = None,
+        predicted_score: float = None,
+        predicted_confidence: float = None,
+    ):
         return cls(
             item_source_name=source_name,
+            item_user_score=user_score,
+            item_is_read=is_read,
+            item_predicted_score=predicted_score,
+            item_predicted_confidence=predicted_confidence,
             item_hash=db_model.url_hash,
             item_url=db_model.url,
             item_author=db_model.author,

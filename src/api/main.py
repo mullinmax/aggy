@@ -1,3 +1,15 @@
+import os
+import threading
+
+# Guard against the musl/OpenBLAS segfault on alpine: BLAS must not spawn
+# its own worker threads (they get musl's 128KB stack and crash on big
+# matrices), and Python-created worker threads (uvicorn's threadpool,
+# APScheduler) need a roomier stack for numpy. Both must be set before
+# numpy is first imported / any thread is started.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+threading.stack_size(4 * 1024 * 1024)
+
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +36,7 @@ from ingest.jobs import (
     source_ingestion_job,
     download_embedding_model_job,
 )
+from ranking.engine import feed_ranking_job
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
@@ -66,6 +79,16 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * 60 * 12,
         id="rss_bridge_get_templates_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+    )
+
+    # re-rank feeds whose votes/items changed since the last prediction pass
+    scheduler.add_job(
+        func=feed_ranking_job,
+        trigger="interval",
+        seconds=60 * config.get_int("RANKING_INTERVAL_MINUTES"),
+        id="feed_ranking_job",
         replace_existing=False,
         next_run_time=datetime.now(),
     )

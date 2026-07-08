@@ -9,6 +9,10 @@ const sdk = new AggySDK();
 const PAGE_SIZE = 20;
 let currentFeed = null;
 let itemSkip = 0;
+// filter/sort state for the current feed; sources: null means "all sources"
+const defaultFilters = () => ({ sort: 'predicted', includeRead: false, textOnly: '', sources: null });
+let feedFilters = defaultFilters();
+let feedSourceList = []; // sources of the current feed, for the filter panel
 let selectedTemplate = null;
 let editingSource = null;
 let editingTemplate = null;
@@ -44,6 +48,12 @@ function bindControls() {
 
   $('deleteFeedBtn').onclick = confirmDeleteFeed;
   $('manageSourcesBtn').onclick = () => switchFeedTab('sources');
+  $('filterBtn').onclick = toggleFilterPanel;
+  $('statsBtn').onclick = openStatsModal;
+  $('rerankBtn').onclick = handleRerank;
+  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
+  $('filterMedia').onchange = (e) => { feedFilters.textOnly = e.target.value; reloadItems(); };
+  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
@@ -184,6 +194,13 @@ async function showFeed(hash) {
   render($('itemList'), spinner());
 
   if (!currentFeed || currentFeed.feed_name_hash !== hash) {
+    feedFilters = defaultFilters();
+    feedSourceList = [];
+    $('filterPanel').classList.add('hidden');
+    syncFilterControls();
+  }
+
+  if (!currentFeed || currentFeed.feed_name_hash !== hash) {
     try {
       currentFeed = await sdk.feedGet({ feed_name_hash: hash });
     } catch (err) {
@@ -216,6 +233,126 @@ function switchFeedTab(tab) {
   if (tab === 'sources') loadSources();
 }
 
+// ---------- filters ----------
+function syncFilterControls() {
+  $('filterSort').value = feedFilters.sort;
+  $('filterMedia').value = feedFilters.textOnly;
+  $('filterIncludeRead').checked = feedFilters.includeRead;
+}
+
+function reloadItems() {
+  itemSkip = 0;
+  loadFeedItems();
+}
+
+async function toggleFilterPanel() {
+  const panel = $('filterPanel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden') && !feedSourceList.length) {
+    try {
+      feedSourceList = await sdk.feedSources({ feed_name_hash: currentFeed.feed_name_hash });
+    } catch { feedSourceList = []; }
+    renderFilterSources();
+  }
+}
+
+// Source checkboxes; all checked (sources: null) by default.
+function renderFilterSources() {
+  const selected = feedFilters.sources; // null = all
+  render($('filterSources'),
+    feedSourceList.length
+      ? feedSourceList.map((s) =>
+          h('label', { class: 'label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100' },
+            h('input', {
+              type: 'checkbox', class: 'checkbox checkbox-xs checkbox-primary',
+              checked: selected === null || selected.includes(s.source_name_hash),
+              onchange: (e) => {
+                const all = feedSourceList.map((x) => x.source_name_hash);
+                let picked = selected === null ? all.slice() : feedFilters.sources.slice();
+                if (e.target.checked) { if (!picked.includes(s.source_name_hash)) picked.push(s.source_name_hash); }
+                else picked = picked.filter((hsh) => hsh !== s.source_name_hash);
+                feedFilters.sources = picked.length === all.length ? null : picked;
+                reloadItems();
+              },
+            }),
+            h('span', { class: 'label-text text-xs' }, s.source_name)))
+      : h('span', { class: 'text-xs text-base-content/40' }, 'No sources in this feed'));
+}
+
+// ---------- model stats ----------
+function formatMetric(v, digits = 3) {
+  return v == null ? '—' : Number(v).toFixed(digits);
+}
+
+// Human labels for the backend model names.
+const MODEL_LABELS = {
+  global_mean: 'Global mean (baseline)',
+  source_mean: 'Source average',
+  knn_embedding: 'Similar posts (kNN)',
+  ridge: 'Linear model (ridge)',
+  neural_net: 'Neural net',
+};
+
+function renderStats(stats) {
+  const votes = stats.up_votes + stats.down_votes + stats.neutral_votes;
+  const row = (m) =>
+    h('tr', { class: m.chosen ? 'bg-primary/10' : '' },
+      h('td', { class: 'text-sm' },
+        MODEL_LABELS[m.model_name] || m.model_name,
+        m.chosen ? h('span', { class: 'badge badge-primary badge-xs ml-2' }, 'in use') : null),
+      h('td', { class: 'text-sm text-right' }, formatMetric(m.mae)),
+      h('td', { class: 'text-sm text-right' }, formatMetric(m.rmse)),
+      h('td', { class: 'text-sm text-right' },
+        m.sign_accuracy == null ? '—' : `${Math.round(m.sign_accuracy * 100)}%`));
+
+  render($('statsBody'),
+    h('div', { class: 'stats stats-horizontal shadow-none border border-base-300 w-full mb-4' },
+      h('div', { class: 'stat py-2' },
+        h('div', { class: 'stat-title text-xs' }, 'Votes'),
+        h('div', { class: 'stat-value text-lg' }, String(votes)),
+        h('div', { class: 'stat-desc' }, `▲ ${stats.up_votes} · ● ${stats.neutral_votes} · ▼ ${stats.down_votes}`)),
+      h('div', { class: 'stat py-2' },
+        h('div', { class: 'stat-title text-xs' }, 'Articles ranked'),
+        h('div', { class: 'stat-value text-lg' }, `${stats.predicted_items}/${stats.total_items}`))),
+    stats.models.length
+      ? h('div', { class: 'overflow-x-auto' },
+          h('table', { class: 'table table-sm' },
+            h('thead', {},
+              h('tr', {},
+                h('th', {}, 'Model'),
+                h('th', { class: 'text-right', title: 'Mean absolute error (lower is better)' }, 'MAE'),
+                h('th', { class: 'text-right', title: 'Root mean squared error (lower is better)' }, 'RMSE'),
+                h('th', { class: 'text-right', title: 'How often the predicted vote direction matches yours' }, 'Direction'))),
+            h('tbody', {}, stats.models.map(row))))
+      : h('p', { class: 'text-sm text-base-content/50' },
+          'No model stats yet — vote on a few articles, then hit "Recompute now".'));
+}
+
+async function openStatsModal() {
+  showModal('statsModal');
+  render($('statsBody'), spinner());
+  try {
+    renderStats(await sdk.feedRankingStats({ feed_name_hash: currentFeed.feed_name_hash }));
+  } catch (err) {
+    render($('statsBody'), h('p', { class: 'text-sm text-error' }, err.message));
+  }
+}
+
+async function handleRerank() {
+  const btn = $('rerankBtn');
+  btn.disabled = true;
+  btn.textContent = 'Computing…';
+  try {
+    renderStats(await sdk.feedRerank({ feed_name_hash: currentFeed.feed_name_hash }));
+    reloadItems();
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Recompute now';
+  }
+}
+
 // ---------- items ----------
 async function loadFeedItems() {
   const list = $('itemList');
@@ -226,6 +363,10 @@ async function loadFeedItems() {
       feed_name_hash: currentFeed.feed_name_hash,
       skip: itemSkip,
       limit: PAGE_SIZE,
+      sort: feedFilters.sort,
+      include_read: feedFilters.includeRead,
+      sources: feedFilters.sources === null ? null : feedFilters.sources.join(','),
+      text_only: feedFilters.textOnly === '' ? null : feedFilters.textOnly,
     });
     if (itemSkip === 0) render(list);
 
@@ -340,12 +481,23 @@ function itemCard(item) {
           }))
       : null;
 
+  const voteClass = (score) => (score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
   const voteButton = (label, score, title) =>
     h('button', {
-      class: 'btn btn-ghost btn-xs',
+      class: `btn btn-ghost btn-xs${item.item_user_score === score ? ` ${voteClass(score)}` : ''}`,
+      'data-score': String(score),
       title,
       onclick: (e) => { e.stopPropagation(); voteItem(item, score, e.currentTarget); },
     }, label);
+
+  // model's take on this article, when a prediction exists
+  const predicted = item.item_predicted_score;
+  const predictedBadge = predicted != null
+    ? h('span', {
+        class: 'badge badge-ghost badge-xs ml-auto text-base-content/50',
+        title: `Predicted vote ${predicted.toFixed(2)} · confidence ${((item.item_predicted_confidence ?? 0) * 100).toFixed(0)}%`,
+      }, `${predicted > 0 ? '+' : ''}${(predicted * 100).toFixed(0)}% match`)
+    : null;
 
   return h('div', {
     class: 'card bg-base-200 border border-base-300 hover:border-primary/50 transition-colors cursor-pointer overflow-hidden',
@@ -361,7 +513,9 @@ function itemCard(item) {
     mediaBlock,
     h('div', { class: 'flex items-center px-2 py-1' },
       voteButton('▲', 1, 'Upvote'),
-      voteButton('▼', -1, 'Downvote')));
+      voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
+      voteButton('▼', -1, 'Downvote'),
+      predictedBadge));
 }
 
 async function voteItem(item, score, btn) {
@@ -372,9 +526,10 @@ async function voteItem(item, score, btn) {
       score,
       is_read: true,
     });
+    item.item_user_score = score;
     btn.parentElement.querySelectorAll('button').forEach((b) =>
-      b.classList.remove('text-success', 'text-error'));
-    btn.classList.add(score > 0 ? 'text-success' : 'text-error');
+      b.classList.remove('text-success', 'text-error', 'text-warning'));
+    btn.classList.add(score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
   } catch (err) {
     toast(err.message, 'alert-error');
   }
