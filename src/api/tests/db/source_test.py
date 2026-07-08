@@ -39,6 +39,46 @@ def test_read_source(unique_source):
     ), "Source feed_hash should match"
 
 
+def test_source_ingest_interval_roundtrip(unique_source):
+    unique_source.ingest_interval_minutes = 120
+    unique_source.create()
+
+    read_source = Source.read(
+        user_hash=unique_source.user_hash,
+        feed_hash=unique_source.feed_hash,
+        source_hash=unique_source.name_hash,
+    )
+    assert read_source.ingest_interval_minutes == 120
+
+
+def test_source_update_ingest_interval(unique_source):
+    unique_source.create()
+
+    def read_back():
+        return Source.read(
+            user_hash=unique_source.user_hash,
+            feed_hash=unique_source.feed_hash,
+            source_hash=unique_source.name_hash,
+        )
+
+    assert read_back().ingest_interval_minutes is None
+
+    unique_source.update(
+        name=unique_source.name, url=str(unique_source.url), ingest_interval=45
+    )
+    assert read_back().ingest_interval_minutes == 45
+
+    # leaving the interval out of an update keeps the current value
+    unique_source.update(name=unique_source.name, url=str(unique_source.url))
+    assert read_back().ingest_interval_minutes == 45
+
+    # an explicit None resets to the server default
+    unique_source.update(
+        name=unique_source.name, url=str(unique_source.url), ingest_interval=None
+    )
+    assert read_back().ingest_interval_minutes is None
+
+
 def test_source_add_items(unique_source, unique_item_strict):
     unique_source.create()
     unique_item_strict.create()

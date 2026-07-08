@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List, Optional
 
 from pydantic import HttpUrl
 from .base import BaseRouteModel
@@ -13,6 +13,7 @@ class ItemResponse(BaseRouteModel):
     item_author: Optional[str] = None
     item_date_published: Optional[datetime] = None
     item_image_url: Optional[str] = None
+    item_media: Optional[List[Dict[str, Optional[str]]]] = None
     item_title: Optional[str] = None
     item_domain: Optional[str] = None
     item_excerpt: Optional[str] = None
@@ -43,6 +44,7 @@ class ItemResponse(BaseRouteModel):
             item_author=db_model.author,
             item_date_published=db_model.date_published,
             item_image_url=db_model.image_url,
+            item_media=db_model.media,
             item_title=db_model.title,
             item_domain=db_model.domain,
             item_excerpt=db_model.excerpt,

@@ -17,6 +17,7 @@ class SourceRouteModel(BaseRouteModel):
     source_last_ingest_error: Optional[str] = None
     source_template_name_hash: Optional[str] = None
     source_template_parameters: Optional[Dict[str, str]] = None
+    source_ingest_interval_minutes: Optional[int] = None
 
     @classmethod
     def from_db_model(cls, db_model: Source):
@@ -27,6 +28,7 @@ class SourceRouteModel(BaseRouteModel):
             source_feed=db_model.feed_hash,
             source_template_name_hash=db_model.template_name_hash,
             source_template_parameters=db_model.template_parameters,
+            source_ingest_interval_minutes=db_model.ingest_interval_minutes,
         )
 
     @classmethod
@@ -41,4 +43,5 @@ class SourceRouteModel(BaseRouteModel):
             source_last_ingest_error=row["last_ingest_error"],
             source_template_name_hash=row.get("template_name_hash"),
             source_template_parameters=row.get("template_parameters"),
+            source_ingest_interval_minutes=row.get("ingest_interval_minutes"),
         )

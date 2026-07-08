@@ -6,6 +6,7 @@ from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
 from ingest.item.rss import ingest_rss_item
+from ingest.item.reddit import ingest_reddit_item
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
@@ -65,11 +66,15 @@ def ingest_source(source: Source) -> None:
             final_item = ItemStrict.read(url_hash=temp_item.url_hash)
         else:
             rss_item = ingest_rss_item(entry)
+            # reddit's post JSON has full-res images, gifs, videos, and
+            # galleries that the RSS feed only thumbnails; merge it in ahead
+            # of open graph so its media wins
+            reddit_item = ingest_reddit_item(rss_item)
             open_graph_item = ingest_open_graph_item(rss_item)
             mercury_item = ingest_mercury_item(rss_item)
 
             best_item = ItemLoose.merge_instances(
-                items=[rss_item, open_graph_item, mercury_item]
+                items=[rss_item, reddit_item, open_graph_item, mercury_item]
             )
 
             # Attempt to make strict item from best of all

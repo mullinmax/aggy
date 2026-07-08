@@ -5,6 +5,20 @@ import feedparser
 from db.item import ItemLoose
 
 
+def _link_media(link):
+    """Media entry for entries whose link points straight at a media file."""
+    if not link:
+        return None
+    path = urlparse(link).path.lower()
+    if path.endswith(".gif"):
+        return [{"type": "gif", "url": link}]
+    if path.endswith((".mp4", ".webm")):
+        return [{"type": "video", "url": link}]
+    if path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return [{"type": "image", "url": link}]
+    return None
+
+
 def ingest_rss_item(entry: feedparser.FeedParserDict) -> ItemLoose:
     # TODO more advanced parsing of content (like when there's more than 1 value)
     try:
@@ -24,4 +38,5 @@ def ingest_rss_item(entry: feedparser.FeedParserDict) -> ItemLoose:
         date_published=entry.get("published"),
         domain=domain or None,
         excerpt=entry_content,
+        media=_link_media(link),
     )

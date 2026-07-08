@@ -4,8 +4,12 @@ from typing import Dict, Optional
 from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
 
-from constants import SOURCE_READ_INTERVAL_TIMEDELTA
+from constants import SOURCE_READ_INTERVAL_MINUTES
 from .item_collection import ItemCollection
+
+# Sentinel for update(): distinguishes "leave unchanged" from an explicit
+# None ("reset to the server default").
+_UNSET = object()
 
 
 class Source(ItemCollection):
@@ -17,6 +21,9 @@ class Source(ItemCollection):
     # be edited later.
     template_name_hash: Optional[str] = None
     template_parameters: Optional[Dict[str, str]] = None
+    # How often to check this source, in minutes. None uses the server-wide
+    # SOURCE_READ_INTERVAL_MINUTES default.
+    ingest_interval_minutes: Optional[int] = None
 
     @property
     def name_hash(self):
@@ -62,8 +69,9 @@ class Source(ItemCollection):
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO sources (user_hash, feed_hash, name_hash, name, url, "
-                "template_name_hash, template_parameters, next_ingest_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())",
+                "template_name_hash, template_parameters, ingest_interval_minutes, "
+                "next_ingest_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 (
                     self.user_hash,
                     self.feed_hash,
@@ -74,18 +82,31 @@ class Source(ItemCollection):
                     json.dumps(self.template_parameters)
                     if self.template_parameters is not None
                     else None,
+                    self.ingest_interval_minutes,
                 ),
             )
 
-    def update(self, name: str, url: str, template_parameters=None):
+    def update(
+        self, name: str, url: str, template_parameters=None, ingest_interval=_UNSET
+    ):
         """Update this source in place. Renaming changes name_hash; the
         source_items FK cascades so existing items stay attached. Resets
-        next_ingest_at so the (possibly new) URL is fetched promptly."""
+        next_ingest_at so the (possibly new) URL is fetched promptly.
+
+        ``ingest_interval`` sets the per-source check frequency in minutes;
+        pass ``None`` to reset it to the server default, or leave it out to
+        keep the current value."""
         new_name_hash = self.__insecure_hash__(name)
+        interval_sql = ""
+        interval_params: tuple = ()
+        if ingest_interval is not _UNSET:
+            interval_sql = "ingest_interval_minutes = %s, "
+            interval_params = (ingest_interval,)
         with self.db_con() as cur:
             cur.execute(
                 "UPDATE sources SET name = %s, name_hash = %s, url = %s, "
                 "template_parameters = COALESCE(%s, template_parameters), "
+                f"{interval_sql}"
                 "next_ingest_at = NOW() "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (
@@ -95,6 +116,9 @@ class Source(ItemCollection):
                     json.dumps(template_parameters)
                     if template_parameters is not None
                     else None,
+                )
+                + interval_params
+                + (
                     self.user_hash,
                     self.feed_hash,
                     self.name_hash,
@@ -104,6 +128,8 @@ class Source(ItemCollection):
         self.url = url
         if template_parameters is not None:
             self.template_parameters = template_parameters
+        if ingest_interval is not _UNSET:
+            self.ingest_interval_minutes = ingest_interval
 
     def delete(self):
         with self.db_con() as cur:
@@ -120,8 +146,10 @@ class Source(ItemCollection):
             target_sql = "NOW()"
             params = ()
         else:
-            target_sql = "NOW() + %s"
-            params = (SOURCE_READ_INTERVAL_TIMEDELTA,)
+            target_sql = (
+                "NOW() + make_interval(mins => COALESCE(ingest_interval_minutes, %s))"
+            )
+            params = (SOURCE_READ_INTERVAL_MINUTES,)
 
         # Mirrors the Redis ZADD lt=True semantics: only move next_ingest_at
         # earlier, never later.
@@ -136,10 +164,11 @@ class Source(ItemCollection):
         """Push the next scheduled ingest a full interval out from now."""
         with self.db_con() as cur:
             cur.execute(
-                "UPDATE sources SET next_ingest_at = NOW() + %s "
+                "UPDATE sources SET next_ingest_at = NOW() + "
+                "make_interval(mins => COALESCE(ingest_interval_minutes, %s)) "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (
-                    SOURCE_READ_INTERVAL_TIMEDELTA,
+                    SOURCE_READ_INTERVAL_MINUTES,
                     self.user_hash,
                     self.feed_hash,
                     self.name_hash,
@@ -166,7 +195,8 @@ class Source(ItemCollection):
     def read(cls, user_hash, feed_hash, source_hash):
         with cls.db_con() as cur:
             cur.execute(
-                "SELECT name, url, template_name_hash, template_parameters "
+                "SELECT name, url, template_name_hash, template_parameters, "
+                "ingest_interval_minutes "
                 "FROM sources "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (user_hash, feed_hash, source_hash),
@@ -181,6 +211,7 @@ class Source(ItemCollection):
                 url=row["url"],
                 template_name_hash=row["template_name_hash"],
                 template_parameters=row["template_parameters"],
+                ingest_interval_minutes=row["ingest_interval_minutes"],
             )
         raise ValueError("Source not found")
 
