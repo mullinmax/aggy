@@ -146,6 +146,8 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         url=item.url,
         title=post.get("title"),
         author=f"u/{post['author']}" if post.get("author") else None,
-        media=media or None,
+        # an empty list still means "post scraped, no media found", which
+        # stops re-scrape attempts on later ingest cycles
+        media=media,
         image_url=image_url,
     )

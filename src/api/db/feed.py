@@ -118,24 +118,36 @@ class Feed(ItemCollection):
         - ``source_hashes`` restricts to items produced by those sources.
         - ``text_only=True`` keeps only items with no image or media;
           ``False`` keeps only items that have some; ``None`` keeps all.
+
+        Results interleave sources within the sort order: each source's best
+        item first (ordered by the sort key), then each source's second-best,
+        and so on, so the feed mixes sources instead of long runs of one.
         """
         from .item import ItemStrict
 
         order_by = ITEM_SORTS.get(sort, ITEM_SORTS["best"])
+        # the same sort keys, without table prefixes, for the outer
+        # interleave query where every column is already flattened
+        outer_order = order_by.replace("c.", "").replace("i.", "")
 
         sql = (
-            "SELECT i.*, c.predicted_score, c.predicted_confidence, "
-            "st.score AS user_score, st.is_read AS is_read, ("
-            " SELECT s.name FROM source_items si"
-            " JOIN sources s ON s.user_hash = si.user_hash"
-            "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
-            " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
-            "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
+            "SELECT i.*, c.score, c.added_at, "
+            "c.predicted_score, c.predicted_confidence, "
+            "st.score AS user_score, st.is_read AS is_read, "
+            "src.name AS source_name, "
+            "ROW_NUMBER() OVER (PARTITION BY src.name_hash "
+            f"ORDER BY {order_by}) AS source_rank "
             "FROM items i "
             "JOIN feed_items c ON c.item_url_hash = i.url_hash "
             "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
             " AND st.feed_hash = c.feed_hash"
             " AND st.item_url_hash = c.item_url_hash "
+            "LEFT JOIN LATERAL ("
+            " SELECT s.name, s.name_hash FROM source_items si"
+            " JOIN sources s ON s.user_hash = si.user_hash"
+            "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+            " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+            "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
             "WHERE c.user_hash = %s AND c.feed_hash = %s"
         )
         params: tuple = (self.user_hash, self.name_hash)
@@ -150,16 +162,20 @@ class Feed(ItemCollection):
                 " AND sf.source_hash = ANY(%s))"
             )
             params = params + (list(source_hashes),)
+        # An item counts as visual if it has a card image, ingested media,
+        # or an image embedded in its (sanitized) content HTML — many feeds
+        # only carry images inside the content body.
         has_visual = (
             "(i.image_url IS NOT NULL OR (i.media IS NOT NULL"
-            " AND i.media::text NOT IN ('null', '[]')))"
+            " AND i.media::text NOT IN ('null', '[]'))"
+            " OR i.content ~* '<img\\s')"
         )
         if text_only is True:
             sql += f" AND NOT {has_visual}"
         elif text_only is False:
             sql += f" AND {has_visual}"
 
-        sql += f" ORDER BY {order_by}"
+        sql = f"SELECT * FROM ({sql}) q ORDER BY q.source_rank, {outer_order}"
         if limit is not None and limit >= 0:
             sql += " LIMIT %s"
             params = params + (limit,)
@@ -175,6 +191,10 @@ class Feed(ItemCollection):
         for row in rows:
             if not row:
                 continue
+            # interleave/sort bookkeeping columns aren't item fields
+            row.pop("score", None)
+            row.pop("added_at", None)
+            row.pop("source_rank", None)
             meta = {
                 "source_name": row.pop("source_name", None),
                 "user_score": row.pop("user_score", None),

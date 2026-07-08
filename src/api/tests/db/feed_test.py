@@ -151,7 +151,10 @@ def test_get_items_with_skip_and_limit(unique_feed, unique_item_strict):
 
 def test_sources(unique_feed, unique_source):
     """Tests adding and removing sources from a feed."""
-    unique_feed.create()
+    # the unique_source fixture's existing_feed dependency already
+    # persisted this feed
+    if not unique_feed.exists():
+        unique_feed.create()
 
     unique_feed.add_source(unique_source)
     assert unique_source.name_hash in unique_feed.source_hashes
@@ -166,7 +169,10 @@ def test_sources(unique_feed, unique_source):
 
 def test_delete_feed_removes_sources(unique_feed, unique_source):
     """Tests that deleting a feed removes its sources."""
-    unique_feed.create()
+    # the unique_source fixture's existing_feed dependency already
+    # persisted this feed
+    if not unique_feed.exists():
+        unique_feed.create()
     unique_feed.add_source(unique_source)
 
     assert unique_feed.exists()
@@ -188,3 +194,143 @@ def test_remove_items(unique_feed, unique_item_strict):
     unique_feed.remove_items(unique_item_strict)
     assert unique_item_strict not in unique_feed.query_items()
     assert unique_item_strict.exists()
+
+
+def _make_source(feed, name):
+    from db.source import Source
+
+    source = Source(
+        user_hash=feed.user_hash,
+        feed_hash=feed.name_hash,
+        name=name,
+        url="http://example.com",
+    )
+    feed.add_source(source)
+    return source
+
+
+def _add_item(feed, source, item, url, score, **overrides):
+    new = item.model_copy()
+    new.url = url
+    for field, value in overrides.items():
+        setattr(new, field, value)
+    new.create()
+    if source is not None:
+        source.add_items(new)
+    feed.add_items(new)
+    feed.set_items_scores({new.url_hash: score})
+    return new
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_text_only_counts_content_images(unique_feed, unique_item_strict):
+    """A content-embedded <img> counts as visual media for text_only."""
+    unique_feed.create()
+
+    visual = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/content-img",
+        2,
+        image_url=None,
+        media=None,
+        content='<p>words</p><img src="http://example.com/pic.jpg">',
+    )
+    text = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/plain-text",
+        1,
+        image_url=None,
+        media=None,
+        content="<p>just words</p>",
+    )
+
+    with_media = unique_feed.query_items_with_sources(text_only=False)
+    assert [item.url_hash for item, _ in with_media] == [visual.url_hash]
+
+    text_only = unique_feed.query_items_with_sources(text_only=True)
+    assert [item.url_hash for item, _ in text_only] == [text.url_hash]
+
+    everything = unique_feed.query_items_with_sources(text_only=None)
+    assert len(everything) == 2
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_text_only_counts_media_list(unique_feed, unique_item_strict):
+    """Ingested media counts as visual; an empty media list does not."""
+    unique_feed.create()
+
+    gif = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/gif",
+        2,
+        image_url=None,
+        media=[{"type": "gif", "url": "http://example.com/a.mp4"}],
+        content="<p>words</p>",
+    )
+    _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/scraped-no-media",
+        1,
+        image_url=None,
+        media=[],
+        content="<p>words</p>",
+    )
+
+    with_media = unique_feed.query_items_with_sources(text_only=False)
+    assert [item.url_hash for item, _ in with_media] == [gif.url_hash]
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_interleaves_sources(unique_feed, unique_item_strict):
+    """Items alternate between sources while respecting the sort order."""
+    unique_feed.create()
+    source_a = _make_source(unique_feed, "source-a")
+    source_b = _make_source(unique_feed, "source-b")
+
+    # source-a's items all outscore source-b's, so a plain sort would put
+    # all of source-a first
+    _add_item(unique_feed, source_a, unique_item_strict, "http://example.com/a1", 40)
+    _add_item(unique_feed, source_a, unique_item_strict, "http://example.com/a2", 30)
+    _add_item(unique_feed, source_b, unique_item_strict, "http://example.com/b1", 20)
+    _add_item(unique_feed, source_b, unique_item_strict, "http://example.com/b2", 10)
+
+    results = unique_feed.query_items_with_sources(sort="best")
+    names = [meta["source_name"] for _, meta in results]
+    assert names == ["source-a", "source-b", "source-a", "source-b"]
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_source_filter(unique_feed, unique_item_strict):
+    """source_hashes restricts results to the selected sources."""
+    unique_feed.create()
+    source_a = _make_source(unique_feed, "source-a")
+    source_b = _make_source(unique_feed, "source-b")
+
+    item_a = _add_item(
+        unique_feed, source_a, unique_item_strict, "http://example.com/a", 2
+    )
+    item_b = _add_item(
+        unique_feed, source_b, unique_item_strict, "http://example.com/b", 1
+    )
+
+    only_a = unique_feed.query_items_with_sources(source_hashes=[source_a.name_hash])
+    assert [item.url_hash for item, _ in only_a] == [item_a.url_hash]
+
+    only_b = unique_feed.query_items_with_sources(source_hashes=[source_b.name_hash])
+    assert [item.url_hash for item, _ in only_b] == [item_b.url_hash]
+
+    none = unique_feed.query_items_with_sources(source_hashes=[])
+    assert none == []
+
+    both = unique_feed.query_items_with_sources(
+        source_hashes=[source_a.name_hash, source_b.name_hash]
+    )
+    assert len(both) == 2

@@ -66,10 +66,19 @@ function bindControls() {
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
-  // stop autoplaying gifs/videos when the reader closes
+  // stop gifs/videos/embeds when the reader closes: emptying the media
+  // host halts <video> playback and unloads youtube iframes
   $('readerModal').addEventListener('close', () => {
-    $('readerMedia').querySelectorAll('video').forEach((v) => v.pause());
+    render($('readerMedia'));
+    updateGifPlayback();
   });
+
+  // infinite scroll: when the load-more button scrolls near the viewport,
+  // click it automatically
+  new IntersectionObserver((entries) => {
+    const btn = $('loadMoreBtn');
+    if (entries.some((en) => en.isIntersecting) && !btn.classList.contains('hidden')) btn.click();
+  }, { rootMargin: '600px' }).observe($('loadMoreBtn'));
 }
 
 function setView(name) {
@@ -256,7 +265,9 @@ async function toggleFilterPanel() {
   }
 }
 
-// Source checkboxes; all checked (sources: null) by default.
+// Source checkboxes; all checked (sources: null) by default. Always read
+// and re-render from feedFilters.sources so repeated toggles never work
+// against a stale snapshot of the selection.
 function renderFilterSources() {
   const selected = feedFilters.sources; // null = all
   render($('filterSources'),
@@ -268,10 +279,11 @@ function renderFilterSources() {
               checked: selected === null || selected.includes(s.source_name_hash),
               onchange: (e) => {
                 const all = feedSourceList.map((x) => x.source_name_hash);
-                let picked = selected === null ? all.slice() : feedFilters.sources.slice();
+                let picked = feedFilters.sources === null ? all.slice() : feedFilters.sources.slice();
                 if (e.target.checked) { if (!picked.includes(s.source_name_hash)) picked.push(s.source_name_hash); }
                 else picked = picked.filter((hsh) => hsh !== s.source_name_hash);
                 feedFilters.sources = picked.length === all.length ? null : picked;
+                renderFilterSources();
                 reloadItems();
               },
             }),
@@ -354,9 +366,14 @@ async function handleRerank() {
 }
 
 // ---------- items ----------
+let itemsRequestSeq = 0; // discards out-of-order responses
+
 async function loadFeedItems() {
+  const seq = ++itemsRequestSeq;
   const list = $('itemList');
   if (itemSkip === 0) render(list, spinner());
+  // hide while loading so the infinite-scroll observer can't double-fire
+  $('loadMoreBtn').classList.add('hidden');
 
   try {
     const items = await sdk.feedItems({
@@ -368,6 +385,7 @@ async function loadFeedItems() {
       sources: feedFilters.sources === null ? null : feedFilters.sources.join(','),
       text_only: feedFilters.textOnly === '' ? null : feedFilters.textOnly,
     });
+    if (seq !== itemsRequestSeq) return; // a newer request superseded this one
     if (itemSkip === 0) render(list);
 
     if (!items.length && itemSkip === 0) {
@@ -381,6 +399,7 @@ async function loadFeedItems() {
     items.forEach((item) => list.append(itemCard(item)));
     $('loadMoreBtn').classList.toggle('hidden', items.length < PAGE_SIZE);
   } catch (err) {
+    if (seq !== itemsRequestSeq) return;
     if (itemSkip === 0) render(list, h('div', { class: 'text-center py-16 text-base-content/50' }, 'Failed to load articles'));
     toast(err.message, 'alert-error');
   }
@@ -415,14 +434,74 @@ function cleanExcerpt(item) {
 
 const isVideoFile = (url) => /\.(mp4|webm)(\?|$)/i.test(url || '');
 
-// Pause autoplaying gifs while they're offscreen so a feed full of them
-// doesn't churn bandwidth and CPU.
-const gifVisibility = new IntersectionObserver((entries) => {
-  entries.forEach(({ target, isIntersecting }) => {
-    if (isIntersecting) target.play().catch(() => {});
-    else target.pause();
+// Video id for youtube watch/short/embed/youtu.be links, else null.
+function youtubeId(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\.|^m\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      if (u.pathname === '/watch') return u.searchParams.get('v');
+      const m = u.pathname.match(/^\/(?:embed|shorts|live|v)\/([\w-]{6,})/);
+      if (m) return m[1];
+    }
+  } catch { /* not a URL */ }
+  return null;
+}
+
+function youtubeEmbed(id) {
+  return h('div', { class: 'aspect-video w-full' },
+    h('iframe', {
+      class: 'w-full h-full', src: `https://www.youtube-nocookie.com/embed/${id}`,
+      title: 'YouTube video player', loading: 'lazy', allowfullscreen: true,
+      allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture',
+    }));
+}
+
+// Gif playback policy: pause everything offscreen, and of the gifs on
+// screen play only the topmost fully-visible one, so a feed full of gifs
+// doesn't churn bandwidth and CPU or fight for attention.
+const gifRatios = new Map(); // gif <video> -> latest intersection ratio
+
+function updateGifPlayback() {
+  // gifs in an open reader modal take priority over the feed behind it
+  const readerOpen = Array.from(gifRatios.keys())
+    .some((v) => v.isConnected && v.closest('dialog[open]'));
+  let playing = null;
+  for (const [video, ratio] of gifRatios) {
+    if (!video.isConnected) { gifRatios.delete(video); continue; }
+    if (readerOpen && !video.closest('dialog[open]')) continue;
+    if (ratio < 0.98) continue; // fully visible only
+    const top = video.getBoundingClientRect().top;
+    if (!playing || top < playing.top) playing = { video, top };
+  }
+  // nothing fully visible (e.g. mid-scroll between gifs): fall back to the
+  // most-visible one so playback doesn't stall
+  if (!playing) {
+    for (const [video, ratio] of gifRatios) {
+      if (readerOpen && !video.closest('dialog[open]')) continue;
+      if (ratio > 0.5 && (!playing || ratio > playing.ratio)) playing = { video, ratio };
+    }
+  }
+  gifRatios.forEach((_, video) => {
+    if (playing && video === playing.video) video.play().catch(() => {});
+    else video.pause();
   });
-}, { rootMargin: '200px' });
+}
+
+const gifVisibility = new IntersectionObserver((entries) => {
+  entries.forEach((en) => gifRatios.set(en.target, en.intersectionRatio));
+  updateGifPlayback();
+}, { threshold: [0, 0.25, 0.5, 0.75, 0.98, 1] });
+
+// Which gif is "topmost" can change while scrolling without crossing an
+// intersection threshold; re-evaluate on scroll (rAF-throttled).
+let gifScrollTick = false;
+document.addEventListener('scroll', () => {
+  if (gifScrollTick || !gifRatios.size) return;
+  gifScrollTick = true;
+  requestAnimationFrame(() => { gifScrollTick = false; updateGifPlayback(); });
+}, { passive: true, capture: true });
 
 // One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
 // and loop like the reddit app; videos get controls, so their clicks must
@@ -467,11 +546,14 @@ function mediaGallery(mediaList) {
 // below, then the vote row.
 function itemCard(item) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
-  const media = (item.item_media || []).length ? item.item_media : null;
-  const imageUrl = media ? null : (item.item_image_url || parseItemContent(item).imageUrl);
+  const ytId = youtubeId(item.item_url);
+  const media = !ytId && (item.item_media || []).length ? item.item_media : null;
+  const imageUrl = ytId || media ? null : (item.item_image_url || parseItemContent(item).imageUrl);
   const excerpt = cleanExcerpt(item);
 
-  const mediaBlock = media
+  const mediaBlock = ytId
+    ? h('figure', { class: 'bg-base-300' }, youtubeEmbed(ytId))
+    : media
     ? h('figure', { class: 'bg-base-300' }, mediaGallery(media))
     : imageUrl
       ? h('figure', { class: 'bg-base-300' },
@@ -572,15 +654,21 @@ function openReader(item) {
     h('a', { href: item.item_url, target: '_blank', rel: 'noopener', class: 'link link-primary ml-auto' },
       host ? `Open on ${host} ↗` : 'Open original ↗'));
 
-  // Ingested media (gifs, videos, galleries) takes the hero slot. Otherwise
-  // non-reddit articles keep their images inline in the content and only
-  // reddit-style posts promote a content image to the hero.
-  const media = item.item_media || [];
-  const heroUrl = media.length
+  // YouTube links embed the actual player; ingested media (gifs, videos,
+  // galleries) takes the hero slot. Otherwise non-reddit articles keep
+  // their images inline in the content and only reddit-style posts promote
+  // a content image to the hero.
+  const ytId = youtubeId(item.item_url);
+  const media = ytId ? [] : item.item_media || [];
+  const heroUrl = ytId || media.length
     ? null
     : item.item_image_url || (parsed.isReddit ? parsed.imageUrl : null);
   const mediaHost = $('readerMedia');
-  if (media.length) {
+  if (ytId) {
+    render(mediaHost, youtubeEmbed(ytId));
+    // the content's thumbnails would just duplicate the player
+    parsed.root.querySelectorAll('img').forEach((img) => (img.closest('a') || img).remove());
+  } else if (media.length) {
     render(mediaHost, mediaGallery(media));
   } else if (heroUrl) {
     render(mediaHost, h('img', {
