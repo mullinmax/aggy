@@ -13,11 +13,24 @@ from ingest.item.mercury import ingest_mercury_item
 def ingest_source(source: Source) -> None:
     # Fetch the feed ourselves so failures produce a useful error instead of
     # feedparser silently returning zero entries (rss-bridge answers bad
-    # parameters with an HTML error page, for example).
+    # parameters with an HTML error page, for example). A descriptive
+    # User-Agent matters: reddit.com and others rate-limit anonymous/default
+    # agents far more aggressively.
+    headers = {
+        "User-Agent": (
+            f"aggy/{config.get('BUILD_VERSION')} "
+            "(self-hosted feed aggregator; +https://github.com/mullinmax/aggy)"
+        )
+    }
     try:
-        response = requests.get(str(source.url), timeout=60)
+        response = requests.get(str(source.url), timeout=60, headers=headers)
     except requests.RequestException as e:
         raise Exception(f"Could not fetch feed: {e}") from e
+
+    if response.status_code == 429:
+        retry_after = response.headers.get("Retry-After")
+        detail = f", retry after {retry_after}s" if retry_after else ""
+        raise Exception(f"Rate limited by feed server (HTTP 429{detail})")
 
     if response.status_code != 200:
         raise Exception(f"Feed request returned HTTP {response.status_code}")

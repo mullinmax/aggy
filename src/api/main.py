@@ -18,6 +18,7 @@ from routers.source import source_router
 from routers.item import item_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
+from builtin_templates import create_builtin_source_templates
 from ingest.jobs import (
     source_ingestion_scheduling_job,
     source_ingestion_job,
@@ -34,6 +35,12 @@ async def app_lifespan(app: FastAPI):
 
     # Fail fast on missing critical config instead of erroring on first login.
     config.get("JWT_SECRET")
+
+    try:
+        create_builtin_source_templates()
+    except Exception as e:
+        logging.error(f"Failed to seed builtin source templates: {e}")
+
     scheduler.add_job(
         func=source_ingestion_scheduling_job,
         trigger="interval",
