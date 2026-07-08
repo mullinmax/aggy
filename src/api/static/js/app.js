@@ -507,6 +507,15 @@ document.addEventListener('scroll', () => {
 // and loop like the reddit app; videos get controls, so their clicks must
 // reach the player instead of opening the reader.
 function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
+  // third-party players (e.g. redgifs) embed as an iframe; their clicks
+  // never bubble, so they don't open the reader
+  if (m.type === 'embed') {
+    return h('div', { class: 'aspect-video w-full' },
+      h('iframe', {
+        class: 'w-full h-full', src: m.url, loading: 'lazy',
+        allowfullscreen: true, allow: 'autoplay; fullscreen; picture-in-picture',
+      }));
+  }
   if (m.type === 'video' || (m.type === 'gif' && isVideoFile(m.url))) {
     const isGif = m.type === 'gif';
     const video = h('video', {
