@@ -18,6 +18,7 @@ KNOWN_CONFIG_VALUES = [
     "OLLAMA_USER",
     "OLLAMA_PASSWORD",
     "OLLAMA_EMBEDDING_MODEL",
+    "OLLAMA_EMBEDDING_NUM_CTX",
     "RSS_BRIDGE_HOST",
     "RSS_BRIDGE_PORT",
     "BUILD_VERSION",
@@ -32,6 +33,11 @@ DEFAULT_CONFIG = {
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
     "OLLAMA_PORT": 11434,
+    # Context window (and physical batch size) used when embedding items.
+    # Ollama defaults to 2048; items longer than that get a 500 "input too
+    # large to process" and end up with no embedding. nomic-embed-text
+    # supports up to 8192 tokens, so we raise the default to match.
+    "OLLAMA_EMBEDDING_NUM_CTX": 8192,
     "RSS_BRIDGE_PORT": 80,
     "BUILD_VERSION": "0.0.0-beta",
     "DB_PORT": 5432,

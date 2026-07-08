@@ -1,5 +1,8 @@
+from unittest.mock import MagicMock
+
 import pytest
 
+from config import config
 from db.item import ItemLoose, ItemStrict
 
 
@@ -166,3 +169,48 @@ def test_relative_img_sanitization(unique_item_strict):
 
     item = ItemLoose.read(unique_item_strict.url_hash)
     assert item.content == f'<img src="{unique_item_strict.url}example.jpg">'
+
+
+def test_embedding_prompt_truncates_to_context_window(unique_item_strict):
+    """Long items are capped by characters so they can't exceed the model's
+    token context window (which would make Ollama 500 on the embed call)."""
+    unique_item_strict.content = "x" * 100_000
+    num_ctx = 8192
+    prompt = unique_item_strict.embedding_prompt(num_ctx)
+    assert len(prompt) == num_ctx * ItemStrict._CHARS_PER_TOKEN
+
+
+def test_embedding_prompt_leaves_short_items_untouched(unique_item_strict):
+    """Items that already fit are embedded verbatim."""
+    prompt = unique_item_strict.embedding_prompt(8192)
+    assert prompt == str(unique_item_strict)
+
+
+def test_add_embedding_expands_context_and_batch(unique_item_strict, monkeypatch):
+    """add_embedding requests a context window and physical batch large enough
+    for the whole prompt, so long items don't get rejected."""
+    config.set("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    config.set("OLLAMA_EMBEDDING_NUM_CTX", 8192)
+
+    fake_client = MagicMock()
+    fake_client.embeddings.return_value = {"embedding": [0.1, 0.2, 0.3]}
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    unique_item_strict.add_embedding("nomic-embed-text")
+
+    fake_client.embeddings.assert_called_once()
+    kwargs = fake_client.embeddings.call_args.kwargs
+    assert kwargs["model"] == "nomic-embed-text"
+    assert kwargs["options"] == {"num_ctx": 8192, "num_batch": 8192}
+    assert unique_item_strict.embeddings["nomic-embed-text"] == [0.1, 0.2, 0.3]
+
+
+def test_add_embedding_skips_when_already_present(unique_item_strict, monkeypatch):
+    """An existing embedding for the model is not recomputed unless forced."""
+    fake_client = MagicMock()
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    unique_item_strict.embeddings = {"nomic-embed-text": [0.0]}
+    unique_item_strict.add_embedding("nomic-embed-text")
+
+    fake_client.embeddings.assert_not_called()

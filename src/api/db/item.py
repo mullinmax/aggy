@@ -187,9 +187,26 @@ class ItemBase(AggyBaseModel):
         ]
         return "\n".join(print_attrs)
 
+    # Conservative lower bound on characters per token. Real tokenizers
+    # average ~4 chars/token for prose, but dense content (URLs, code,
+    # markup) can be ~3, so we budget at 3 to guarantee the character-capped
+    # prompt stays under the token context window.
+    _CHARS_PER_TOKEN = 3
+
+    def embedding_prompt(self, num_ctx: int) -> str:
+        """The text embedded for this item, truncated so it fits the model's
+        context window. Ollama processes an embedding prompt in a single
+        physical batch, so anything longer than ``num_ctx`` tokens is rejected
+        with a 500 and the item ends up with no embedding at all. We cap the
+        prompt by characters (a conservative proxy for tokens) to stay safely
+        inside the window."""
+        prompt = str(self)
+        char_budget = num_ctx * self._CHARS_PER_TOKEN
+        if len(prompt) > char_budget:
+            prompt = prompt[:char_budget]
+        return prompt
+
     def add_embedding(self, model_name: str, force_refresh=False) -> None:
-        # TODO write tests for this
-        # TODO make sure the input isn't truncated by the context window (often)
         if not self.embeddings:
             self.embeddings = {}
 
@@ -200,9 +217,15 @@ class ItemBase(AggyBaseModel):
 
         # get the embedding
         ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
-        embedding = ollama.embeddings(model=ollama_embedding_model, prompt=str(self))[
-            "embedding"
-        ]
+        num_ctx = config.get_int("OLLAMA_EMBEDDING_NUM_CTX")
+        embedding = ollama.embeddings(
+            model=ollama_embedding_model,
+            prompt=self.embedding_prompt(num_ctx),
+            # num_batch must match num_ctx: an embedding prompt is processed in
+            # one batch, so a small physical batch (Ollama's 2048 default)
+            # rejects longer inputs even when the context window is large.
+            options={"num_ctx": num_ctx, "num_batch": num_ctx},
+        )["embedding"]
 
         # add the embedding to self
         self.embeddings[ollama_embedding_model] = embedding

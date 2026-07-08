@@ -61,6 +61,7 @@ services:
       - OLLAMA_HOST=aggy-ollama
       - OLLAMA_PORT=11434
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - OLLAMA_EMBEDDING_NUM_CTX=${OLLAMA_EMBEDDING_NUM_CTX:-8192}
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (generate with `openssl rand -hex 32`)}
       - SIGNUP_ENABLED=${SIGNUP_ENABLED:-true}
