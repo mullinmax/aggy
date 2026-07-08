@@ -5,7 +5,14 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import config
+from db.base import get_db_con
 from db.source_template import SourceTemplate, SourceTemplateParameter
+
+# Bridges hidden from the template catalog because Aggy ships a better
+# built-in alternative (see builtin_templates.py). RedditBridge scrapes
+# reddit's JSON API anonymously and gets rate limited from most self-hosted
+# IPs; the native reddit RSS templates work where it doesn't.
+HIDDEN_BRIDGES = ("RedditBridge",)
 
 
 def parse_parameters(form):
@@ -67,6 +74,19 @@ def rss_bridge_get_templates_job() -> None:
         logging.info("RSS_BRIDGE_HOST is not set in the config")
         return
 
+    # Drop hidden-bridge templates left over from earlier catalog imports.
+    # Existing sources keep working; only the template disappears from search.
+    try:
+        with get_db_con() as cur:
+            cur.execute(
+                "DELETE FROM source_templates WHERE bridge_short_name IN %s",
+                (HIDDEN_BRIDGES,),
+            )
+            if cur.rowcount:
+                logging.info(f"Removed {cur.rowcount} hidden bridge template(s)")
+    except Exception as e:
+        logging.error(f"Failed to remove hidden bridge templates: {e}")
+
     try:
         url = f"http://{config.get('RSS_BRIDGE_HOST')}:{config.get('RSS_BRIDGE_PORT')}/"
         response = requests.get(url)
@@ -93,6 +113,9 @@ def rss_bridge_get_templates_job() -> None:
                     description_el.text.strip() if description_el else bridge_name
                 )
                 bridge_short_name = bridge["data-short-name"]
+
+                if bridge_short_name in HIDDEN_BRIDGES:
+                    continue
 
                 for form in bridge.find_all("form", class_="bridge-form"):
                     context = None
