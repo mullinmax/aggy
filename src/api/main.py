@@ -1,3 +1,15 @@
+import os
+import threading
+
+# Guard against the musl/OpenBLAS segfault on alpine: BLAS must not spawn
+# its own worker threads (they get musl's 128KB stack and crash on big
+# matrices), and Python-created worker threads (uvicorn's threadpool,
+# APScheduler) need a roomier stack for numpy. Both must be set before
+# numpy is first imported / any thread is started.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+threading.stack_size(4 * 1024 * 1024)
+
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
