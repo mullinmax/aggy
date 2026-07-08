@@ -457,6 +457,26 @@ function openLinkButton(url, cls = 'btn btn-ghost btn-xs btn-square text-base-co
   }, '↗');
 }
 
+// Bar-chart icon that opens the per-article "why recommended?" breakdown.
+function explainButton(item) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('class', 'w-4 h-4');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('d', 'M4 20V10M10 20V4M16 20v-7M20 20H3');
+  svg.appendChild(path);
+  return h('button', {
+    class: 'btn btn-ghost btn-xs btn-square text-base-content/60',
+    title: 'Why is this recommended?',
+    onclick: (e) => { e.stopPropagation(); openExplanationModal(item); },
+  }, svg);
+}
+
 // ---------- media ----------
 
 const isVideoFile = (url) => /\.(mp4|webm)(\?|$)/i.test(url || '');
@@ -624,6 +644,7 @@ function itemCard(item) {
     h('div', { class: 'px-4 pt-3 pb-2' },
       h('div', { class: 'flex items-start gap-2' },
         h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0' }, item.item_title || 'Untitled'),
+        explainButton(item),
         openLinkButton(item.item_url)),
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
     mediaBlock,
@@ -636,6 +657,43 @@ function itemCard(item) {
         item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
         published && h('span', { class: 'whitespace-nowrap' }, published),
         predictedBadge)));
+}
+
+// ---------- why recommended ----------
+
+// A field's contribution rendered as up to two green "+" or red "−" marks,
+// or a muted dash when it had no measurable effect on the prediction.
+function contributionMarks(sign, level) {
+  if (!level || !sign) return h('span', { class: 'text-base-content/30' }, '·');
+  const symbol = sign > 0 ? '+' : '−';
+  const cls = sign > 0 ? 'text-success' : 'text-error';
+  return h('span', { class: `font-bold ${cls}` }, symbol.repeat(level));
+}
+
+function renderExplanation(data) {
+  const rows = data.fields.map((f) =>
+    h('div', { class: 'flex items-center justify-between py-1.5 border-b border-base-300 last:border-b-0' },
+      h('span', { class: 'text-sm' }, f.label),
+      h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level))));
+
+  const pct = Math.round(data.baseline_score * 100);
+  render($('explainBody'),
+    h('div', { class: 'flex flex-col' }, rows),
+    h('p', { class: 'text-xs text-base-content/50 mt-4' },
+      `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: ${MODEL_LABELS[data.model_name] || data.model_name}`));
+}
+
+async function openExplanationModal(item) {
+  showModal('explainModal');
+  render($('explainBody'), spinner());
+  try {
+    renderExplanation(await sdk.feedItemExplanation({
+      feed_name_hash: currentFeed.feed_name_hash,
+      item_url_hash: item.item_hash,
+    }));
+  } catch (err) {
+    render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+  }
 }
 
 // Animate a voted card shrinking away, then drop it from the DOM.

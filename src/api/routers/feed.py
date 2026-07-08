@@ -8,9 +8,15 @@ from route_models.feed import FeedResponse
 from route_models.source import SourceRouteModel
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
-from route_models.ranking import ModelStatsResponse, RankingStatsResponse
+from route_models.ranking import (
+    FieldContributionResponse,
+    ItemExplanationResponse,
+    ModelStatsResponse,
+    RankingStatsResponse,
+)
 from routers.auth import authenticate
 from ranking.engine import label_counts, load_model_stats, rank_feed
+from ranking.explain import explain_item
 
 feed_router = APIRouter()
 
@@ -191,6 +197,35 @@ def rerank_feed(
         neutral_votes=counts["neutral"],
         total_items=counts["total_items"],
         predicted_items=counts["predicted_items"],
+    )
+
+
+@feed_router.get(
+    "/item_explanation",
+    summary="Explain why an item got its predicted score",
+    response_model=ItemExplanationResponse,
+)
+def get_item_explanation(
+    feed_name_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> ItemExplanationResponse:
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    explanation = explain_item(feed, item_url_hash)
+    if explanation is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Not enough votes yet to explain this recommendation.",
+        )
+    return ItemExplanationResponse(
+        model_name=explanation.model_name,
+        baseline_score=explanation.baseline_score,
+        fields=[
+            FieldContributionResponse(
+                field=f.field, label=f.label, sign=f.sign, level=f.level
+            )
+            for f in explanation.fields
+        ],
     )
 
 

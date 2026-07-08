@@ -185,6 +185,58 @@ def test_rerank_and_stats(
             assert entry["item_predicted_score"] * unvoted[entry["item_url"]] > 0
 
 
+def test_item_explanation(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    items = _make_items(existing_feed, existing_source, unique_item_strict)
+    # even items up, odd down — the embedding cluster fully separates the vote
+    for i, item in enumerate(items[:4]):
+        ItemState.set_state(
+            user_hash=existing_user.name_hash,
+            feed_hash=existing_feed.name_hash,
+            item_url_hash=item.url_hash,
+            score=1 if i % 2 == 0 else -1,
+            is_read=True,
+        )
+
+    args = build_api_request_args(
+        path="/feed/item_explanation",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": items[4].url_hash,  # unvoted, even (liked) cluster
+        },
+        token=token,
+    )
+    response = client.get(**args)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model_name"]
+    fields = {f["field"]: f for f in body["fields"]}
+    assert {"content", "source", "author", "recency", "image", "media"} <= set(fields)
+    # every field reports a valid mark count and direction
+    for f in body["fields"]:
+        assert f["level"] in (0, 1, 2)
+        assert f["sign"] in (-1, 0, 1)
+        assert (f["level"] == 0) == (f["sign"] == 0)
+    # content (the embedding) drives this recommendation and pushes it up
+    assert fields["content"]["level"] >= 1
+    assert fields["content"]["sign"] == 1
+
+
+def test_item_explanation_needs_votes(
+    client, existing_user, existing_feed, existing_source, existing_item_strict, token
+):
+    args = build_api_request_args(
+        path="/feed/item_explanation",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": existing_item_strict.url_hash,
+        },
+        token=token,
+    )
+    assert client.get(**args).status_code == 409
+
+
 def test_ranking_stats_empty_feed(client, existing_user, existing_feed, token):
     args = build_api_request_args(
         path="/feed/ranking_stats",

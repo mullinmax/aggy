@@ -85,6 +85,11 @@ class AggySDK {
     return this._request("GET", "/feed/get", { query: { feed_name_hash } });
   }
 
+  /** Explain why an item got its predicted score */
+  async feedItemExplanation({ feed_name_hash, item_url_hash }) {
+    return this._request("GET", "/feed/item_explanation", { query: { feed_name_hash, item_url_hash } });
+  }
+
   /** List all items in a feed */
   async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, text_only }) {
     return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, text_only } });
