@@ -108,6 +108,59 @@ def test_post_media_image_post_hint():
     ]
 
 
+def test_post_media_reddit_video_preview_for_external_gif():
+    """redgifs/gfycat-style link posts expose an mp4 via reddit_video_preview."""
+    post = {
+        "url_overridden_by_dest": "https://www.redgifs.com/watch/valhaalaand",
+        "post_hint": "rich:video",
+        "preview": {
+            "images": [{"source": {"url": "https://preview.redd.it/img.jpg"}}],
+            "reddit_video_preview": {
+                "fallback_url": "https://v.redd.it/xyz/DASH_720.mp4",
+                "is_gif": True,
+            },
+        },
+    }
+    assert _post_media(post) == [
+        {
+            "type": "gif",
+            "url": "https://v.redd.it/xyz/DASH_720.mp4",
+            "poster": "https://preview.redd.it/img.jpg",
+        }
+    ]
+
+
+def test_post_media_reddit_video_preview_not_gif_is_video():
+    post = {
+        "url_overridden_by_dest": "https://gfycat.com/somename",
+        "preview": {
+            "reddit_video_preview": {
+                "fallback_url": "https://v.redd.it/xyz/DASH_720.mp4",
+                "is_gif": False,
+            }
+        },
+    }
+    assert _post_media(post) == [
+        {"type": "video", "url": "https://v.redd.it/xyz/DASH_720.mp4"}
+    ]
+
+
+def test_post_media_redgifs_embed_without_rendition():
+    """No mp4 rendition available: fall back to redgifs' iframe player."""
+    post = {
+        "url_overridden_by_dest": "https://www.redgifs.com/watch/valhaalaand",
+        "post_hint": "rich:video",
+        "preview": {"images": [{"source": {"url": "https://preview.redd.it/img.jpg"}}]},
+    }
+    assert _post_media(post) == [
+        {
+            "type": "embed",
+            "url": "https://www.redgifs.com/ifr/valhaalaand",
+            "poster": "https://preview.redd.it/img.jpg",
+        }
+    ]
+
+
 def test_post_media_plain_link_has_no_media():
     post = {"url_overridden_by_dest": "https://example.com/article"}
     assert _post_media(post) == []

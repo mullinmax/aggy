@@ -6,7 +6,7 @@ from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
 from ingest.item.rss import ingest_rss_item
-from ingest.item.reddit import ingest_reddit_item
+from ingest.item.reddit import ingest_reddit_item, is_reddit_post
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
@@ -64,6 +64,20 @@ def ingest_source(source: Source) -> None:
 
             # TODO check how long ago we ingested this item and re-ingest if it's been long enough
             final_item = ItemStrict.read(url_hash=temp_item.url_hash)
+            if final_item is None:
+                continue
+
+            # Items ingested before the reddit media scraper existed only
+            # have the RSS thumbnail; backfill galleries/gifs/videos from
+            # the post JSON. An empty list marks "scraped, no media" so
+            # text posts aren't re-fetched every cycle.
+            if final_item.media is None and is_reddit_post(str(final_item.url)):
+                reddit_item = ingest_reddit_item(final_item)
+                if reddit_item is not None:
+                    final_item.update(
+                        media=reddit_item.media or [],
+                        image_url=reddit_item.image_url or final_item.image_url,
+                    )
         else:
             rss_item = ingest_rss_item(entry)
             # reddit's post JSON has full-res images, gifs, videos, and

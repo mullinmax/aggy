@@ -66,10 +66,19 @@ function bindControls() {
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
-  // stop autoplaying gifs/videos when the reader closes
+  // stop gifs/videos/embeds when the reader closes: emptying the media
+  // host halts <video> playback and unloads youtube iframes
   $('readerModal').addEventListener('close', () => {
-    $('readerMedia').querySelectorAll('video').forEach((v) => v.pause());
+    render($('readerMedia'));
+    updateGifPlayback();
   });
+
+  // infinite scroll: when the load-more button scrolls near the viewport,
+  // click it automatically
+  new IntersectionObserver((entries) => {
+    const btn = $('loadMoreBtn');
+    if (entries.some((en) => en.isIntersecting) && !btn.classList.contains('hidden')) btn.click();
+  }, { rootMargin: '600px' }).observe($('loadMoreBtn'));
 }
 
 function setView(name) {
@@ -129,20 +138,22 @@ function onboardingWelcome() {
 }
 
 function feedCard(feed) {
+  // summary line: total posts, unread, average posts/day (last 30 days)
+  const stats = [];
+  if (feed.feed_item_count != null) {
+    stats.push(`${feed.feed_item_count} post${feed.feed_item_count === 1 ? '' : 's'}`);
+    if (feed.feed_unread_count != null) stats.push(`${feed.feed_unread_count} unread`);
+    if (feed.feed_posts_per_day != null) stats.push(`~${feed.feed_posts_per_day}/day`);
+  }
   return h('div', {
     class: 'card bg-base-200 shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-base-300 hover:border-primary',
     onclick: () => router.go(`feed/${feed.feed_name_hash}`),
   },
     h('div', { class: 'card-body p-5' },
-      h('div', { class: 'flex items-start justify-between' },
-        h('div', { class: 'badge badge-primary badge-outline font-bold text-lg p-3' },
-          feed.feed_name.charAt(0).toUpperCase()),
-        h('button', {
-          class: 'btn btn-ghost btn-xs hover:text-error',
-          title: 'Delete feed',
-          onclick: (e) => { e.stopPropagation(); confirmDeleteFeedCard(feed); },
-        }, '✕')),
-      h('h2', { class: 'card-title text-base mt-2' }, feed.feed_name)));
+      h('div', { class: 'badge badge-primary badge-outline font-bold text-lg p-3' },
+        feed.feed_name.charAt(0).toUpperCase()),
+      h('h2', { class: 'card-title text-base mt-2' }, feed.feed_name),
+      stats.length ? h('div', { class: 'text-xs text-base-content/50' }, stats.join(' · ')) : null));
 }
 
 async function handleCreateFeed(e) {
@@ -158,19 +169,6 @@ async function handleCreateFeed(e) {
   } catch (err) {
     toast(err.message, 'alert-error');
   }
-}
-
-function confirmDeleteFeedCard(feed) {
-  confirmDialog({
-    title: 'Delete Feed',
-    message: `Are you sure you want to delete "${feed.feed_name}"? All sources and items within it will be removed.`,
-    action: 'Delete Feed',
-    onConfirm: async () => {
-      await sdk.feedDelete({ feed_name_hash: feed.feed_name_hash });
-      toast(`Feed "${feed.feed_name}" deleted`);
-      loadFeeds();
-    },
-  });
 }
 
 function confirmDeleteFeed() {
@@ -256,7 +254,9 @@ async function toggleFilterPanel() {
   }
 }
 
-// Source checkboxes; all checked (sources: null) by default.
+// Source checkboxes; all checked (sources: null) by default. Always read
+// and re-render from feedFilters.sources so repeated toggles never work
+// against a stale snapshot of the selection.
 function renderFilterSources() {
   const selected = feedFilters.sources; // null = all
   render($('filterSources'),
@@ -268,12 +268,17 @@ function renderFilterSources() {
               checked: selected === null || selected.includes(s.source_name_hash),
               onchange: (e) => {
                 const all = feedSourceList.map((x) => x.source_name_hash);
-                let picked = selected === null ? all.slice() : feedFilters.sources.slice();
+                let picked = feedFilters.sources === null ? all.slice() : feedFilters.sources.slice();
                 if (e.target.checked) { if (!picked.includes(s.source_name_hash)) picked.push(s.source_name_hash); }
                 else picked = picked.filter((hsh) => hsh !== s.source_name_hash);
                 feedFilters.sources = picked.length === all.length ? null : picked;
+                renderFilterSources();
                 reloadItems();
               },
+            }),
+            h('span', {
+              class: 'inline-block w-2 h-2 rounded-full',
+              style: `background:${sourceColor(s.source_name, s.source_color)}`,
             }),
             h('span', { class: 'label-text text-xs' }, s.source_name)))
       : h('span', { class: 'text-xs text-base-content/40' }, 'No sources in this feed'));
@@ -354,9 +359,14 @@ async function handleRerank() {
 }
 
 // ---------- items ----------
+let itemsRequestSeq = 0; // discards out-of-order responses
+
 async function loadFeedItems() {
+  const seq = ++itemsRequestSeq;
   const list = $('itemList');
   if (itemSkip === 0) render(list, spinner());
+  // hide while loading so the infinite-scroll observer can't double-fire
+  $('loadMoreBtn').classList.add('hidden');
 
   try {
     const items = await sdk.feedItems({
@@ -368,6 +378,7 @@ async function loadFeedItems() {
       sources: feedFilters.sources === null ? null : feedFilters.sources.join(','),
       text_only: feedFilters.textOnly === '' ? null : feedFilters.textOnly,
     });
+    if (seq !== itemsRequestSeq) return; // a newer request superseded this one
     if (itemSkip === 0) render(list);
 
     if (!items.length && itemSkip === 0) {
@@ -381,6 +392,7 @@ async function loadFeedItems() {
     items.forEach((item) => list.append(itemCard(item)));
     $('loadMoreBtn').classList.toggle('hidden', items.length < PAGE_SIZE);
   } catch (err) {
+    if (seq !== itemsRequestSeq) return;
     if (itemSkip === 0) render(list, h('div', { class: 'text-center py-16 text-base-content/50' }, 'Failed to load articles'));
     toast(err.message, 'alert-error');
   }
@@ -411,23 +423,126 @@ function cleanExcerpt(item) {
   return text;
 }
 
+// ---------- source colors ----------
+
+// Mirrors SOURCE_COLORS in db/source.py: sources created before colors
+// existed get a deterministic fallback from the same palette.
+const SOURCE_COLOR_PALETTE = [
+  '#ef5350', '#ec407a', '#ab47bc', '#7e57c2', '#5c6bc0', '#42a5f5', '#26c6da',
+  '#26a69a', '#66bb6a', '#9ccc65', '#d4b106', '#ffa726', '#ff7043', '#8d6e63',
+];
+
+function sourceColor(name, stored) {
+  if (stored) return stored;
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return SOURCE_COLOR_PALETTE[hash % SOURCE_COLOR_PALETTE.length];
+}
+
+function sourceBadge(name, storedColor) {
+  if (!name) return null;
+  const color = sourceColor(name, storedColor);
+  return h('span', {
+    class: 'badge badge-outline badge-xs',
+    style: `border-color:${color};color:${color}`,
+  }, name);
+}
+
+// Square "open original" button with an arrow, shown next to titles.
+function openLinkButton(url, cls = 'btn btn-ghost btn-xs btn-square text-base-content/60') {
+  if (!url) return null;
+  return h('a', {
+    class: cls, href: url, target: '_blank', rel: 'noopener', title: 'Open original',
+    onclick: (e) => e.stopPropagation(),
+  }, '↗');
+}
+
 // ---------- media ----------
 
 const isVideoFile = (url) => /\.(mp4|webm)(\?|$)/i.test(url || '');
 
-// Pause autoplaying gifs while they're offscreen so a feed full of them
-// doesn't churn bandwidth and CPU.
-const gifVisibility = new IntersectionObserver((entries) => {
-  entries.forEach(({ target, isIntersecting }) => {
-    if (isIntersecting) target.play().catch(() => {});
-    else target.pause();
+// Video id for youtube watch/short/embed/youtu.be links, else null.
+function youtubeId(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\.|^m\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      if (u.pathname === '/watch') return u.searchParams.get('v');
+      const m = u.pathname.match(/^\/(?:embed|shorts|live|v)\/([\w-]{6,})/);
+      if (m) return m[1];
+    }
+  } catch { /* not a URL */ }
+  return null;
+}
+
+function youtubeEmbed(id) {
+  return h('div', { class: 'aspect-video w-full' },
+    h('iframe', {
+      class: 'w-full h-full', src: `https://www.youtube-nocookie.com/embed/${id}`,
+      title: 'YouTube video player', loading: 'lazy', allowfullscreen: true,
+      allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture',
+    }));
+}
+
+// Gif playback policy: pause everything offscreen, and of the gifs on
+// screen play only the topmost fully-visible one, so a feed full of gifs
+// doesn't churn bandwidth and CPU or fight for attention.
+const gifRatios = new Map(); // gif <video> -> latest intersection ratio
+
+function updateGifPlayback() {
+  // gifs in an open reader modal take priority over the feed behind it
+  const readerOpen = Array.from(gifRatios.keys())
+    .some((v) => v.isConnected && v.closest('dialog[open]'));
+  let playing = null;
+  for (const [video, ratio] of gifRatios) {
+    if (!video.isConnected) { gifRatios.delete(video); continue; }
+    if (readerOpen && !video.closest('dialog[open]')) continue;
+    if (ratio < 0.98) continue; // fully visible only
+    const top = video.getBoundingClientRect().top;
+    if (!playing || top < playing.top) playing = { video, top };
+  }
+  // nothing fully visible (e.g. mid-scroll between gifs): fall back to the
+  // most-visible one so playback doesn't stall
+  if (!playing) {
+    for (const [video, ratio] of gifRatios) {
+      if (readerOpen && !video.closest('dialog[open]')) continue;
+      if (ratio > 0.5 && (!playing || ratio > playing.ratio)) playing = { video, ratio };
+    }
+  }
+  gifRatios.forEach((_, video) => {
+    if (playing && video === playing.video) video.play().catch(() => {});
+    else video.pause();
   });
-}, { rootMargin: '200px' });
+}
+
+const gifVisibility = new IntersectionObserver((entries) => {
+  entries.forEach((en) => gifRatios.set(en.target, en.intersectionRatio));
+  updateGifPlayback();
+}, { threshold: [0, 0.25, 0.5, 0.75, 0.98, 1] });
+
+// Which gif is "topmost" can change while scrolling without crossing an
+// intersection threshold; re-evaluate on scroll (rAF-throttled).
+let gifScrollTick = false;
+document.addEventListener('scroll', () => {
+  if (gifScrollTick || !gifRatios.size) return;
+  gifScrollTick = true;
+  requestAnimationFrame(() => { gifScrollTick = false; updateGifPlayback(); });
+}, { passive: true, capture: true });
 
 // One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
 // and loop like the reddit app; videos get controls, so their clicks must
 // reach the player instead of opening the reader.
 function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
+  // third-party players (e.g. redgifs) embed as an iframe; their clicks
+  // never bubble, so they don't open the reader
+  if (m.type === 'embed') {
+    return h('div', { class: 'aspect-video w-full' },
+      h('iframe', {
+        class: 'w-full h-full', src: m.url, loading: 'lazy',
+        allowfullscreen: true, allow: 'autoplay; fullscreen; picture-in-picture',
+      }));
+  }
   if (m.type === 'video' || (m.type === 'gif' && isVideoFile(m.url))) {
     const isGif = m.type === 'gif';
     const video = h('video', {
@@ -467,11 +582,14 @@ function mediaGallery(mediaList) {
 // below, then the vote row.
 function itemCard(item) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
-  const media = (item.item_media || []).length ? item.item_media : null;
-  const imageUrl = media ? null : (item.item_image_url || parseItemContent(item).imageUrl);
+  const ytId = youtubeId(item.item_url);
+  const media = !ytId && (item.item_media || []).length ? item.item_media : null;
+  const imageUrl = ytId || media ? null : (item.item_image_url || parseItemContent(item).imageUrl);
   const excerpt = cleanExcerpt(item);
 
-  const mediaBlock = media
+  const mediaBlock = ytId
+    ? h('figure', { class: 'bg-base-300' }, youtubeEmbed(ytId))
+    : media
     ? h('figure', { class: 'bg-base-300' }, mediaGallery(media))
     : imageUrl
       ? h('figure', { class: 'bg-base-300' },
@@ -484,7 +602,7 @@ function itemCard(item) {
   const voteClass = (score) => (score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
   const voteButton = (label, score, title) =>
     h('button', {
-      class: `btn btn-ghost btn-xs${item.item_user_score === score ? ` ${voteClass(score)}` : ''}`,
+      class: `btn btn-ghost btn-sm px-4${item.item_user_score === score ? ` ${voteClass(score)}` : ''}`,
       'data-score': String(score),
       title,
       onclick: (e) => { e.stopPropagation(); voteItem(item, score, e.currentTarget); },
@@ -494,7 +612,7 @@ function itemCard(item) {
   const predicted = item.item_predicted_score;
   const predictedBadge = predicted != null
     ? h('span', {
-        class: 'badge badge-ghost badge-xs ml-auto text-base-content/50',
+        class: 'badge badge-ghost badge-xs text-base-content/50',
         title: `Predicted vote ${predicted.toFixed(2)} · confidence ${((item.item_predicted_confidence ?? 0) * 100).toFixed(0)}%`,
       }, `${predicted > 0 ? '+' : ''}${(predicted * 100).toFixed(0)}% match`)
     : null;
@@ -504,18 +622,33 @@ function itemCard(item) {
     onclick: () => openReader(item),
   },
     h('div', { class: 'px-4 pt-3 pb-2' },
-      h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-base-content/50 mb-1' },
-        item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
-        item.item_author && h('span', {}, item.item_author),
-        published && h('span', {}, published)),
-      h('h3', { class: 'font-semibold leading-snug' }, item.item_title || 'Untitled'),
+      h('div', { class: 'flex items-start gap-2' },
+        h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0' }, item.item_title || 'Untitled'),
+        openLinkButton(item.item_url)),
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
     mediaBlock,
-    h('div', { class: 'flex items-center px-2 py-1' },
+    h('div', { class: 'flex items-center gap-1 px-2 py-1.5' },
       voteButton('▲', 1, 'Upvote'),
       voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
       voteButton('▼', -1, 'Downvote'),
-      predictedBadge));
+      h('div', { class: 'flex flex-wrap items-center justify-end gap-2 text-xs text-base-content/50 ml-auto min-w-0 pr-2' },
+        sourceBadge(item.item_source_name, item.item_source_color),
+        item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
+        published && h('span', { class: 'whitespace-nowrap' }, published),
+        predictedBadge)));
+}
+
+// Animate a voted card shrinking away, then drop it from the DOM.
+function collapseCard(card) {
+  card.style.height = `${card.offsetHeight}px`;
+  card.style.overflow = 'hidden';
+  requestAnimationFrame(() => {
+    card.style.transition = 'height 0.3s ease, opacity 0.3s ease';
+    card.style.height = '0px';
+    card.style.opacity = '0';
+    card.style.pointerEvents = 'none';
+  });
+  setTimeout(() => card.remove(), 320);
 }
 
 async function voteItem(item, score, btn) {
@@ -530,6 +663,11 @@ async function voteItem(item, score, btn) {
     btn.parentElement.querySelectorAll('button').forEach((b) =>
       b.classList.remove('text-success', 'text-error', 'text-warning'));
     btn.classList.add(score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
+    // voted items leave the feed unless the user opted to keep them visible
+    if (!feedFilters.includeRead) {
+      const card = btn.closest('.card');
+      if (card) collapseCard(card);
+    }
   } catch (err) {
     toast(err.message, 'alert-error');
   }
@@ -562,25 +700,29 @@ function openReader(item) {
   $('readerTitle').textContent = item.item_title || 'Untitled';
   const parsed = parseItemContent(item);
 
-  let host = item.item_domain || '';
-  try { host = new URL(item.item_url).hostname.replace(/^www\./, ''); } catch { /* keep fallback */ }
+  $('readerOpenLink').href = item.item_url;
 
   render($('readerMeta'),
-    item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
+    sourceBadge(item.item_source_name, item.item_source_color),
     item.item_author && h('span', {}, `by ${item.item_author}`),
     item.item_date_published && h('span', {}, timeAgo(item.item_date_published)),
-    h('a', { href: item.item_url, target: '_blank', rel: 'noopener', class: 'link link-primary ml-auto' },
-      host ? `Open on ${host} ↗` : 'Open original ↗'));
+    item.item_domain && h('span', { class: 'ml-auto' }, item.item_domain));
 
-  // Ingested media (gifs, videos, galleries) takes the hero slot. Otherwise
-  // non-reddit articles keep their images inline in the content and only
-  // reddit-style posts promote a content image to the hero.
-  const media = item.item_media || [];
-  const heroUrl = media.length
+  // YouTube links embed the actual player; ingested media (gifs, videos,
+  // galleries) takes the hero slot. Otherwise non-reddit articles keep
+  // their images inline in the content and only reddit-style posts promote
+  // a content image to the hero.
+  const ytId = youtubeId(item.item_url);
+  const media = ytId ? [] : item.item_media || [];
+  const heroUrl = ytId || media.length
     ? null
     : item.item_image_url || (parsed.isReddit ? parsed.imageUrl : null);
   const mediaHost = $('readerMedia');
-  if (media.length) {
+  if (ytId) {
+    render(mediaHost, youtubeEmbed(ytId));
+    // the content's thumbnails would just duplicate the player
+    parsed.root.querySelectorAll('img').forEach((img) => (img.closest('a') || img).remove());
+  } else if (media.length) {
     render(mediaHost, mediaGallery(media));
   } else if (heroUrl) {
     render(mediaHost, h('img', {
@@ -650,7 +792,12 @@ function sourceRow(source) {
   const interval = intervalLabel(source.source_ingest_interval_minutes);
   return h('div', { class: 'flex items-center justify-between gap-3 p-3 bg-base-200 border border-base-300 rounded-lg mb-2' },
     h('div', { class: 'min-w-0' },
-      h('div', { class: 'font-medium text-sm' }, source.source_name),
+      h('div', { class: 'font-medium text-sm flex items-center gap-2' },
+        h('span', {
+          class: 'inline-block w-2.5 h-2.5 rounded-full flex-shrink-0',
+          style: `background:${sourceColor(source.source_name, source.source_color)}`,
+        }),
+        source.source_name),
       h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url),
       h('div', { class: 'text-xs text-base-content/60 mt-1' },
         `${count} article${count === 1 ? '' : 's'} · ${checked}${interval ? ` · checks ${interval}` : ''}`),
@@ -672,6 +819,7 @@ async function openEditSourceModal(source) {
   editingTemplate = null;
   $('editSourceTitle').textContent = `Edit ${source.source_name}`;
   $('editSourceName').value = source.source_name;
+  $('editSourceColor').value = sourceColor(source.source_name, source.source_color);
 
   // custom intervals (set via the API) get their own option so they survive
   // a save that doesn't touch the frequency
@@ -721,6 +869,7 @@ async function handleUpdateSource() {
     feed_name_hash: currentFeed.feed_name_hash,
     source_name_hash: editingSource.source_name_hash,
     source_name: name,
+    source_color: $('editSourceColor').value,
     // null resets the source to the server default frequency
     ingest_interval_minutes: intervalValue ? Number(intervalValue) : null,
   };

@@ -24,6 +24,9 @@ _REDDIT_POST_RE = re.compile(
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 _VIDEO_EXTENSIONS = (".mp4", ".webm")
 
+# redgifs watch page, e.g. https://www.redgifs.com/watch/valhaalaand
+_REDGIFS_RE = re.compile(r"^https?://(?:www\.)?redgifs\.com/watch/(\w+)", re.I)
+
 
 def is_reddit_post(url: Optional[str]) -> bool:
     return bool(url and _REDDIT_POST_RE.match(str(url)))
@@ -89,8 +92,30 @@ def _post_media(post: dict) -> List[dict]:
             )
         ]
 
+    # gifs hosted off-site (redgifs, gfycat, imgur pages): reddit renders an
+    # mp4 rendition under preview.reddit_video_preview
+    video_preview = (post.get("preview") or {}).get("reddit_video_preview")
+    if video_preview and video_preview.get("fallback_url"):
+        media_type = "gif" if video_preview.get("is_gif") else "video"
+        return [
+            _media_entry(
+                media_type, video_preview["fallback_url"], _preview_image(post)
+            )
+        ]
+
     target = post.get("url_overridden_by_dest") or post.get("url") or ""
     path = target.split("?")[0].lower()
+
+    # no rendition available: embed redgifs' own player
+    redgifs = _REDGIFS_RE.match(target)
+    if redgifs:
+        return [
+            _media_entry(
+                "embed",
+                f"https://www.redgifs.com/ifr/{redgifs.group(1)}",
+                _preview_image(post),
+            )
+        ]
 
     if path.endswith(".gifv"):
         # imgur gifv pages wrap an mp4 of the same name
@@ -146,6 +171,8 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         url=item.url,
         title=post.get("title"),
         author=f"u/{post['author']}" if post.get("author") else None,
-        media=media or None,
+        # an empty list still means "post scraped, no media found", which
+        # stops re-scrape attempts on later ingest cycles
+        media=media,
         image_url=image_url,
     )

@@ -124,10 +124,13 @@
 <dialog class="modal" id="readerModal">
   <div class="modal-box max-w-3xl max-h-[90vh]">
     <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
-    <h2 class="text-xl font-bold pr-8 mb-2" id="readerTitle"></h2>
-    <div class="flex flex-wrap gap-3 text-xs text-base-content/50 mb-4 pb-3 border-b border-base-300" id="readerMeta"></div>
+    <div class="flex items-start gap-2 pr-8 mb-4">
+      <h2 class="text-xl font-bold flex-1 min-w-0" id="readerTitle"></h2>
+      <a class="btn btn-ghost btn-sm btn-square text-base-content/60" id="readerOpenLink" target="_blank" rel="noopener" title="Open original">↗</a>
+    </div>
     <div id="readerMedia" class="mb-4 empty:hidden"></div>
     <div class="prose prose-sm max-w-none" id="readerContent"></div>
+    <div class="flex flex-wrap items-center gap-3 text-xs text-base-content/50 mt-4 pt-3 border-t border-base-300" id="readerMeta"></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
@@ -223,6 +226,10 @@
     <div class="form-control mb-3">
       <label class="label" for="editSourceName"><span class="label-text">Source Name</span></label>
       <input type="text" class="input input-bordered w-full" id="editSourceName" required>
+    </div>
+    <div class="form-control mb-3">
+      <label class="label" for="editSourceColor"><span class="label-text">Color</span></label>
+      <input type="color" class="w-16 h-10 p-1 rounded-lg border border-base-300 bg-base-100 cursor-pointer" id="editSourceColor" title="Badge color for this source">
     </div>
     <div class="form-control mb-3">
       <label class="label" for="editSourceInterval"><span class="label-text">Check for new posts</span></label>
