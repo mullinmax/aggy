@@ -138,20 +138,22 @@ function onboardingWelcome() {
 }
 
 function feedCard(feed) {
+  // summary line: total posts, unread, average posts/day (last 30 days)
+  const stats = [];
+  if (feed.feed_item_count != null) {
+    stats.push(`${feed.feed_item_count} post${feed.feed_item_count === 1 ? '' : 's'}`);
+    if (feed.feed_unread_count != null) stats.push(`${feed.feed_unread_count} unread`);
+    if (feed.feed_posts_per_day != null) stats.push(`~${feed.feed_posts_per_day}/day`);
+  }
   return h('div', {
     class: 'card bg-base-200 shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-base-300 hover:border-primary',
     onclick: () => router.go(`feed/${feed.feed_name_hash}`),
   },
     h('div', { class: 'card-body p-5' },
-      h('div', { class: 'flex items-start justify-between' },
-        h('div', { class: 'badge badge-primary badge-outline font-bold text-lg p-3' },
-          feed.feed_name.charAt(0).toUpperCase()),
-        h('button', {
-          class: 'btn btn-ghost btn-xs hover:text-error',
-          title: 'Delete feed',
-          onclick: (e) => { e.stopPropagation(); confirmDeleteFeedCard(feed); },
-        }, '✕')),
-      h('h2', { class: 'card-title text-base mt-2' }, feed.feed_name)));
+      h('div', { class: 'badge badge-primary badge-outline font-bold text-lg p-3' },
+        feed.feed_name.charAt(0).toUpperCase()),
+      h('h2', { class: 'card-title text-base mt-2' }, feed.feed_name),
+      stats.length ? h('div', { class: 'text-xs text-base-content/50' }, stats.join(' · ')) : null));
 }
 
 async function handleCreateFeed(e) {
@@ -167,19 +169,6 @@ async function handleCreateFeed(e) {
   } catch (err) {
     toast(err.message, 'alert-error');
   }
-}
-
-function confirmDeleteFeedCard(feed) {
-  confirmDialog({
-    title: 'Delete Feed',
-    message: `Are you sure you want to delete "${feed.feed_name}"? All sources and items within it will be removed.`,
-    action: 'Delete Feed',
-    onConfirm: async () => {
-      await sdk.feedDelete({ feed_name_hash: feed.feed_name_hash });
-      toast(`Feed "${feed.feed_name}" deleted`);
-      loadFeeds();
-    },
-  });
 }
 
 function confirmDeleteFeed() {
@@ -286,6 +275,10 @@ function renderFilterSources() {
                 renderFilterSources();
                 reloadItems();
               },
+            }),
+            h('span', {
+              class: 'inline-block w-2 h-2 rounded-full',
+              style: `background:${sourceColor(s.source_name, s.source_color)}`,
             }),
             h('span', { class: 'label-text text-xs' }, s.source_name)))
       : h('span', { class: 'text-xs text-base-content/40' }, 'No sources in this feed'));
@@ -428,6 +421,40 @@ function cleanExcerpt(item) {
   text = text.replace(/submitted by\s+\/u\/\S+.*$/i, '').trim();
   if (/^submitted by\b/i.test(text)) return '';
   return text;
+}
+
+// ---------- source colors ----------
+
+// Mirrors SOURCE_COLORS in db/source.py: sources created before colors
+// existed get a deterministic fallback from the same palette.
+const SOURCE_COLOR_PALETTE = [
+  '#ef5350', '#ec407a', '#ab47bc', '#7e57c2', '#5c6bc0', '#42a5f5', '#26c6da',
+  '#26a69a', '#66bb6a', '#9ccc65', '#d4b106', '#ffa726', '#ff7043', '#8d6e63',
+];
+
+function sourceColor(name, stored) {
+  if (stored) return stored;
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return SOURCE_COLOR_PALETTE[hash % SOURCE_COLOR_PALETTE.length];
+}
+
+function sourceBadge(name, storedColor) {
+  if (!name) return null;
+  const color = sourceColor(name, storedColor);
+  return h('span', {
+    class: 'badge badge-outline badge-xs',
+    style: `border-color:${color};color:${color}`,
+  }, name);
+}
+
+// Square "open original" button with an arrow, shown next to titles.
+function openLinkButton(url, cls = 'btn btn-ghost btn-xs btn-square text-base-content/60') {
+  if (!url) return null;
+  return h('a', {
+    class: cls, href: url, target: '_blank', rel: 'noopener', title: 'Open original',
+    onclick: (e) => e.stopPropagation(),
+  }, '↗');
 }
 
 // ---------- media ----------
@@ -575,7 +602,7 @@ function itemCard(item) {
   const voteClass = (score) => (score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
   const voteButton = (label, score, title) =>
     h('button', {
-      class: `btn btn-ghost btn-xs${item.item_user_score === score ? ` ${voteClass(score)}` : ''}`,
+      class: `btn btn-ghost btn-sm px-4${item.item_user_score === score ? ` ${voteClass(score)}` : ''}`,
       'data-score': String(score),
       title,
       onclick: (e) => { e.stopPropagation(); voteItem(item, score, e.currentTarget); },
@@ -585,7 +612,7 @@ function itemCard(item) {
   const predicted = item.item_predicted_score;
   const predictedBadge = predicted != null
     ? h('span', {
-        class: 'badge badge-ghost badge-xs ml-auto text-base-content/50',
+        class: 'badge badge-ghost badge-xs text-base-content/50',
         title: `Predicted vote ${predicted.toFixed(2)} · confidence ${((item.item_predicted_confidence ?? 0) * 100).toFixed(0)}%`,
       }, `${predicted > 0 ? '+' : ''}${(predicted * 100).toFixed(0)}% match`)
     : null;
@@ -595,18 +622,33 @@ function itemCard(item) {
     onclick: () => openReader(item),
   },
     h('div', { class: 'px-4 pt-3 pb-2' },
-      h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-base-content/50 mb-1' },
-        item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
-        item.item_author && h('span', {}, item.item_author),
-        published && h('span', {}, published)),
-      h('h3', { class: 'font-semibold leading-snug' }, item.item_title || 'Untitled'),
+      h('div', { class: 'flex items-start gap-2' },
+        h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0' }, item.item_title || 'Untitled'),
+        openLinkButton(item.item_url)),
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
     mediaBlock,
-    h('div', { class: 'flex items-center px-2 py-1' },
+    h('div', { class: 'flex items-center gap-1 px-2 py-1.5' },
       voteButton('▲', 1, 'Upvote'),
       voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
       voteButton('▼', -1, 'Downvote'),
-      predictedBadge));
+      h('div', { class: 'flex flex-wrap items-center justify-end gap-2 text-xs text-base-content/50 ml-auto min-w-0 pr-2' },
+        sourceBadge(item.item_source_name, item.item_source_color),
+        item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
+        published && h('span', { class: 'whitespace-nowrap' }, published),
+        predictedBadge)));
+}
+
+// Animate a voted card shrinking away, then drop it from the DOM.
+function collapseCard(card) {
+  card.style.height = `${card.offsetHeight}px`;
+  card.style.overflow = 'hidden';
+  requestAnimationFrame(() => {
+    card.style.transition = 'height 0.3s ease, opacity 0.3s ease';
+    card.style.height = '0px';
+    card.style.opacity = '0';
+    card.style.pointerEvents = 'none';
+  });
+  setTimeout(() => card.remove(), 320);
 }
 
 async function voteItem(item, score, btn) {
@@ -621,6 +663,11 @@ async function voteItem(item, score, btn) {
     btn.parentElement.querySelectorAll('button').forEach((b) =>
       b.classList.remove('text-success', 'text-error', 'text-warning'));
     btn.classList.add(score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
+    // voted items leave the feed unless the user opted to keep them visible
+    if (!feedFilters.includeRead) {
+      const card = btn.closest('.card');
+      if (card) collapseCard(card);
+    }
   } catch (err) {
     toast(err.message, 'alert-error');
   }
@@ -653,15 +700,13 @@ function openReader(item) {
   $('readerTitle').textContent = item.item_title || 'Untitled';
   const parsed = parseItemContent(item);
 
-  let host = item.item_domain || '';
-  try { host = new URL(item.item_url).hostname.replace(/^www\./, ''); } catch { /* keep fallback */ }
+  $('readerOpenLink').href = item.item_url;
 
   render($('readerMeta'),
-    item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
+    sourceBadge(item.item_source_name, item.item_source_color),
     item.item_author && h('span', {}, `by ${item.item_author}`),
     item.item_date_published && h('span', {}, timeAgo(item.item_date_published)),
-    h('a', { href: item.item_url, target: '_blank', rel: 'noopener', class: 'link link-primary ml-auto' },
-      host ? `Open on ${host} ↗` : 'Open original ↗'));
+    item.item_domain && h('span', { class: 'ml-auto' }, item.item_domain));
 
   // YouTube links embed the actual player; ingested media (gifs, videos,
   // galleries) takes the hero slot. Otherwise non-reddit articles keep
@@ -747,7 +792,12 @@ function sourceRow(source) {
   const interval = intervalLabel(source.source_ingest_interval_minutes);
   return h('div', { class: 'flex items-center justify-between gap-3 p-3 bg-base-200 border border-base-300 rounded-lg mb-2' },
     h('div', { class: 'min-w-0' },
-      h('div', { class: 'font-medium text-sm' }, source.source_name),
+      h('div', { class: 'font-medium text-sm flex items-center gap-2' },
+        h('span', {
+          class: 'inline-block w-2.5 h-2.5 rounded-full flex-shrink-0',
+          style: `background:${sourceColor(source.source_name, source.source_color)}`,
+        }),
+        source.source_name),
       h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url),
       h('div', { class: 'text-xs text-base-content/60 mt-1' },
         `${count} article${count === 1 ? '' : 's'} · ${checked}${interval ? ` · checks ${interval}` : ''}`),
@@ -769,6 +819,7 @@ async function openEditSourceModal(source) {
   editingTemplate = null;
   $('editSourceTitle').textContent = `Edit ${source.source_name}`;
   $('editSourceName').value = source.source_name;
+  $('editSourceColor').value = sourceColor(source.source_name, source.source_color);
 
   // custom intervals (set via the API) get their own option so they survive
   // a save that doesn't touch the frequency
@@ -818,6 +869,7 @@ async function handleUpdateSource() {
     feed_name_hash: currentFeed.feed_name_hash,
     source_name_hash: editingSource.source_name_hash,
     source_name: name,
+    source_color: $('editSourceColor').value,
     // null resets the source to the server default frequency
     ingest_interval_minutes: intervalValue ? Number(intervalValue) : null,
   };

@@ -1,4 +1,5 @@
 import json
+import random
 from typing import Dict, Optional
 
 from pydantic import StringConstraints, HttpUrl
@@ -10,6 +11,25 @@ from .item_collection import ItemCollection
 # Sentinel for update(): distinguishes "leave unchanged" from an explicit
 # None ("reset to the server default").
 _UNSET = object()
+
+# Default palette for per-source colors: distinct mid-tone hues that read
+# well as badge accents on both light and dark surfaces.
+SOURCE_COLORS = [
+    "#ef5350",  # red
+    "#ec407a",  # pink
+    "#ab47bc",  # purple
+    "#7e57c2",  # deep purple
+    "#5c6bc0",  # indigo
+    "#42a5f5",  # blue
+    "#26c6da",  # cyan
+    "#26a69a",  # teal
+    "#66bb6a",  # green
+    "#9ccc65",  # light green
+    "#d4b106",  # gold
+    "#ffa726",  # orange
+    "#ff7043",  # deep orange
+    "#8d6e63",  # brown
+]
 
 
 class Source(ItemCollection):
@@ -24,6 +44,8 @@ class Source(ItemCollection):
     # How often to check this source, in minutes. None uses the server-wide
     # SOURCE_READ_INTERVAL_MINUTES default.
     ingest_interval_minutes: Optional[int] = None
+    # Display color (hex). Assigned randomly at creation, editable later.
+    color: Optional[str] = None
 
     @property
     def name_hash(self):
@@ -66,12 +88,15 @@ class Source(ItemCollection):
         if self.exists():
             raise Exception(f"Cannot create duplicate source {self.key}")
 
+        if self.color is None:
+            self.color = random.choice(SOURCE_COLORS)
+
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO sources (user_hash, feed_hash, name_hash, name, url, "
                 "template_name_hash, template_parameters, ingest_interval_minutes, "
-                "next_ingest_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                "color, next_ingest_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 (
                     self.user_hash,
                     self.feed_hash,
@@ -83,11 +108,17 @@ class Source(ItemCollection):
                     if self.template_parameters is not None
                     else None,
                     self.ingest_interval_minutes,
+                    self.color,
                 ),
             )
 
     def update(
-        self, name: str, url: str, template_parameters=None, ingest_interval=_UNSET
+        self,
+        name: str,
+        url: str,
+        template_parameters=None,
+        ingest_interval=_UNSET,
+        color=_UNSET,
     ):
         """Update this source in place. Renaming changes name_hash; the
         source_items FK cascades so existing items stay attached. Resets
@@ -102,6 +133,9 @@ class Source(ItemCollection):
         if ingest_interval is not _UNSET:
             interval_sql = "ingest_interval_minutes = %s, "
             interval_params = (ingest_interval,)
+        if color is not _UNSET and color is not None:
+            interval_sql += "color = %s, "
+            interval_params = interval_params + (color,)
         with self.db_con() as cur:
             cur.execute(
                 "UPDATE sources SET name = %s, name_hash = %s, url = %s, "
@@ -130,6 +164,8 @@ class Source(ItemCollection):
             self.template_parameters = template_parameters
         if ingest_interval is not _UNSET:
             self.ingest_interval_minutes = ingest_interval
+        if color is not _UNSET and color is not None:
+            self.color = color
 
     def delete(self):
         with self.db_con() as cur:
@@ -196,7 +232,7 @@ class Source(ItemCollection):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, url, template_name_hash, template_parameters, "
-                "ingest_interval_minutes "
+                "ingest_interval_minutes, color "
                 "FROM sources "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (user_hash, feed_hash, source_hash),
@@ -212,6 +248,7 @@ class Source(ItemCollection):
                 template_name_hash=row["template_name_hash"],
                 template_parameters=row["template_parameters"],
                 ingest_interval_minutes=row["ingest_interval_minutes"],
+                color=row["color"],
             )
         raise ValueError("Source not found")
 

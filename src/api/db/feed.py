@@ -67,7 +67,8 @@ class Feed(ItemCollection):
 
         with self.db_con() as cur:
             cur.execute(
-                "SELECT user_hash, feed_hash, name_hash, name, url FROM sources "
+                "SELECT user_hash, feed_hash, name_hash, name, url, color "
+                "FROM sources "
                 "WHERE user_hash = %s AND feed_hash = %s",
                 (self.user_hash, self.name_hash),
             )
@@ -79,6 +80,7 @@ class Feed(ItemCollection):
                 feed_hash=row["feed_hash"],
                 name=row["name"],
                 url=row["url"],
+                color=row["color"],
             )
             for row in rows
         ]
@@ -89,7 +91,7 @@ class Feed(ItemCollection):
             cur.execute(
                 "SELECT s.name, s.url, s.name_hash, s.feed_hash, s.last_ingested_at, "
                 "s.last_ingest_error, s.template_name_hash, s.template_parameters, "
-                "s.ingest_interval_minutes, "
+                "s.ingest_interval_minutes, s.color, "
                 "(SELECT COUNT(*) FROM source_items si "
                 " WHERE si.user_hash = s.user_hash AND si.feed_hash = s.feed_hash "
                 " AND si.source_hash = s.name_hash) AS item_count "
@@ -134,7 +136,7 @@ class Feed(ItemCollection):
             "SELECT i.*, c.score, c.added_at, "
             "c.predicted_score, c.predicted_confidence, "
             "st.score AS user_score, st.is_read AS is_read, "
-            "src.name AS source_name, "
+            "src.name AS source_name, src.color AS source_color, "
             "ROW_NUMBER() OVER (PARTITION BY src.name_hash "
             f"ORDER BY {order_by}) AS source_rank "
             "FROM items i "
@@ -143,7 +145,7 @@ class Feed(ItemCollection):
             " AND st.feed_hash = c.feed_hash"
             " AND st.item_url_hash = c.item_url_hash "
             "LEFT JOIN LATERAL ("
-            " SELECT s.name, s.name_hash FROM source_items si"
+            " SELECT s.name, s.name_hash, s.color FROM source_items si"
             " JOIN sources s ON s.user_hash = si.user_hash"
             "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
             " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
@@ -197,6 +199,7 @@ class Feed(ItemCollection):
             row.pop("source_rank", None)
             meta = {
                 "source_name": row.pop("source_name", None),
+                "source_color": row.pop("source_color", None),
                 "user_score": row.pop("user_score", None),
                 "is_read": row.pop("is_read", None),
                 "predicted_score": row.pop("predicted_score", None),
@@ -204,6 +207,40 @@ class Feed(ItemCollection):
             }
             results.append((ItemStrict.from_row(row), meta))
         return results
+
+    def stats(self) -> dict:
+        """Dashboard summary numbers: total items, unvoted items, and the
+        average posts per day over the last 30 days (or since the first
+        item arrived, whichever window is shorter)."""
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS total, "
+                "COUNT(*) FILTER (WHERE st.score IS NULL) AS unread, "
+                "COUNT(*) FILTER "
+                " (WHERE c.added_at >= NOW() - INTERVAL '30 days') AS recent, "
+                "MIN(c.added_at) AS first_added_at "
+                "FROM feed_items c "
+                "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+                " AND st.feed_hash = c.feed_hash"
+                " AND st.item_url_hash = c.item_url_hash "
+                "WHERE c.user_hash = %s AND c.feed_hash = %s",
+                (self.user_hash, self.name_hash),
+            )
+            row = cur.fetchone()
+            cur.execute("SELECT NOW() AS now")
+            now = cur.fetchone()["now"]
+
+        days = 30.0
+        if row["first_added_at"] is not None:
+            age_days = (now - row["first_added_at"]).total_seconds() / 86400
+            days = max(1.0, min(30.0, age_days))
+        posts_per_day = (row["recent"] or 0) / days
+
+        return {
+            "feed_item_count": row["total"] or 0,
+            "feed_unread_count": row["unread"] or 0,
+            "feed_posts_per_day": round(posts_per_day, 1),
+        }
 
     def exists(self) -> bool:
         with self.db_con() as cur:

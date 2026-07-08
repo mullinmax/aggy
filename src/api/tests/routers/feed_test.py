@@ -15,6 +15,9 @@ def test_create_feed(client, unique_feed, existing_user, token):
     assert response.json() == {
         "feed_name": unique_feed.name,
         "feed_name_hash": unique_feed.name_hash,
+        "feed_item_count": None,
+        "feed_unread_count": None,
+        "feed_posts_per_day": None,
     }
 
 
@@ -69,6 +72,9 @@ def test_get_feed(client, existing_user, existing_feed, token):
     assert response.json() == {
         "feed_name": existing_feed.name,
         "feed_name_hash": existing_feed.name_hash,
+        "feed_item_count": None,
+        "feed_unread_count": None,
+        "feed_posts_per_day": None,
     }
 
 
@@ -98,6 +104,9 @@ def test_list_feeds(client, existing_user, existing_feed, token):
         {
             "feed_name": existing_feed.name,
             "feed_name_hash": existing_feed.name_hash,
+            "feed_item_count": 0,
+            "feed_unread_count": 0,
+            "feed_posts_per_day": 0.0,
         }
     ]
 
@@ -147,8 +156,11 @@ def test_sources(client, existing_user, existing_feed, existing_source, token):
             "source_template_name_hash": None,
             "source_template_parameters": None,
             "source_ingest_interval_minutes": None,
+            "source_color": response.json()[0]["source_color"],
         }
     ]
+    # a palette color was assigned at creation
+    assert response.json()[0]["source_color"].startswith("#")
 
 
 def test_get_all_items(

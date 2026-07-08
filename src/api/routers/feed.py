@@ -68,7 +68,11 @@ def get_feed(feed_name_hash: str, user: User = Depends(authenticate)) -> FeedRes
 )
 def list_feeds(user: User = Depends(authenticate)) -> List[FeedResponse]:
     # TODO add list of sources in each feed in the response
-    return [FeedResponse.from_db_model(f) for f in user.feeds if f is not None]
+    return [
+        FeedResponse.from_db_model(f, stats=f.stats())
+        for f in user.feeds
+        if f is not None
+    ]
 
 
 # get all sources in a feed

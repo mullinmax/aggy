@@ -105,6 +105,8 @@ def update_source(
     # the field was actually sent
     if "ingest_interval_minutes" in update.model_fields_set:
         update_kwargs["ingest_interval"] = update.ingest_interval_minutes
+    if update.source_color is not None:
+        update_kwargs["color"] = update.source_color
     source.update(
         name=new_name,
         url=new_url,

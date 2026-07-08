@@ -19,6 +19,7 @@ class ItemResponse(BaseRouteModel):
     item_excerpt: Optional[str] = None
     item_content: Optional[str] = None
     item_source_name: Optional[str] = None
+    item_source_color: Optional[str] = None
     item_user_score: Optional[float] = None
     item_is_read: Optional[bool] = None
     item_predicted_score: Optional[float] = None
@@ -44,6 +45,7 @@ class ItemResponse(BaseRouteModel):
         cls,
         db_model: ItemLoose,
         source_name: str = None,
+        source_color: str = None,
         user_score: float = None,
         is_read: bool = None,
         predicted_score: float = None,
@@ -51,6 +53,7 @@ class ItemResponse(BaseRouteModel):
     ):
         return cls(
             item_source_name=source_name,
+            item_source_color=source_color,
             item_user_score=user_score,
             item_is_read=is_read,
             item_predicted_score=predicted_score,

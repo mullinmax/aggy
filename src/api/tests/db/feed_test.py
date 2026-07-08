@@ -334,3 +334,55 @@ def test_query_items_source_filter(unique_feed, unique_item_strict):
         source_hashes=[source_a.name_hash, source_b.name_hash]
     )
     assert len(both) == 2
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_feed_stats(unique_feed, unique_item_strict):
+    """Dashboard stats: totals, unvoted count, and posts/day."""
+    from db.item_state import ItemState
+
+    unique_feed.create()
+
+    items = [
+        _add_item(unique_feed, None, unique_item_strict, f"http://example.com/{i}", i)
+        for i in range(3)
+    ]
+    ItemState(
+        user_hash=unique_feed.user_hash,
+        feed_hash=unique_feed.name_hash,
+        item_url_hash=items[0].url_hash,
+        score=1,
+    ).create()
+
+    stats = unique_feed.stats()
+    assert stats["feed_item_count"] == 3
+    assert stats["feed_unread_count"] == 2
+    assert stats["feed_posts_per_day"] == 3.0  # 3 items on day one
+
+
+def test_source_color_assigned_and_editable(unique_feed):
+    """Sources get a palette color at creation; updates can change it."""
+    from db.source import SOURCE_COLORS, Source
+
+    unique_feed.create()
+    source = Source(
+        user_hash=unique_feed.user_hash,
+        feed_hash=unique_feed.name_hash,
+        name="colorful",
+        url="http://example.com",
+    )
+    unique_feed.add_source(source)
+    stored = Source.read(
+        user_hash=unique_feed.user_hash,
+        feed_hash=unique_feed.name_hash,
+        source_hash=source.name_hash,
+    )
+    assert stored.color in SOURCE_COLORS
+
+    stored.update(name=stored.name, url=str(stored.url), color="#123abc")
+    reread = Source.read(
+        user_hash=unique_feed.user_hash,
+        feed_hash=unique_feed.name_hash,
+        source_hash=stored.name_hash,
+    )
+    assert reread.color == "#123abc"

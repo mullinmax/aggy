@@ -17,6 +17,8 @@ class SourceUpdate(BaseRouteModel):
     # How often to check this source, in minutes. Send null to reset to the
     # server default; omit the field entirely to leave it unchanged.
     ingest_interval_minutes: Optional[int] = Field(default=None, ge=1, le=10080)
+    # Display color as a hex string, e.g. "#ef5350". Omit to leave unchanged.
+    source_color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
     model_config = {
         "json_schema_extra": {
