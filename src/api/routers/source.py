@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from typing import List, Union
 
 from db.feed import Feed
 from db.source import Source
 from db.user import User
+from ingest.jobs import ingest_source_now
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
 from routers.auth import authenticate
@@ -21,6 +22,7 @@ def create_source(
     feed_name_hash: str,
     source_name: str,
     source_url: str,
+    background_tasks: BackgroundTasks,
     user: User = Depends(authenticate),
 ) -> AcknowledgeResponse:
     feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
@@ -31,6 +33,8 @@ def create_source(
         url=source_url,
     )
     feed.add_source(source)
+    # kick off the first ingest right away instead of waiting for the schedule
+    background_tasks.add_task(ingest_source_now, source)
     return AcknowledgeResponse()
 
 

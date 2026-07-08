@@ -83,7 +83,10 @@ def sources(
     if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    return [SourceRouteModel.from_db_model(s) for s in feed.sources]
+    return [
+        SourceRouteModel.from_stats_row(feed.name_hash, row)
+        for row in feed.sources_with_stats()
+    ]
 
 
 
@@ -107,7 +110,8 @@ def get_feed_items(
         raise HTTPException(status_code=404, detail="Feed not found")
 
     return [
-        ItemResponse.from_db_model(i) for i in feed.query_items(skip=skip, limit=limit)
+        ItemResponse.from_db_model(item, source_name=source_name)
+        for item, source_name in feed.query_items_with_sources(skip=skip, limit=limit)
     ]
 
 

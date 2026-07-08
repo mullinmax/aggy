@@ -34,6 +34,9 @@ class SourceTemplate(AggyBaseModel):
     description: str
     context: Optional[str] = None
     parameters: Dict[str, SourceTemplateParameter]
+    # Built-in (non-rss-bridge) templates: a python format string with
+    # {parameter} placeholders, e.g. "https://www.reddit.com/r/{subreddit}/{sort}.rss"
+    url_template: Optional[str] = None
 
     @property
     def key(self):
@@ -55,7 +58,10 @@ class SourceTemplate(AggyBaseModel):
         validation_issues = []
 
         for name, parameter in self.parameters.items():
-            if name in kwargs and kwargs[name] is not None:
+            # empty strings count as missing: rss-bridge treats blank required
+            # parameters as errors, which used to slip through and create
+            # sources that could never ingest anything
+            if name in kwargs and kwargs[name] is not None and kwargs[name] != "":
                 if (
                     parameter.options is not None
                     and kwargs[name] not in parameter.options
@@ -90,6 +96,20 @@ class SourceTemplate(AggyBaseModel):
             kwargs = {}
 
         self.validate_parameters(**kwargs)
+
+        # Built-in templates format their own URL directly instead of going
+        # through rss-bridge.
+        if self.url_template:
+            values = {}
+            for name, parameter in self.parameters.items():
+                if name in kwargs and kwargs[name] not in (None, ""):
+                    values[name] = kwargs[name]
+                elif parameter.default is not None:
+                    values[name] = parameter.default
+            quoted = {
+                k: urllib.parse.quote(str(v), safe="") for k, v in values.items()
+            }
+            return self.url_template.format(**quoted)
 
         url_params = {
             "action": "display",
@@ -127,13 +147,14 @@ class SourceTemplate(AggyBaseModel):
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO source_templates (name_hash, name, bridge_short_name, "
-                "url, description, context, parameters) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "url, description, context, parameters, url_template) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (name_hash) DO UPDATE SET "
                 "name = EXCLUDED.name, "
                 "bridge_short_name = EXCLUDED.bridge_short_name, "
                 "url = EXCLUDED.url, description = EXCLUDED.description, "
-                "context = EXCLUDED.context, parameters = EXCLUDED.parameters",
+                "context = EXCLUDED.context, parameters = EXCLUDED.parameters, "
+                "url_template = EXCLUDED.url_template",
                 (
                     self.name_hash,
                     self.name,
@@ -142,6 +163,7 @@ class SourceTemplate(AggyBaseModel):
                     self.description,
                     self.context,
                     params_json,
+                    self.url_template,
                 ),
             )
 
@@ -167,6 +189,7 @@ class SourceTemplate(AggyBaseModel):
             description=row["description"],
             context=row["context"],
             parameters=parameters,
+            url_template=row.get("url_template"),
         )
 
     @classmethod
@@ -174,7 +197,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters FROM source_templates WHERE name_hash = %s",
+                "parameters, url_template FROM source_templates WHERE name_hash = %s",
                 (name_hash,),
             )
             row = cur.fetchone()
@@ -188,7 +211,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters FROM source_templates"
+                "parameters, url_template FROM source_templates"
             )
             rows = cur.fetchall()
 

@@ -116,3 +116,36 @@ def test_create_rss_url_use_default_parameters(unique_source_template):
 
 def test_get_non_existent_template():
     assert SourceTemplate.read(name_hash="non_existent_template") is None
+
+
+def test_create_rss_url_from_url_template(unique_source_template):
+    unique_source_template.bridge_short_name = None
+    unique_source_template.url_template = "https://www.reddit.com/r/{subreddit}/{sort}.rss"
+    unique_source_template.parameters = {
+        "subreddit": SourceTemplateParameter(
+            name="Subreddit", required=True, type=SourceTemplateParameterType.text
+        ),
+        "sort": SourceTemplateParameter(
+            name="Sort",
+            required=False,
+            type=SourceTemplateParameterType.select,
+            default="hot",
+            options={"hot": "Hot", "new": "New"},
+        ),
+    }
+    url = unique_source_template.create_rss_url(subreddit="self hosted", sort="")
+    # default fills empty sort; parameter values are URL-quoted
+    assert url == "https://www.reddit.com/r/self%20hosted/hot.rss"
+
+
+def test_create_rss_url_rejects_blank_required_parameter(unique_source_template):
+    unique_source_template.parameters = {
+        "parameter_name": SourceTemplateParameter(
+            name="parameter_name", required=True, type=SourceTemplateParameterType.text
+        )
+    }
+    import pytest as _pytest
+
+    with _pytest.raises(Exception) as e:
+        unique_source_template.create_rss_url(parameter_name="")
+    assert "is required" in str(e.value)

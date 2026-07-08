@@ -42,9 +42,7 @@ function bindControls() {
 
   $('deleteFeedBtn').onclick = confirmDeleteFeed;
   $('manageSourcesBtn').onclick = () => switchFeedTab('sources');
-  document.querySelectorAll('[data-tab]').forEach((tab) => {
-    tab.onclick = () => switchFeedTab(tab.dataset.tab);
-  });
+  $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
   $('addSourceBtn').onclick = openAddSourceModal;
@@ -205,8 +203,6 @@ async function showFeed(hash) {
 }
 
 function switchFeedTab(tab) {
-  document.querySelectorAll('[role="tablist"] .tab[data-tab]').forEach((t) =>
-    t.classList.toggle('tab-active', t.dataset.tab === tab));
   $('tabItems').classList.toggle('hidden', tab !== 'items');
   $('tabSources').classList.toggle('hidden', tab !== 'sources');
   if (tab === 'sources') loadSources();
@@ -269,6 +265,7 @@ function itemCard(item) {
         h('h3', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, item.item_title || 'Untitled'),
         h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, item.item_excerpt || ''),
         h('div', { class: 'flex flex-wrap items-center gap-2 mt-2' },
+          item.item_source_name && h('span', { class: 'badge badge-secondary badge-outline badge-xs' }, item.item_source_name),
           item.item_domain && h('span', { class: 'badge badge-primary badge-outline badge-xs' }, item.item_domain),
           item.item_author && h('span', { class: 'text-xs text-base-content/40' }, item.item_author),
           published && h('span', { class: 'text-xs text-base-content/40' }, published))),
@@ -350,12 +347,20 @@ async function loadSources() {
 }
 
 function sourceRow(source) {
-  return h('div', { class: 'flex items-center justify-between p-3 bg-base-200 border border-base-300 rounded-lg mb-2' },
+  const count = source.source_item_count ?? 0;
+  const checked = source.source_last_ingested_at
+    ? `checked ${timeAgo(source.source_last_ingested_at)}`
+    : 'not checked yet';
+  return h('div', { class: 'flex items-center justify-between gap-3 p-3 bg-base-200 border border-base-300 rounded-lg mb-2' },
     h('div', { class: 'min-w-0' },
       h('div', { class: 'font-medium text-sm' }, source.source_name),
-      h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url)),
+      h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url),
+      h('div', { class: 'text-xs text-base-content/60 mt-1' },
+        `${count} article${count === 1 ? '' : 's'} · ${checked}`),
+      source.source_last_ingest_error && h('div', { class: 'text-xs text-error mt-1' },
+        `Last check failed: ${source.source_last_ingest_error}`)),
     h('button', {
-      class: 'btn btn-ghost btn-xs text-error',
+      class: 'btn btn-ghost btn-xs text-error flex-shrink-0',
       onclick: () => confirmDeleteSource(source),
     }, 'Remove'));
 }
@@ -395,6 +400,8 @@ async function handleCreateManualSource(e) {
     $('manualSourceName').value = '';
     $('manualSourceUrl').value = '';
     loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
   } catch (err) {
     toast(err.message, 'alert-error');
   }
@@ -488,9 +495,20 @@ async function handleCreateSourceFromTemplate() {
   if (!name) { toast('Please enter a source name', 'alert-error'); return; }
 
   const parameters = {};
+  let missing = null;
+  $('templateParamFields').querySelectorAll('.input-error').forEach((el) => el.classList.remove('input-error'));
   $('templateParamFields').querySelectorAll('input, select').forEach((el) => {
-    parameters[el.name] = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value;
+    const value = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value.trim();
+    if (el.required && !value && !missing) missing = el;
+    parameters[el.name] = value;
   });
+  if (missing) {
+    missing.classList.add('input-error');
+    missing.focus();
+    const label = (selectedTemplate.parameters[missing.name] || {}).title || missing.name;
+    toast(`"${label}" is required`, 'alert-error');
+    return;
+  }
 
   try {
     await sdk.sourceTemplateCreate({
@@ -504,6 +522,8 @@ async function handleCreateSourceFromTemplate() {
     closeModal('addSourceModal');
     toast(`Source "${name}" added`);
     loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
   } catch (err) {
     toast(err.message, 'alert-error');
   }

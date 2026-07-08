@@ -141,6 +141,9 @@ def test_sources(client, existing_user, existing_feed, existing_source, token):
             "source_name_hash": existing_source.name_hash,
             "source_url": str(existing_source.url),
             "source_feed": existing_source.feed_hash,
+            "source_item_count": 0,
+            "source_last_ingested_at": None,
+            "source_last_ingest_error": None,
         }
     ]
 

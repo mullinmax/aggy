@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 from typing import Dict, List, Union
 
 
@@ -8,6 +8,7 @@ from route_models.source import SourceRouteModel
 from route_models.source_from_template import SourceFromTemplate
 from db.user import User
 from db.feed import Feed
+from ingest.jobs import ingest_source_now
 from routers.auth import authenticate
 
 source_template_router = APIRouter()
@@ -47,6 +48,7 @@ def get_source_template(
 )
 def create_source_from_template(
     sf_template: SourceFromTemplate,
+    background_tasks: BackgroundTasks,
     user: User = Depends(authenticate),
 ) -> SourceRouteModel:
     # confirm the feed exists
@@ -62,7 +64,11 @@ def create_source_from_template(
     if not source_template:
         raise HTTPException(status_code=404, detail="Source template not found")
 
-    source_url = source_template.create_rss_url(**sf_template.parameters)
+    try:
+        source_url = source_template.create_rss_url(**sf_template.parameters)
+    except Exception as e:
+        # bad/missing template parameters — tell the user what's wrong
+        raise HTTPException(status_code=422, detail=str(e))
     source = Source(
         user_hash=user.name_hash,
         feed_hash=sf_template.feed_hash,
@@ -70,6 +76,9 @@ def create_source_from_template(
         url=source_url,
     )
     feed.add_source(source)
+
+    # kick off the first ingest right away instead of waiting for the schedule
+    background_tasks.add_task(ingest_source_now, source)
 
     return SourceRouteModel.from_db_model(source)
 
