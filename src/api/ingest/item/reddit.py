@@ -10,10 +10,9 @@ import logging
 import re
 from typing import List, Optional
 
-import requests
-
 from config import config
 from db.item import ItemLoose
+from ingest.reddit_rate_limit import reddit_get
 
 # A reddit post's comments page, which is what reddit RSS uses as the entry
 # link, e.g. https://www.reddit.com/r/pics/comments/abc123/title/
@@ -145,8 +144,10 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         )
     }
     try:
-        # raw_json=1 stops reddit from HTML-escaping the media URLs
-        response = requests.get(
+        # raw_json=1 stops reddit from HTML-escaping the media URLs. Routed
+        # through the shared adaptive throttle so per-post media fetches share
+        # reddit's rate budget with the feed fetches.
+        response = reddit_get(
             url.rstrip("/") + ".json",
             params={"raw_json": 1},
             timeout=15,

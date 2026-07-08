@@ -7,6 +7,7 @@ from db.source import Source
 from db.feed import Feed
 from ingest.item.rss import ingest_rss_item
 from ingest.item.reddit import ingest_reddit_item, is_reddit_post
+from ingest.reddit_rate_limit import is_reddit_url, reddit_get
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
@@ -23,8 +24,11 @@ def ingest_source(source: Source) -> None:
             "(self-hosted feed aggregator; +https://github.com/mullinmax/aggy)"
         )
     }
+    # reddit.com requests share a global adaptive throttle so all ingest jobs
+    # stay under one budget and back off together on 429s.
+    fetch = reddit_get if is_reddit_url(source.url) else requests.get
     try:
-        response = requests.get(str(source.url), timeout=60, headers=headers)
+        response = fetch(str(source.url), timeout=60, headers=headers)
     except requests.RequestException as e:
         raise Exception(f"Could not fetch feed: {e}") from e
 

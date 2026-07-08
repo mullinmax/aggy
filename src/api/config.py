@@ -25,6 +25,12 @@ KNOWN_CONFIG_VALUES = [
     "JWT_EXPIRATION_DAYS",
     "SIGNUP_ENABLED",
     "RANKING_INTERVAL_MINUTES",
+    # Reddit is rate-limited far more aggressively than most feeds, so it gets
+    # its own (slower) default check frequency and a global adaptive throttle.
+    "REDDIT_SOURCE_READ_INTERVAL_MINUTES",
+    "REDDIT_MIN_REQUEST_INTERVAL_SECONDS",
+    "REDDIT_MAX_REQUEST_INTERVAL_SECONDS",
+    "REDDIT_INITIAL_REQUEST_INTERVAL_SECONDS",
 ]
 
 DEFAULT_CONFIG = {
@@ -46,6 +52,17 @@ DEFAULT_CONFIG = {
     "JWT_EXPIRATION_DAYS": 7,
     "SIGNUP_ENABLED": True,
     "RANKING_INTERVAL_MINUTES": 15,
+    # Reddit forces subreddit sources to "top today", which is fully covered by
+    # checking roughly twice a day (12h); this keeps us well under Reddit's
+    # anonymous request limits.
+    "REDDIT_SOURCE_READ_INTERVAL_MINUTES": 720,
+    # Adaptive global throttle for all reddit.com requests. The delay between
+    # requests floats between the min (fastest we'll ever go) and max (deep
+    # backoff), starting at the initial value; it shrinks cautiously on success
+    # and grows exponentially on HTTP 429. Values are seconds.
+    "REDDIT_MIN_REQUEST_INTERVAL_SECONDS": 2.0,
+    "REDDIT_MAX_REQUEST_INTERVAL_SECONDS": 900.0,
+    "REDDIT_INITIAL_REQUEST_INTERVAL_SECONDS": 5.0,
 }
 
 FALSEY_STRINGS = {"", "0", "false", "no", "off"}
@@ -98,6 +115,10 @@ class Config:
     def get_int(self, key, default=_UNSET):
         # env values always come back as strings; coerce for numeric config
         return int(self.get(key, default=default))
+
+    def get_float(self, key, default=_UNSET):
+        # env values always come back as strings; coerce for numeric config
+        return float(self.get(key, default=default))
 
     def get_bool(self, key, default=_UNSET):
         value = self.get(key, default=default)
