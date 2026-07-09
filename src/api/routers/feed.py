@@ -136,7 +136,8 @@ def get_feed_items(
     limit: Union[int, None] = None,
     sort: str = Query(
         "best",
-        description="best, predicted, predicted_asc, controversial, newest, oldest",
+        description="best, predicted, predicted_asc, controversial, "
+        "confident, newest, oldest",
     ),
     include_read: bool = True,
     sources: Optional[str] = Query(

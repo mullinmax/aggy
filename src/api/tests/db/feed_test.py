@@ -308,6 +308,46 @@ def test_query_items_interleaves_sources(unique_feed, unique_item_strict):
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_predicted_sort_is_monotonic(unique_feed, unique_item_strict):
+    """Prediction sorts return strict sort order, not interleaved by source, so
+    the feed's threshold dividers land on a monotonic ranking."""
+    unique_feed.create()
+    source_a = _make_source(unique_feed, "source-a")
+    source_b = _make_source(unique_feed, "source-b")
+
+    # every source-a item is predicted higher than every source-b item; the
+    # interleaved browse sort would zig-zag between sources, but a prediction
+    # sort must keep the scores strictly descending
+    items = [
+        _add_item(unique_feed, source_a, unique_item_strict, "http://example.com/a1", 0),
+        _add_item(unique_feed, source_a, unique_item_strict, "http://example.com/a2", 0),
+        _add_item(unique_feed, source_b, unique_item_strict, "http://example.com/b1", 0),
+        _add_item(unique_feed, source_b, unique_item_strict, "http://example.com/b2", 0),
+    ]
+    predictions = {
+        items[0].url_hash: 0.9,
+        items[1].url_hash: 0.6,
+        items[2].url_hash: -0.2,
+        items[3].url_hash: -0.7,
+    }
+    with unique_feed.db_con() as cur:
+        for url_hash, score in predictions.items():
+            cur.execute(
+                "UPDATE feed_items SET predicted_score = %s, "
+                "predicted_confidence = %s WHERE user_hash = %s "
+                "AND feed_hash = %s AND item_url_hash = %s",
+                (score, abs(score), unique_feed.user_hash,
+                 unique_feed.name_hash, url_hash),
+            )
+
+    results = unique_feed.query_items_with_sources(sort="predicted")
+    scores = [meta["predicted_score"] for _, meta in results]
+    assert scores == sorted(scores, reverse=True)
+    names = [meta["source_name"] for _, meta in results]
+    assert names == ["source-a", "source-a", "source-b", "source-b"]
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_query_items_source_filter(unique_feed, unique_item_strict):
     """source_hashes restricts results to the selected sources."""
     unique_feed.create()

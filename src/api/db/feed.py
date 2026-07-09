@@ -12,9 +12,17 @@ ITEM_SORTS = {
     "predicted": "c.predicted_score DESC NULLS LAST, c.added_at DESC",
     "predicted_asc": "c.predicted_score ASC NULLS LAST, c.added_at DESC",
     "controversial": "c.predicted_confidence ASC NULLS LAST, c.added_at DESC",
+    "confident": "c.predicted_confidence DESC NULLS LAST, c.added_at DESC",
     "newest": "i.date_published DESC NULLS LAST, c.added_at DESC",
     "oldest": "i.date_published ASC NULLS LAST, c.added_at ASC",
 }
+
+# Sorts whose whole point is a strict, monotonic ranking of the model's
+# prediction. The feed's UI marks threshold crossings in these orders with
+# horizontal-rule dividers (e.g. where predicted votes fall from "upvote" to
+# "neutral"), which only reads correctly if the list is truly monotonic — so
+# these sorts skip the round-robin source interleaving the browse sorts use.
+MONOTONIC_SORTS = {"predicted", "predicted_asc", "controversial", "confident"}
 
 
 class Feed(ItemCollection):
@@ -121,9 +129,11 @@ class Feed(ItemCollection):
         - ``text_only=True`` keeps only items with no image or media;
           ``False`` keeps only items that have some; ``None`` keeps all.
 
-        Results interleave sources within the sort order: each source's best
-        item first (ordered by the sort key), then each source's second-best,
-        and so on, so the feed mixes sources instead of long runs of one.
+        Browse sorts interleave sources within the sort order: each source's
+        best item first (ordered by the sort key), then each source's
+        second-best, and so on, so the feed mixes sources instead of long runs
+        of one. The prediction-ranked sorts (``MONOTONIC_SORTS``) skip that
+        interleaving and return items in strict sort order instead.
         """
         from .item import ItemStrict
 
@@ -177,7 +187,14 @@ class Feed(ItemCollection):
         elif text_only is False:
             sql += f" AND {has_visual}"
 
-        sql = f"SELECT * FROM ({sql}) q ORDER BY q.source_rank, {outer_order}"
+        # Prediction-ranked sorts stay strictly monotonic (see MONOTONIC_SORTS);
+        # the browse sorts interleave sources by round-robin rank first.
+        outer_sort = (
+            outer_order
+            if sort in MONOTONIC_SORTS
+            else f"q.source_rank, {outer_order}"
+        )
+        sql = f"SELECT * FROM ({sql}) q ORDER BY {outer_sort}"
         if limit is not None and limit >= 0:
             sql += " LIMIT %s"
             params = params + (limit,)

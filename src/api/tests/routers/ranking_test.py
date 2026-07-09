@@ -178,6 +178,13 @@ def test_rerank_and_stats(
     assert scores == sorted(scores, reverse=True)
     worst_first = _get_items(client, token, existing_feed, sort="predicted_asc")
     assert [i["item_predicted_score"] for i in worst_first] == sorted(scores)
+    # the confidence sorts order by how sure the model is, either direction
+    confident = _get_items(client, token, existing_feed, sort="confident")
+    confs = [i["item_predicted_confidence"] for i in confident]
+    assert all(c is not None for c in confs)
+    assert confs == sorted(confs, reverse=True)
+    controversial = _get_items(client, token, existing_feed, sort="controversial")
+    assert [i["item_predicted_confidence"] for i in controversial] == sorted(confs)
     # unvoted items get a prediction consistent with their cluster
     unvoted = {str(items[4].url): 1, str(items[5].url): -1}
     for entry in ranked:
