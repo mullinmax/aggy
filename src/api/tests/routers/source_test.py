@@ -111,6 +111,36 @@ def test_delete_source(client, existing_feed, existing_source, token):
     assert response.json() == {"detail": "Source not found"}
 
 
+def test_rescrape_source(client, existing_feed, existing_source, token):
+    args = build_api_request_args(
+        path="/source/rescrape",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": existing_source.name_hash,
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+    assert response.status_code == 200
+    assert response.json() == {"message": "success"}
+
+
+def test_rescrape_source_not_found(client, existing_feed, token):
+    args = build_api_request_args(
+        path="/source/rescrape",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "source_name_hash": "does-not-exist",
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Source not found"}
+
+
 def test_create_duplicate_source_conflict(client, existing_feed, existing_source, token):
     args = build_api_request_args(
         path="/source/create",

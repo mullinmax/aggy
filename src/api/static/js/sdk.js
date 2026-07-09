@@ -150,6 +150,11 @@ class AggySDK {
     return this._request("GET", "/source/items", { query: { feed_name_hash, source_name_hash, skip, limit } });
   }
 
+  /** Re-scrape a source's items for content, media, and embeddings */
+  async sourceRescrape({ feed_name_hash, source_name_hash }) {
+    return this._request("POST", "/source/rescrape", { query: { feed_name_hash, source_name_hash } });
+  }
+
   /** Update a source's name, URL, or template parameters */
   async sourceUpdate({ body }) {
     return this._request("POST", "/source/update", { body });
