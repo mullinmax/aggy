@@ -6,7 +6,7 @@ from db.feed import Feed
 from db.source import Source
 from db.source_template import SourceTemplate
 from db.user import User
-from ingest.jobs import ingest_source_now
+from ingest.jobs import ingest_source_now, rescrape_source
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.source import SourceRouteModel
@@ -119,6 +119,32 @@ def update_source(
         background_tasks.add_task(ingest_source_now, source)
 
     return SourceRouteModel.from_db_model(source)
+
+
+@source_router.post(
+    "/rescrape",
+    summary="Re-scrape a source's items for content, media, and embeddings",
+    response_model=AcknowledgeResponse,
+)
+def rescrape_source_route(
+    feed_name_hash: str,
+    source_name_hash: str,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(authenticate),
+) -> AcknowledgeResponse:
+    try:
+        source = Source.read(
+            user_hash=user.name_hash,
+            feed_hash=feed_name_hash,
+            source_hash=source_name_hash,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    # Re-collect images/content/media and regenerate embeddings in the
+    # background; this does NOT re-fetch the RSS feed for new items.
+    background_tasks.add_task(rescrape_source, source)
+    return AcknowledgeResponse()
 
 
 @source_router.get(

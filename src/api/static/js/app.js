@@ -941,12 +941,53 @@ function sourceRow(source) {
     h('div', { class: 'flex gap-1 flex-shrink-0' },
       h('button', {
         class: 'btn btn-ghost btn-xs',
+        title: 'Show only this source in the feed',
+        onclick: () => viewSourceInFeed(source),
+      }, 'View'),
+      h('button', {
+        class: 'btn btn-ghost btn-xs',
+        title: 'Re-collect images, content and previews for this source',
+        onclick: (e) => rescrapeSource(source, e.currentTarget),
+      }, 'Re-scrape'),
+      h('button', {
+        class: 'btn btn-ghost btn-xs',
         onclick: () => openEditSourceModal(source),
       }, 'Edit'),
       h('button', {
         class: 'btn btn-ghost btn-xs text-error',
         onclick: () => confirmDeleteSource(source),
       }, 'Remove')));
+}
+
+// Jump to the article list showing only this source, by seeding the source
+// filter with just this one and switching back to the items tab.
+function viewSourceInFeed(source) {
+  feedFilters.sources = [source.source_name_hash];
+  syncFilterControls();
+  renderFilterSources();
+  itemSkip = 0;
+  switchFeedTab('items');
+  loadFeedItems();
+}
+
+// Ask the API to re-collect content/images/previews (and regenerate
+// embeddings) for this source's existing items, without re-ingesting the feed.
+async function rescrapeSource(source, btn) {
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Re-scraping…';
+  try {
+    await sdk.sourceRescrape({
+      feed_name_hash: currentFeed.feed_name_hash,
+      source_name_hash: source.source_name_hash,
+    });
+    toast(`Re-scraping "${source.source_name}" — this runs in the background`);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 async function openEditSourceModal(source) {
