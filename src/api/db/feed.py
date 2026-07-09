@@ -262,6 +262,23 @@ class Feed(ItemCollection):
 
         return self.key
 
+    def rename(self, new_name: str):
+        """Rename this feed in place.
+
+        The name_hash is derived from the name, so it changes too. The
+        sources, feed_items, item_states, and ranking_model_stats foreign
+        keys are ON UPDATE CASCADE, so every source, item, vote, and model
+        stat stays attached to the feed under its new hash.
+        """
+        new_name_hash = self.__insecure_hash__(new_name)
+        with self.db_con() as cur:
+            cur.execute(
+                "UPDATE feeds SET name = %s, name_hash = %s "
+                "WHERE user_hash = %s AND name_hash = %s",
+                (new_name, new_name_hash, self.user_hash, self.name_hash),
+            )
+        self.name = new_name
+
     def delete(self):
         # ON DELETE CASCADE removes sources, feed_items, source_items, and
         # item_states tied to this feed.

@@ -47,6 +47,8 @@ function bindControls() {
   $('createFeedForm').onsubmit = handleCreateFeed;
 
   $('deleteFeedBtn').onclick = confirmDeleteFeed;
+  $('renameFeedBtn').onclick = openRenameFeed;
+  $('renameFeedForm').onsubmit = handleRenameFeed;
   $('manageSourcesBtn').onclick = () => switchFeedTab('sources');
   $('filterBtn').onclick = toggleFilterPanel;
   $('statsBtn').onclick = openStatsModal;
@@ -185,6 +187,32 @@ function confirmDeleteFeed() {
   });
 }
 
+function openRenameFeed() {
+  if (!currentFeed) return;
+  $('renameFeedName').value = currentFeed.feed_name;
+  showModal('renameFeedModal');
+  $('renameFeedName').focus();
+}
+
+async function handleRenameFeed(e) {
+  e.preventDefault();
+  if (!currentFeed) return;
+  const name = $('renameFeedName').value.trim();
+  if (!name) return;
+  if (name === currentFeed.feed_name) { closeModal('renameFeedModal'); return; }
+  try {
+    const feed = await sdk.feedRename({ feed_name_hash: currentFeed.feed_name_hash, new_name: name });
+    closeModal('renameFeedModal');
+    toast(`Feed renamed to "${name}"`);
+    // the name_hash (and the feed's URL) changes on rename; drop the cached
+    // feed and navigate to the new hash
+    currentFeed = null;
+    router.go(`feed/${feed.feed_name_hash}`);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
 // ---------- feed view ----------
 async function showFeed(hash) {
   setView('feed');
@@ -228,6 +256,10 @@ async function showFeed(hash) {
 function switchFeedTab(tab) {
   $('tabItems').classList.toggle('hidden', tab !== 'items');
   $('tabSources').classList.toggle('hidden', tab !== 'sources');
+  // The filter only applies to the article list; hide the button (and any
+  // open panel) on the sources/settings tab.
+  $('filterBtn').classList.toggle('hidden', tab !== 'items');
+  if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
 }
 
