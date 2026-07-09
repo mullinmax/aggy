@@ -1,5 +1,10 @@
 from db.item import ItemLoose
-from ingest.item.reddit import _post_media, ingest_reddit_item, is_reddit_post
+from ingest.item.reddit import (
+    _external_link_media,
+    _post_media,
+    ingest_reddit_item,
+    is_reddit_post,
+)
 from ingest.item.rss import _link_media
 
 
@@ -166,6 +171,47 @@ def test_post_media_plain_link_has_no_media():
     assert _post_media(post) == []
 
 
+def test_external_link_media_for_link_post():
+    post = {
+        "url_overridden_by_dest": "https://example.com/article",
+        "domain": "example.com",
+        "preview": {"images": [{"source": {"url": "https://preview.redd.it/img.jpg"}}]},
+    }
+    assert _external_link_media(post) == [
+        {
+            "type": "link",
+            "url": "https://example.com/article",
+            "domain": "example.com",
+            "poster": "https://preview.redd.it/img.jpg",
+        }
+    ]
+
+
+def test_external_link_media_without_preview_falls_back_to_host():
+    post = {"url": "https://news.ycombinator.com/item?id=1"}
+    assert _external_link_media(post) == [
+        {
+            "type": "link",
+            "url": "https://news.ycombinator.com/item?id=1",
+            "domain": "news.ycombinator.com",
+        }
+    ]
+
+
+def test_external_link_media_skips_self_post():
+    post = {"is_self": True, "url": "https://www.reddit.com/r/x/comments/abc/t/"}
+    assert _external_link_media(post) == []
+
+
+def test_external_link_media_skips_reddit_hosted_destinations():
+    # reddit CDN media and permalinks aren't off-site destinations to preview
+    assert _external_link_media({"url": "https://i.redd.it/example.jpg"}) == []
+    assert _external_link_media(
+        {"url": "https://www.reddit.com/r/x/comments/abc/t/"}
+    ) == []
+    assert _external_link_media({}) == []
+
+
 def test_ingest_reddit_item_skips_non_reddit_urls():
     item = ItemLoose(url="https://example.com/article")
     assert ingest_reddit_item(item) is None
@@ -202,6 +248,39 @@ def test_ingest_reddit_item_fetches_post_json(monkeypatch):
     assert result.author == "u/someone"
     assert result.media == [{"type": "gif", "url": "https://i.redd.it/example.gif"}]
     assert result.image_url == "https://preview.redd.it/img.jpg"
+
+
+def test_ingest_reddit_item_adds_link_card_for_link_post(monkeypatch):
+    post = {
+        "title": "An interesting article",
+        "author": "someone",
+        "url_overridden_by_dest": "https://example.com/article",
+        "domain": "example.com",
+        "preview": {"images": [{"source": {"url": "https://preview.redd.it/img.jpg"}}]},
+    }
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"data": {"children": [{"data": post}]}}]
+
+    monkeypatch.setattr(
+        "ingest.item.reddit.reddit_get", lambda url, **kwargs: FakeResponse()
+    )
+
+    item = ItemLoose(url="https://www.reddit.com/r/x/comments/abc123/an_article/")
+    result = ingest_reddit_item(item)
+
+    assert result.media == [
+        {
+            "type": "link",
+            "url": "https://example.com/article",
+            "domain": "example.com",
+            "poster": "https://preview.redd.it/img.jpg",
+        }
+    ]
 
 
 def test_rss_link_media():

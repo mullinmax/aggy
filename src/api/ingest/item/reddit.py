@@ -9,6 +9,7 @@ items and turns it into the item's ``media`` list.
 import logging
 import re
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from config import config
 from db.item import ItemLoose
@@ -73,6 +74,39 @@ def _gallery_media(post: dict) -> List[dict]:
             if url:
                 entries.append(_media_entry("image", url))
     return entries
+
+
+def _external_link_media(post: dict) -> List[dict]:
+    """A "link" media entry for reddit link posts pointing off-site.
+
+    Reddit link posts (``post_hint == "link"``) point at an external URL that
+    the RSS feed never surfaces on its own — the reader only ever sees the
+    reddit comments permalink, so the actual destination stays hidden unless
+    you open the post on reddit. Expose it as a ``link`` media entry so the UI
+    can render a preview card instead of dropping the destination entirely.
+
+    Self (text) posts and posts whose destination is reddit-hosted media or a
+    reddit permalink aren't external links to preview, so they're skipped;
+    embeddable media (images, gifs, videos, galleries) is handled by
+    ``_post_media`` and takes priority.
+    """
+    if post.get("is_self"):
+        return []
+
+    target = post.get("url_overridden_by_dest") or post.get("url")
+    if not target:
+        return []
+
+    host = urlparse(target).netloc.lower()
+    # reddit's own CDNs/permalinks aren't an off-site destination to preview
+    if not host or host.endswith("redd.it") or host.endswith("reddit.com"):
+        return []
+
+    entry = {"type": "link", "url": target, "domain": post.get("domain") or host}
+    poster = _preview_image(post)
+    if poster:
+        entry["poster"] = poster
+    return [entry]
 
 
 def _post_media(post: dict) -> List[dict]:
@@ -160,6 +194,10 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         return None
 
     media = _post_media(post)
+    # no embeddable media, but the post links off-site: surface the
+    # destination as a preview card instead of hiding it
+    if not media:
+        media = _external_link_media(post)
 
     # a full-resolution card image beats the RSS thumbnail
     image_url = _preview_image(post)
