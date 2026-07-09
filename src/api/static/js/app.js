@@ -568,10 +568,36 @@ document.addEventListener('scroll', () => {
   requestAnimationFrame(() => { gifScrollTick = false; updateGifPlayback(); });
 }, { passive: true, capture: true });
 
+// Preview card for a "link" media entry: a reddit post that points off-site.
+// Clicking opens the destination directly (stopPropagation) rather than the
+// reader, and it surfaces a link that would otherwise stay buried in the post.
+function linkCard(m) {
+  let host = m.domain || '';
+  if (!host) { try { host = new URL(m.url).hostname.replace(/^www\./, ''); } catch { /* leave blank */ } }
+  return h('a', {
+    class: 'flex items-stretch gap-3 bg-base-100 hover:bg-base-300 transition-colors',
+    href: m.url, target: '_blank', rel: 'noopener',
+    onclick: (e) => e.stopPropagation(),
+  },
+    m.poster
+      ? h('img', {
+          src: m.poster, alt: '', loading: 'lazy',
+          class: 'w-24 sm:w-32 flex-none object-cover bg-base-300',
+          onerror: (e) => e.target.remove(),
+        })
+      : null,
+    h('div', { class: 'flex flex-col justify-center gap-1 min-w-0 py-3 px-3' },
+      h('div', { class: 'flex items-center gap-1.5 text-xs font-medium text-base-content/60' },
+        openInNewTabIcon(), h('span', { class: 'truncate' }, host || 'External link')),
+      h('div', { class: 'text-sm text-primary break-all line-clamp-2' }, m.url)));
+}
+
 // One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
 // and loop like the reddit app; videos get controls, so their clicks must
 // reach the player instead of opening the reader.
 function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
+  // reddit link posts point off-site: show a preview card, not a media frame
+  if (m.type === 'link') return linkCard(m);
   // third-party players (e.g. redgifs) embed as an iframe; their clicks
   // never bubble, so they don't open the reader
   if (m.type === 'embed') {
