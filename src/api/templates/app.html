@@ -113,7 +113,8 @@
         <button class="btn btn-primary btn-sm" id="addSourceBtn">+ Add Source</button>
       </div>
       <div id="sourceList"></div>
-      <div class="mt-8 pt-4 border-t border-base-300 flex justify-end">
+      <div class="mt-8 pt-4 border-t border-base-300 flex justify-end gap-2">
+        <button class="btn btn-ghost btn-sm" id="renameFeedBtn">Rename Feed</button>
         <button class="btn btn-error btn-outline btn-sm" id="deleteFeedBtn">Delete Feed</button>
       </div>
     </div>
@@ -180,6 +181,24 @@
       <div class="modal-action">
         <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
         <button type="submit" class="btn btn-primary">Create Feed</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<!-- Rename Feed Modal -->
+<dialog class="modal" id="renameFeedModal">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold mb-4">Rename Feed</h3>
+    <form id="renameFeedForm">
+      <div class="form-control mb-4">
+        <label class="label" for="renameFeedName"><span class="label-text">Feed Name</span></label>
+        <input type="text" class="input input-bordered w-full" id="renameFeedName" placeholder="e.g. Technology, Science, Sports..." required>
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>
   </div>
