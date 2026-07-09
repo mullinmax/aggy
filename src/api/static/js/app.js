@@ -9,6 +9,7 @@ const sdk = new AggySDK();
 const PAGE_SIZE = 20;
 let currentFeed = null;
 let itemSkip = 0;
+let lastItemBand = null; // sort-band of the last rendered item, for threshold dividers
 // filter/sort state for the current feed; sources: null means "all sources"
 const defaultFilters = () => ({ sort: 'predicted', includeRead: false, textOnly: '', sources: null });
 let feedFilters = defaultFilters();
@@ -393,10 +394,91 @@ async function handleRerank() {
 // ---------- items ----------
 let itemsRequestSeq = 0; // discards out-of-order responses
 
+// Threshold dividers: as you scroll a ranked feed, mark where the model's
+// verdict crosses a meaningful line so a run of cards reads as labeled bands.
+//
+// For the predicted sorts, votes live on a -1..1 scale (down / neutral / up),
+// so the midpoints +0.5 and -0.5 split "more likely an upvote" from "more
+// likely neutral" from "more likely a downvote". For the confidence sorts we
+// split the 0..1 confidence range into thirds. Each `band` maps an item to a
+// zone; `labels` gives the divider text shown when entering that zone from the
+// one above it (the very first zone in view never gets a divider).
+function predictionBand(item) {
+  const s = item.item_predicted_score;
+  if (s == null) return null;
+  if (s >= 0.5) return 'up';
+  if (s >= -0.5) return 'neutral';
+  return 'down';
+}
+
+function confidenceBand(item) {
+  const c = item.item_predicted_confidence;
+  if (c == null) return null;
+  if (c >= 2 / 3) return 'high';
+  if (c >= 1 / 3) return 'mid';
+  return 'low';
+}
+
+const SORT_BANDS = {
+  predicted: {
+    band: predictionBand,
+    labels: {
+      neutral: 'More likely neutral than an upvote',
+      down: 'More likely a downvote than neutral',
+    },
+  },
+  predicted_asc: {
+    band: predictionBand,
+    labels: {
+      neutral: 'More likely neutral than a downvote',
+      up: 'More likely an upvote than neutral',
+    },
+  },
+  controversial: {
+    band: confidenceBand,
+    labels: {
+      mid: 'Middle third — model moderately unsure',
+      high: 'Least controversial — model most confident',
+    },
+  },
+  confident: {
+    band: confidenceBand,
+    labels: {
+      mid: 'Model moderately confident',
+      low: 'Model least confident',
+    },
+  },
+};
+
+// Horizontal rule with a centered note, marking a threshold in the sort order.
+function sortDivider(text) {
+  return h('div', { class: 'flex items-center gap-3 my-1 text-xs text-base-content/40 select-none' },
+    h('div', { class: 'flex-1 border-t border-base-300' }),
+    h('span', { class: 'whitespace-nowrap uppercase tracking-wide' }, text),
+    h('div', { class: 'flex-1 border-t border-base-300' }));
+}
+
+// Append `item`'s card to `list`, first inserting a threshold divider when the
+// item's sort-band differs from the previous card's. `lastItemBand` carries the
+// band across paginated loads so dividers land correctly on infinite scroll.
+function appendItemWithDivider(list, item) {
+  const cfg = SORT_BANDS[feedFilters.sort];
+  if (cfg) {
+    const band = cfg.band(item);
+    if (band) {
+      if (lastItemBand && band !== lastItemBand && cfg.labels[band]) {
+        list.append(sortDivider(cfg.labels[band]));
+      }
+      lastItemBand = band;
+    }
+  }
+  list.append(itemCard(item));
+}
+
 async function loadFeedItems() {
   const seq = ++itemsRequestSeq;
   const list = $('itemList');
-  if (itemSkip === 0) render(list, spinner());
+  if (itemSkip === 0) { render(list, spinner()); lastItemBand = null; }
   // hide while loading so the infinite-scroll observer can't double-fire
   $('loadMoreBtn').classList.add('hidden');
 
@@ -421,7 +503,7 @@ async function loadFeedItems() {
       return;
     }
 
-    items.forEach((item) => list.append(itemCard(item)));
+    items.forEach((item) => appendItemWithDivider(list, item));
     $('loadMoreBtn').classList.toggle('hidden', items.length < PAGE_SIZE);
   } catch (err) {
     if (seq !== itemsRequestSeq) return;
