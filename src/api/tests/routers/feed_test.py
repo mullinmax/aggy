@@ -59,6 +59,77 @@ def test_delete_nonexistent_feed(client, existing_user, token):
     assert response.json() == {"detail": "Feed not found"}
 
 
+def test_rename_feed(client, existing_user, existing_feed, token):
+    from db.feed import Feed
+
+    renamed = Feed(user_hash=existing_user.name_hash, name="a brand new name")
+    args = build_api_request_args(
+        path="/feed/rename",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "new_name": renamed.name,
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "feed_name": renamed.name,
+        "feed_name_hash": renamed.name_hash,
+        "feed_item_count": None,
+        "feed_unread_count": None,
+        "feed_posts_per_day": None,
+    }
+    assert renamed.exists()
+    assert not existing_feed.exists()
+
+
+def test_rename_nonexistent_feed(client, existing_user, token):
+    args = build_api_request_args(
+        path="/feed/rename",
+        params={"feed_name_hash": "nonexistent", "new_name": "whatever"},
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Feed not found"}
+
+
+def test_rename_feed_empty_name(client, existing_user, existing_feed, token):
+    args = build_api_request_args(
+        path="/feed/rename",
+        params={"feed_name_hash": existing_feed.name_hash, "new_name": "   "},
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 422
+
+
+def test_rename_feed_name_collision(client, existing_user, existing_feed, token):
+    from db.feed import Feed
+
+    other = Feed(user_hash=existing_user.name_hash, name="already taken")
+    other.create()
+
+    args = build_api_request_args(
+        path="/feed/rename",
+        params={"feed_name_hash": existing_feed.name_hash, "new_name": other.name},
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 409
+    # the original feed is untouched
+    assert existing_feed.exists()
+
+
 def test_get_feed(client, existing_user, existing_feed, token):
     args = build_api_request_args(
         path="/feed/get",

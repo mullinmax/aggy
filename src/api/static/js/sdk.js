@@ -105,6 +105,11 @@ class AggySDK {
     return this._request("GET", "/feed/ranking_stats", { query: { feed_name_hash } });
   }
 
+  /** Rename a feed */
+  async feedRename({ feed_name_hash, new_name }) {
+    return this._request("POST", "/feed/rename", { query: { feed_name_hash, new_name } });
+  }
+
   /** Re-evaluate prediction models and re-rank a feed now */
   async feedRerank({ feed_name_hash }) {
     return this._request("POST", "/feed/rerank", { query: { feed_name_hash } });

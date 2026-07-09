@@ -38,6 +38,29 @@ def create_feed(feed_name: str, user: User = Depends(authenticate)) -> FeedRespo
     return FeedResponse.from_db_model(feed)
 
 
+# rename feed
+@feed_router.post("/rename", summary="Rename a feed", response_model=FeedResponse)
+def rename_feed(
+    feed_name_hash: str, new_name: str, user: User = Depends(authenticate)
+) -> FeedResponse:
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+
+    new_name = new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=422, detail="Feed name cannot be empty")
+
+    if new_name != feed.name:
+        # renaming must not collide with another of the user's feeds
+        if Feed(user_hash=user.name_hash, name=new_name).exists():
+            raise HTTPException(
+                status_code=409,
+                detail=f'A feed named "{new_name}" already exists',
+            )
+        feed.rename(new_name)
+
+    return FeedResponse.from_db_model(feed)
+
+
 # delete feed
 @feed_router.delete(
     "/delete",

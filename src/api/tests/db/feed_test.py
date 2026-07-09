@@ -360,6 +360,43 @@ def test_feed_stats(unique_feed, unique_item_strict):
     assert stats["feed_posts_per_day"] == 3.0  # 3 items on day one
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_rename_feed_keeps_attached_data(unique_feed, unique_item_strict):
+    """Renaming a feed changes its hash but carries sources, items, votes,
+    and model stats along via the ON UPDATE CASCADE foreign keys."""
+    from db.item_state import ItemState
+
+    unique_feed.create()
+    source = _make_source(unique_feed, "source-a")
+    item = _add_item(
+        unique_feed, source, unique_item_strict, "http://example.com/keep", 3
+    )
+    ItemState(
+        user_hash=unique_feed.user_hash,
+        feed_hash=unique_feed.name_hash,
+        item_url_hash=item.url_hash,
+        score=1,
+    ).create()
+
+    old_hash = unique_feed.name_hash
+    unique_feed.rename("renamed feed")
+    new_hash = unique_feed.name_hash
+
+    assert new_hash != old_hash
+    # the old hash no longer resolves; the new one does
+    assert Feed.read(user_hash=unique_feed.user_hash, name_hash=old_hash) is None
+    renamed = Feed.read(user_hash=unique_feed.user_hash, name_hash=new_hash)
+    assert renamed is not None
+    assert renamed.name == "renamed feed"
+
+    # source, item, and vote all followed the feed to its new hash
+    assert source.name_hash in renamed.source_hashes
+    results = renamed.query_items_with_sources()
+    assert [i.url_hash for i, _ in results] == [item.url_hash]
+    assert results[0][1]["source_name"] == "source-a"
+    assert results[0][1]["user_score"] == 1
+
+
 def test_source_color_assigned_and_editable(unique_feed):
     """Sources get a palette color at creation; updates can change it."""
     from db.source import SOURCE_COLORS, Source
