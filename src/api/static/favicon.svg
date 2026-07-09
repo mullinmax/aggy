@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- Aggy the Aggregator: a flat little alligator -->
-  <rect width="64" height="64" rx="12" fill="#605DFF"/>
+  <!-- Aggy the Aggregator: a flat little alligator on a transparent background -->
   <!-- tail -->
   <path d="M10 40 C4 40 4 32 10 34 L16 36 L16 44 Z" fill="#3E9E55"/>
   <!-- head / body (side profile, facing right) -->
