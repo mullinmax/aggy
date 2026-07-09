@@ -448,13 +448,31 @@ function sourceBadge(name, storedColor) {
   }, name);
 }
 
-// Square "open original" button with an arrow, shown next to titles.
+// "Open in new tab" icon (matches the modal close button's size/style),
+// shown next to titles to open the source's original link.
+function openInNewTabIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('class', 'w-4 h-4');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('d', 'M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 '
+    + '005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25');
+  svg.appendChild(path);
+  return svg;
+}
+
+// "Open original" button, shown next to titles.
 function openLinkButton(url, cls = 'btn btn-ghost btn-xs btn-square text-base-content/60') {
   if (!url) return null;
   return h('a', {
     class: cls, href: url, target: '_blank', rel: 'noopener', title: 'Open original',
     onclick: (e) => e.stopPropagation(),
-  }, '↗');
+  }, openInNewTabIcon());
 }
 
 // Bar-chart icon that opens the per-article "why recommended?" breakdown.
@@ -643,7 +661,7 @@ function itemCard(item) {
   },
     h('div', { class: 'px-4 pt-3 pb-2' },
       h('div', { class: 'flex items-start gap-2' },
-        h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0' }, item.item_title || 'Untitled'),
+        h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0 line-clamp-2' }, item.item_title || 'Untitled'),
         explainButton(item),
         openLinkButton(item.item_url)),
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),

@@ -125,8 +125,12 @@
   <div class="modal-box max-w-3xl max-h-[90vh]">
     <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
     <div class="flex items-start gap-2 pr-8 mb-4">
-      <h2 class="text-xl font-bold flex-1 min-w-0" id="readerTitle"></h2>
-      <a class="btn btn-ghost btn-sm btn-square text-base-content/60" id="readerOpenLink" target="_blank" rel="noopener" title="Open original">↗</a>
+      <h2 class="text-xl font-bold flex-1 min-w-0 line-clamp-2" id="readerTitle"></h2>
+      <a class="btn btn-ghost btn-sm btn-circle text-base-content/60" id="readerOpenLink" target="_blank" rel="noopener" title="Open original">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-4 h-4">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/>
+        </svg>
+      </a>
     </div>
     <div id="readerMedia" class="mb-4 empty:hidden"></div>
     <div class="prose prose-sm max-w-none" id="readerContent"></div>
