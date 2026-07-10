@@ -292,6 +292,20 @@ async function toggleFilterPanel() {
 // against a stale snapshot of the selection.
 function renderFilterSources() {
   const selected = feedFilters.sources; // null = all
+  // "Toggle all" checks/unchecks every source at once; only shown when the
+  // feed has sources. Checked when all are selected (sources === null).
+  const toggleAllLabel = $('filterSourcesToggleAllLabel');
+  const toggleAll = $('filterSourcesToggleAll');
+  if (toggleAllLabel && toggleAll) {
+    toggleAllLabel.classList.toggle('hidden', !feedSourceList.length);
+    toggleAll.checked = selected === null;
+    toggleAll.onchange = (e) => {
+      // Checking selects all (null); unchecking clears the selection.
+      feedFilters.sources = e.target.checked ? null : [];
+      renderFilterSources();
+      reloadItems();
+    };
+  }
   render($('filterSources'),
     feedSourceList.length
       ? feedSourceList.map((s) =>
