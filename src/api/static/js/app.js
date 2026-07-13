@@ -47,6 +47,18 @@ function bindControls() {
   $('newFeedBtn').onclick = () => showModal('createFeedModal');
   $('createFeedForm').onsubmit = handleCreateFeed;
 
+  $('importBtn').onclick = openImportModal;
+  $('importParseBtn').onclick = handleImportParse;
+  $('importBackBtn').onclick = () => setImportStep('input');
+  $('importCreateBtn').onclick = handleImportCreate;
+  $('importSelectAll').onchange = (e) => {
+    importState.candidates.forEach((c) => { if (!c.error) c.selected = e.target.checked; });
+    renderImportCandidates();
+  };
+  $('importAssignApplyBtn').onclick = applyImportFeedToSelected;
+  $('importNewFeedBtn').onclick = createImportFeed;
+  $('importGroupFeedsBtn').onclick = createImportFeedsFromGroups;
+
   $('deleteFeedBtn').onclick = confirmDeleteFeed;
   $('renameFeedBtn').onclick = openRenameFeed;
   $('renameFeedForm').onsubmit = handleRenameFeed;
@@ -133,11 +145,13 @@ function onboardingWelcome() {
         step(1, 'Create a feed', 'A feed is a topic bucket, like "Technology" or "Sports".', true),
         step(2, 'Add sources', 'Point the feed at websites via templates or RSS URLs.', false),
         step(3, 'Read & vote', 'Articles roll in; upvote and downvote to tune your ranking.', false)),
-      h('div', { class: 'card-actions' },
+      h('div', { class: 'card-actions flex-col gap-2' },
         h('button', {
           class: 'btn btn-primary w-full',
           onclick: () => { onboardingContinue = true; showModal('createFeedModal'); $('newFeedName').focus(); },
-        }, 'Create your first feed'))));
+        }, 'Create your first feed'),
+        h('button', { class: 'btn btn-ghost btn-sm w-full', onclick: openImportModal },
+          'or import your Reddit / YouTube / Bluesky subscriptions'))));
 }
 
 function feedCard(feed) {
@@ -1224,6 +1238,300 @@ async function handleCreateManualSource(e) {
   } catch (err) {
     toast(err.message, 'alert-error');
   }
+}
+
+// ---------- bulk import ----------
+
+// Wizard for onboarding many sources at once: pick a platform and provide
+// subscription data (export file, pasted list, or username), review the
+// detected sources and assign each to a feed, then import.
+
+const IMPORT_PLATFORMS = {
+  reddit: {
+    label: 'Reddit',
+    help: 'Upload subscribed_subreddits.csv from your Reddit data export '
+      + '(reddit.com → Settings → Request data), or paste subreddit names or links below.',
+    fileAccept: '.csv,text/csv',
+    textPlaceholder: 'r/selfhosted\nr/alligators\nhttps://www.reddit.com/r/aquariums',
+  },
+  youtube: {
+    label: 'YouTube',
+    help: 'Upload subscriptions.csv from Google Takeout (takeout.google.com → '
+      + 'deselect all → YouTube → subscriptions only), or paste channel links or @handles below.',
+    fileAccept: '.csv,text/csv',
+    textPlaceholder: '@veritasium\nhttps://www.youtube.com/@kurzgesagt\nUCXuqSBlHAE6Xw-yeJA0Tunw',
+  },
+  bluesky: {
+    label: 'Bluesky',
+    help: 'Enter a Bluesky handle — every account it follows is fetched via '
+      + "Bluesky's public API, no login needed.",
+    username: true,
+  },
+  opml: {
+    label: 'RSS / OPML',
+    help: 'Upload the OPML file exported by your RSS reader or podcast app '
+      + '(Feedly, Inoreader, NewsBlur, AntennaPod, ...). Folders can become feeds.',
+    fileAccept: '.opml,.xml,text/xml,text/x-opml',
+    textPlaceholder: 'or paste OPML here',
+  },
+};
+
+let importState = { platform: 'reddit', candidates: [], feeds: [] };
+
+function openImportModal() {
+  importState = { platform: importState.platform, candidates: [], feeds: [] };
+  selectImportPlatform(importState.platform);
+  setImportStep('input');
+  showModal('importModal');
+  // feeds populate the per-row dropdowns on the review step
+  sdk.feedList().then((feeds) => { importState.feeds = feeds; }).catch(() => {});
+}
+
+function setImportStep(step) {
+  $('importStepInput').classList.toggle('hidden', step !== 'input');
+  $('importStepReview').classList.toggle('hidden', step !== 'review');
+  $('importStepResults').classList.toggle('hidden', step !== 'results');
+}
+
+function selectImportPlatform(platform) {
+  importState.platform = platform;
+  const cfg = IMPORT_PLATFORMS[platform];
+  render($('importPlatformTabs'),
+    Object.entries(IMPORT_PLATFORMS).map(([key, p]) =>
+      h('a', {
+        role: 'tab',
+        class: `tab${key === platform ? ' tab-active' : ''}`,
+        onclick: () => selectImportPlatform(key),
+      }, p.label)));
+  $('importHelp').textContent = cfg.help;
+  $('importFileControl').classList.toggle('hidden', !cfg.fileAccept);
+  $('importTextControl').classList.toggle('hidden', !cfg.textPlaceholder);
+  $('importUsernameControl').classList.toggle('hidden', !cfg.username);
+  if (cfg.fileAccept) $('importFile').setAttribute('accept', cfg.fileAccept);
+  $('importFile').value = '';
+  $('importText').value = '';
+  $('importText').placeholder = cfg.textPlaceholder || '';
+}
+
+const readFileText = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(new Error(`Couldn't read ${file.name}`));
+  reader.readAsText(file);
+});
+
+async function handleImportParse() {
+  const cfg = IMPORT_PLATFORMS[importState.platform];
+  const body = { platform: importState.platform };
+  if (cfg.username) {
+    body.username = $('importUsername').value.trim();
+    if (!body.username) { toast('Enter a handle first', 'alert-error'); return; }
+  } else {
+    // file and pasted text are combined so users can top up an export
+    const parts = [];
+    const file = $('importFile').files[0];
+    try {
+      if (file) parts.push(await readFileText(file));
+    } catch (err) {
+      toast(err.message, 'alert-error');
+      return;
+    }
+    if ($('importText').value.trim()) parts.push($('importText').value);
+    body.data = parts.join('\n');
+    if (!body.data.trim()) { toast('Upload a file or paste your subscriptions first', 'alert-error'); return; }
+  }
+
+  const btn = $('importParseBtn');
+  btn.disabled = true;
+  btn.textContent = 'Looking up…';
+  try {
+    const parsed = await sdk.importParse({ body });
+    // rows keep UI state (selected + target feed) alongside the candidate
+    const defaultFeed = importState.feeds.length === 1 ? importState.feeds[0].feed_name_hash : '';
+    importState.candidates = parsed.candidates.map((c) => ({
+      ...c,
+      selected: !c.error,
+      feedHash: defaultFeed,
+    }));
+    render($('importWarnings'), (parsed.warnings || []).map((w) =>
+      h('div', { class: 'text-xs text-warning' }, w)));
+    $('importGroupFeedsBtn').classList.toggle('hidden',
+      !importState.candidates.some((c) => c.group));
+    $('importSelectAll').checked = true;
+    renderImportFeedOptions();
+    renderImportCandidates();
+    setImportStep('review');
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find sources';
+  }
+}
+
+// The bulk-assign dropdown mirrors the per-row feed dropdowns.
+function renderImportFeedOptions() {
+  render($('importAssignFeed'),
+    h('option', { value: '' }, 'Pick a feed…'),
+    importState.feeds.map((f) => h('option', { value: f.feed_name_hash }, f.feed_name)));
+}
+
+function importFeedSelect(row) {
+  return h('select', {
+    class: `select select-bordered select-xs${row.feedHash ? '' : ' select-warning'}`,
+    onchange: (e) => { row.feedHash = e.target.value; renderImportCandidates(); },
+  },
+    h('option', { value: '', selected: !row.feedHash }, 'Pick a feed…'),
+    importState.feeds.map((f) =>
+      h('option', { value: f.feed_name_hash, selected: row.feedHash === f.feed_name_hash }, f.feed_name)));
+}
+
+function renderImportCandidates() {
+  const rows = importState.candidates;
+  const selected = rows.filter((r) => r.selected);
+  $('importSelectedCount').textContent =
+    `${selected.length} of ${rows.length} selected`;
+  $('importCreateBtn').disabled = !selected.length || selected.some((r) => !r.feedHash);
+  $('importCreateBtn').textContent = selected.length
+    ? `Import ${selected.length} source${selected.length === 1 ? '' : 's'}`
+    : 'Import';
+
+  render($('importCandidateList'), rows.map((row) =>
+    h('div', { class: `flex items-center gap-2 px-3 py-2 border-b border-base-300 last:border-b-0${row.error ? ' opacity-50' : ''}` },
+      h('input', {
+        type: 'checkbox', class: 'checkbox checkbox-sm checkbox-primary flex-shrink-0',
+        checked: row.selected, disabled: !!row.error,
+        onchange: (e) => { row.selected = e.target.checked; renderImportCandidates(); },
+      }),
+      h('div', { class: 'flex-1 min-w-0' },
+        h('input', {
+          type: 'text', class: 'input input-ghost input-xs w-full font-medium px-0',
+          value: row.name, title: 'Source name (editable)',
+          onchange: (e) => { row.name = e.target.value.trim() || row.name; },
+        }),
+        h('div', { class: `text-xs truncate ${row.error ? 'text-error' : 'text-base-content/40'}` },
+          row.error || [row.group, row.url].filter(Boolean).join(' · '))),
+      row.error ? null : importFeedSelect(row))));
+}
+
+function applyImportFeedToSelected() {
+  const feedHash = $('importAssignFeed').value;
+  if (!feedHash) { toast('Pick a feed to assign first', 'alert-error'); return; }
+  importState.candidates.forEach((row) => { if (row.selected) row.feedHash = feedHash; });
+  renderImportCandidates();
+}
+
+// Inline feed creation so the wizard works before any feed exists. The new
+// feed is assigned to the selected rows right away.
+async function createImportFeed() {
+  const name = prompt('Name for the new feed:');
+  if (!name || !name.trim()) return;
+  try {
+    const feed = await sdk.feedCreate({ feed_name: name.trim() });
+    if (!importState.feeds.some((f) => f.feed_name_hash === feed.feed_name_hash)) {
+      importState.feeds.push(feed);
+    }
+    renderImportFeedOptions();
+    $('importAssignFeed').value = feed.feed_name_hash;
+    importState.candidates.forEach((row) => { if (row.selected) row.feedHash = feed.feed_name_hash; });
+    renderImportCandidates();
+    toast(`Feed "${feed.feed_name}" created and assigned to selected sources`);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
+// OPML folders map naturally onto Aggy feeds: create a feed per folder and
+// assign each source to its folder's feed.
+async function createImportFeedsFromGroups() {
+  const groups = [...new Set(importState.candidates.map((c) => c.group).filter(Boolean))];
+  if (!groups.length) return;
+  const btn = $('importGroupFeedsBtn');
+  btn.disabled = true;
+  try {
+    for (const group of groups) {
+      // feed/create returns the existing feed when the name is already taken
+      const feed = await sdk.feedCreate({ feed_name: group });
+      if (!importState.feeds.some((f) => f.feed_name_hash === feed.feed_name_hash)) {
+        importState.feeds.push(feed);
+      }
+      importState.candidates.forEach((row) => {
+        if (row.group === group) row.feedHash = feed.feed_name_hash;
+      });
+    }
+    renderImportFeedOptions();
+    renderImportCandidates();
+    toast(`Assigned sources to ${groups.length} feed${groups.length === 1 ? '' : 's'} from folders`);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function handleImportCreate() {
+  const rows = importState.candidates.filter((r) => r.selected);
+  if (!rows.length) return;
+  if (rows.some((r) => !r.feedHash)) {
+    toast('Every selected source needs a feed', 'alert-error');
+    return;
+  }
+
+  const btn = $('importCreateBtn');
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  try {
+    const response = await sdk.importCreate({
+      body: {
+        sources: rows.map((r) => ({
+          feed_name_hash: r.feedHash,
+          source_name: r.name,
+          source_url: r.url,
+          template_name_hash: r.template_name_hash,
+          template_parameters: r.template_parameters,
+        })),
+      },
+    });
+    renderImportResults(response);
+    setImportStep('results');
+    loadFeeds();
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
+    renderImportCandidates();
+  }
+}
+
+function renderImportResults(response) {
+  const failed = response.results.filter((r) => r.status !== 'created');
+  const feedName = (hash) =>
+    (importState.feeds.find((f) => f.feed_name_hash === hash) || {}).feed_name || '';
+  render($('importResultsBody'),
+    h('div', { class: 'stats stats-horizontal shadow-none border border-base-300 w-full mb-3' },
+      h('div', { class: 'stat py-2' },
+        h('div', { class: 'stat-title text-xs' }, 'Imported'),
+        h('div', { class: 'stat-value text-lg text-success' }, String(response.created))),
+      h('div', { class: 'stat py-2' },
+        h('div', { class: 'stat-title text-xs' }, 'Already existed'),
+        h('div', { class: 'stat-value text-lg' }, String(response.duplicates))),
+      h('div', { class: 'stat py-2' },
+        h('div', { class: 'stat-title text-xs' }, 'Failed'),
+        h('div', { class: 'stat-value text-lg text-error' }, String(response.errors)))),
+    response.created
+      ? h('p', { class: 'text-xs text-base-content/60 mb-3' },
+          'Articles will roll in over the next hour or so as each new source is checked for the first time.')
+      : null,
+    failed.length
+      ? h('div', { class: 'max-h-[40vh] overflow-y-auto border border-base-300 rounded-lg' },
+          failed.map((r) =>
+            h('div', { class: 'px-3 py-2 border-b border-base-300 last:border-b-0' },
+              h('div', { class: 'text-sm font-medium' },
+                r.source_name,
+                h('span', { class: 'text-base-content/40 font-normal' }, ` → ${feedName(r.feed_name_hash)}`)),
+              h('div', { class: `text-xs ${r.status === 'error' ? 'text-error' : 'text-base-content/50'}` },
+                r.detail || r.status))))
+      : null);
 }
 
 // ---------- source templates ----------

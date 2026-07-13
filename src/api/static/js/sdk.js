@@ -125,6 +125,16 @@ class AggySDK {
     return this._request("GET", "/health");
   }
 
+  /** Create many sources at once, each in its chosen feed */
+  async importCreate({ body }) {
+    return this._request("POST", "/import/create", { body });
+  }
+
+  /** Parse subscription data (export file, pasted list, or username) into source candidates */
+  async importParse({ body }) {
+    return this._request("POST", "/import/parse", { body });
+  }
+
   /** Get State */
   async itemGetState({ feed_hash, item_url_hash }) {
     return this._request("GET", "/item/get_state", { query: { feed_hash, item_url_hash } });

@@ -27,6 +27,7 @@ from routers.auth import auth_router
 from routers.feed import feed_router
 from routers.source_template import source_template_router
 from routers.source import source_router
+from routers.bulk_import import bulk_import_router
 from routers.item import item_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
@@ -124,6 +125,7 @@ app.include_router(
     source_template_router, prefix="/source_template", tags=["Source Templates"]
 )
 app.include_router(source_router, prefix="/source", tags=["Sources"])
+app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
 app.include_router(web_router)
 
