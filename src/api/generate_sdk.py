@@ -9,6 +9,7 @@ Usage:
     python generate_sdk.py          # write static/js/sdk.js
     python generate_sdk.py --check  # exit 1 if sdk.js is stale
 """
+
 import json
 import re
 import sys
@@ -24,6 +25,7 @@ def build_app():
     from routers.feed import feed_router
     from routers.source_template import source_template_router
     from routers.source import source_router
+    from routers.bulk_import import bulk_import_router
     from routers.item import item_router
 
     app = FastAPI()
@@ -34,6 +36,7 @@ def build_app():
         source_template_router, prefix="/source_template", tags=["Source Templates"]
     )
     app.include_router(source_router, prefix="/source", tags=["Sources"])
+    app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
     app.include_router(item_router, prefix="/item", tags=["Items"])
     return app
 
@@ -117,9 +120,7 @@ def generate_sdk(spec):
 
             js_path = path
             for p in path_params:
-                js_path = js_path.replace(
-                    "{" + p["name"] + "}", "${" + p["name"] + "}"
-                )
+                js_path = js_path.replace("{" + p["name"] + "}", "${" + p["name"] + "}")
             uses_template = "${" in js_path
             path_expr = f"`{js_path}`" if uses_template else json.dumps(js_path)
 

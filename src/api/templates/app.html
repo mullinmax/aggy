@@ -26,7 +26,10 @@
         <h1 class="text-2xl font-bold">Your Feeds</h1>
         <p class="text-sm text-base-content/60 mt-1">Curated content, ranked by relevance</p>
       </div>
-      <button class="btn btn-primary btn-sm" id="newFeedBtn">+ New Feed</button>
+      <div class="flex gap-2">
+        <button class="btn btn-ghost btn-sm" id="importBtn">Import</button>
+        <button class="btn btn-primary btn-sm" id="newFeedBtn">+ New Feed</button>
+      </div>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="feedGrid"></div>
   </div>
@@ -293,6 +296,68 @@
     <div class="modal-action">
       <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
       <button class="btn btn-primary" id="editSourceSaveBtn">Save Changes</button>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<!-- Import Subscriptions Modal -->
+<dialog class="modal" id="importModal">
+  <div class="modal-box max-w-3xl">
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
+    <h3 class="text-lg font-bold mb-1">Import Subscriptions</h3>
+    <p class="text-xs text-base-content/60 mb-4">
+      Bring your subscriptions over in bulk, then pick which feed each source goes to.
+    </p>
+
+    <!-- Step 1: platform & data -->
+    <div id="importStepInput">
+      <div role="tablist" class="tabs tabs-boxed mb-3" id="importPlatformTabs"></div>
+      <p class="text-xs text-base-content/60 mb-3" id="importHelp"></p>
+      <div class="form-control mb-3" id="importFileControl">
+        <input type="file" class="file-input file-input-bordered w-full" id="importFile">
+      </div>
+      <div class="form-control mb-3" id="importTextControl">
+        <textarea class="textarea textarea-bordered w-full" rows="4" id="importText"></textarea>
+      </div>
+      <div class="form-control mb-3 hidden" id="importUsernameControl">
+        <input type="text" class="input input-bordered w-full" id="importUsername" placeholder="you.bsky.social">
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+        <button class="btn btn-primary" id="importParseBtn">Find sources</button>
+      </div>
+    </div>
+
+    <!-- Step 2: review & assign feeds -->
+    <div id="importStepReview" class="hidden">
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <span class="text-xs text-base-content/60">Assign selected to</span>
+        <select class="select select-bordered select-sm" id="importAssignFeed"></select>
+        <button class="btn btn-sm" id="importAssignApplyBtn">Apply</button>
+        <button class="btn btn-sm btn-ghost" id="importNewFeedBtn">+ New feed</button>
+        <button class="btn btn-sm btn-ghost hidden" id="importGroupFeedsBtn"
+          title="Create a feed for each folder in the import and assign its sources to it">
+          Use folders as feeds</button>
+      </div>
+      <label class="label cursor-pointer justify-start gap-2 py-1">
+        <input type="checkbox" class="checkbox checkbox-sm checkbox-primary" id="importSelectAll" checked>
+        <span class="label-text text-xs" id="importSelectedCount"></span>
+      </label>
+      <div class="max-h-[45vh] overflow-y-auto border border-base-300 rounded-lg" id="importCandidateList"></div>
+      <div id="importWarnings" class="mt-2 flex flex-col gap-1"></div>
+      <div class="modal-action">
+        <button class="btn btn-ghost" id="importBackBtn">Back</button>
+        <button class="btn btn-primary" id="importCreateBtn">Import</button>
+      </div>
+    </div>
+
+    <!-- Step 3: results -->
+    <div id="importStepResults" class="hidden">
+      <div id="importResultsBody"></div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+      </div>
     </div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
