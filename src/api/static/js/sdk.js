@@ -175,9 +175,14 @@ class AggySDK {
     return this._request("POST", "/source_analyze/preview", { body });
   }
 
-  /** Analyze a website and suggest CSS selectors for a feed */
+  /** Start analyzing a website to suggest CSS selectors for a feed */
   async sourceAnalyzeSuggest({ body }) {
     return this._request("POST", "/source_analyze/suggest", { body });
+  }
+
+  /** Poll a website-analysis job for its result */
+  async sourceAnalyzeSuggestResult({ job_id }) {
+    return this._request("GET", "/source_analyze/suggest_result", { query: { job_id } });
   }
 
   /** Create a source from a template */

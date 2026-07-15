@@ -41,8 +41,37 @@ PAGE_FETCH_HEADERS = {
 # HTML attributes that help identify elements; everything else is stripped
 # before the page is shown to the model to save context space.
 KEPT_ATTRIBUTES = ("class", "id", "href", "datetime", "itemprop")
-CONDENSED_HTML_MAX_CHARS = 30_000
-CONDENSED_TEXT_MAX_CHARS = 80
+# Tags that never contain the article list and only slow the model down.
+# nav/footer hold link farms; media/form elements carry no selector info.
+STRIPPED_TAGS = (
+    "script",
+    "style",
+    "noscript",
+    "svg",
+    "iframe",
+    "link",
+    "meta",
+    "template",
+    "nav",
+    "footer",
+    "form",
+    "input",
+    "button",
+    "select",
+    "textarea",
+    "img",
+    "picture",
+    "source",
+    "video",
+    "audio",
+    "canvas",
+)
+CONDENSED_HTML_MAX_CHARS = 20_000
+CONDENSED_TEXT_MAX_CHARS = 60
+# Repeated sibling groups (the article list itself) are cut down to this many
+# exemplars: the model only needs a few entries to name the pattern, and long
+# listing pages otherwise blow the context/processing budget.
+REPEATED_SIBLINGS_KEPT = 5
 
 # sanity bounds for an "article entry" selector: one match is a page layout
 # element, hundreds are navigation links or tag clouds
@@ -95,14 +124,25 @@ def condense_html(html: str) -> str:
     """Strip a page down to its structural skeleton for the model prompt."""
     soup = BeautifulSoup(html, "html.parser")
 
-    for tag in soup(
-        ["script", "style", "noscript", "svg", "iframe", "link", "meta", "template"]
-    ):
+    for tag in soup(list(STRIPPED_TAGS)):
         tag.decompose()
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
         comment.extract()
 
     body = soup.body or soup
+
+    # Collapse repeated siblings (same tag + class) beyond a few exemplars.
+    # This is what keeps 100-item listing pages small without losing the
+    # structure the model needs to name the repeating pattern.
+    for parent in [body, *body.find_all(True)]:
+        groups = {}
+        for child in parent.find_all(True, recursive=False):
+            key = (child.name, tuple(child.get("class", [])))
+            groups.setdefault(key, []).append(child)
+        for children in groups.values():
+            for extra in children[REPEATED_SIBLINGS_KEPT:]:
+                extra.decompose()
+
     for tag in body.find_all(True):
         kept = {}
         for attr in KEPT_ATTRIBUTES:
@@ -210,22 +250,34 @@ def _pull_model_in_background(model: str) -> None:
     threading.Thread(target=pull, daemon=True).start()
 
 
+def _chat(client, model: str, prompt: str):
+    chat_kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "format": _SUGGESTION_SCHEMA,
+        "options": {
+            "temperature": 0,
+            "num_ctx": config.get_int("OLLAMA_ANALYSIS_NUM_CTX"),
+        },
+    }
+    # Thinking models (qwen3, deepseek-r1, ...) spend minutes on a reasoning
+    # trace before the JSON unless thinking is disabled. Older Ollama servers
+    # and non-thinking models reject the parameter, so fall back without it.
+    try:
+        return client.chat(think=False, **chat_kwargs)
+    except Exception as e:
+        if "think" in str(e).lower():
+            return client.chat(**chat_kwargs)
+        raise
+
+
 def request_selector_suggestions(url: str, html: str) -> dict:
     """Ask the Ollama analysis model for candidate selectors (unvalidated)."""
     model = config.get("OLLAMA_ANALYSIS_MODEL")
     prompt = _PROMPT.format(url=url, html=condense_html(html))
 
     try:
-        client = get_ollama_connection()
-        response = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            format=_SUGGESTION_SCHEMA,
-            options={
-                "temperature": 0,
-                "num_ctx": config.get_int("OLLAMA_ANALYSIS_NUM_CTX"),
-            },
-        )
+        response = _chat(get_ollama_connection(), model, prompt)
     except Exception as e:
         # a missing model is recoverable: kick off a pull and tell the user
         status = getattr(e, "status_code", None)

@@ -1,4 +1,7 @@
 import logging
+import threading
+import time
+import uuid
 
 import requests
 import feedparser
@@ -18,6 +21,8 @@ from bridge.analyze import (
 from db.source_template import SourceTemplate
 from db.user import User
 from route_models.source_analyze import (
+    AnalyzeJobResponse,
+    AnalyzeJobStatus,
     AnalyzeRequest,
     AnalyzeResponse,
     PreviewItem,
@@ -45,22 +50,20 @@ def _css_selector_template() -> SourceTemplate:
     return template
 
 
-@source_analyze_router.post(
-    "/suggest",
-    summary="Analyze a website and suggest CSS selectors for a feed",
-    response_model=AnalyzeResponse,
-)
-def suggest_selectors(
-    request: AnalyzeRequest, user: User = Depends(authenticate)
-) -> AnalyzeResponse:
-    template = _css_selector_template()
+# Analysis runs as a background job: the LLM pass can take minutes on CPU,
+# which outlives reverse-proxy timeouts (Cloudflare cuts requests at ~100s
+# with a 524), so /suggest returns a job id immediately and the client polls
+# /suggest_result. Jobs live in memory; a restart simply loses in-flight
+# analyses and the user re-runs them.
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+JOB_TTL_SECONDS = 15 * 60
 
-    try:
-        html = fetch_page(request.url)
-        raw = request_selector_suggestions(request.url, html)
-        candidates = validate_suggestions(html, request.url, raw)
-    except AnalyzeError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+def _analyze(url: str, template_name_hash: str) -> AnalyzeResponse:
+    html = fetch_page(url)
+    raw = request_selector_suggestions(url, html)
+    candidates = validate_suggestions(html, url, raw)
 
     def best(field: str) -> str:
         return candidates[field][0].selector if candidates[field] else ""
@@ -68,13 +71,13 @@ def suggest_selectors(
     title = page_title(html)
     return AnalyzeResponse(
         page_title=title or None,
-        suggested_source_name=suggest_source_name(title, request.url),
-        template_name_hash=template.name_hash,
+        suggested_source_name=suggest_source_name(title, url),
+        template_name_hash=template_name_hash,
         candidates=candidates,
         # author/time start disabled even when candidates exist: they're
         # nice-to-haves, and a bad time selector can break the whole feed
         defaults={
-            "home_page": request.url,
+            "home_page": url,
             "entry_element_selector": best("entry_element_selector"),
             "title_selector": best("title_selector"),
             "url_selector": best("url_selector"),
@@ -84,6 +87,73 @@ def suggest_selectors(
             "limit": "10",
         },
     )
+
+
+def _run_suggest_job(job_id: str, url: str, template_name_hash: str) -> None:
+    try:
+        result = _analyze(url, template_name_hash)
+        update = {"status": "done", "result": result}
+    except AnalyzeError as e:
+        update = {"status": "error", "detail": str(e), "status_code": e.status_code}
+    except Exception as e:
+        logging.exception(f"selector analysis of {url} failed")
+        update = {"status": "error", "detail": str(e), "status_code": 500}
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id].update(update)
+
+
+def _drop_stale_jobs() -> None:
+    cutoff = time.monotonic() - JOB_TTL_SECONDS
+    with _jobs_lock:
+        for job_id in [j for j, job in _jobs.items() if job["created"] < cutoff]:
+            del _jobs[job_id]
+
+
+@source_analyze_router.post(
+    "/suggest",
+    summary="Start analyzing a website to suggest CSS selectors for a feed",
+    response_model=AnalyzeJobResponse,
+)
+def suggest_selectors(
+    request: AnalyzeRequest, user: User = Depends(authenticate)
+) -> AnalyzeJobResponse:
+    template = _css_selector_template()
+    _drop_stale_jobs()
+
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "running",
+            "user_hash": user.name_hash,
+            "created": time.monotonic(),
+        }
+    threading.Thread(
+        target=_run_suggest_job,
+        args=(job_id, request.url, template.name_hash),
+        daemon=True,
+    ).start()
+    return AnalyzeJobResponse(job_id=job_id)
+
+
+@source_analyze_router.get(
+    "/suggest_result",
+    summary="Poll a website-analysis job for its result",
+    response_model=AnalyzeJobStatus,
+)
+def suggest_result(job_id: str, user: User = Depends(authenticate)) -> AnalyzeJobStatus:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None and job["user_hash"] != user.name_hash:
+            job = None
+        job = dict(job) if job is not None else None
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    if job["status"] == "error":
+        raise HTTPException(status_code=job["status_code"], detail=job["detail"])
+    if job["status"] == "done":
+        return AnalyzeJobStatus(status="done", result=job["result"])
+    return AnalyzeJobStatus(status="running")
 
 
 def _first_image(content_html: str):

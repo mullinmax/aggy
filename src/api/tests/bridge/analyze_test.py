@@ -105,9 +105,12 @@ def test_condense_html_strips_noise_and_truncates_text():
     assert "First post" in condensed  # text kept
 
 
-def test_condense_html_caps_length():
-    huge = "<body>" + "<div class='x'>word </div>" * 20000 + "</body>"
-    assert len(condense_html(huge)) <= 30_000
+def test_condense_html_caps_length_and_collapses_repeats():
+    huge = "<body>" + "<div class='x'><span>word</span></div>" * 20000 + "</body>"
+    condensed = condense_html(huge)
+    assert len(condensed) <= 20_000
+    # repeated identical siblings collapse to a few exemplars
+    assert condensed.count('<div class="x">') == 5
 
 
 def test_php_time_format_to_strptime():

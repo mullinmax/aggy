@@ -1,7 +1,11 @@
+import time
+
 import pytest
 
 from tests.testing_utils import build_api_request_args
 from tests.bridge.analyze_test import SAMPLE_HTML, RAW_SUGGESTIONS
+
+from bridge.analyze import AnalyzeError
 
 from db.source_template import SourceTemplate, SourceTemplateParameter
 
@@ -56,6 +60,20 @@ class FakeResponse:
         self.status_code = status_code
 
 
+def poll_suggest_job(client, token, job_id, timeout_seconds=10):
+    """Poll the suggest_result endpoint until the background job finishes."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        response = client.get(
+            f"/source_analyze/suggest_result?job_id={job_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.status_code != 200 or response.json()["status"] != "running":
+            return response
+        assert time.monotonic() < deadline, "analysis job never finished"
+        time.sleep(0.05)
+
+
 def test_suggest_returns_validated_candidates(
     client, token, css_selector_template, monkeypatch
 ):
@@ -72,8 +90,14 @@ def test_suggest_returns_validated_candidates(
     )
     response = client.post(**args)
 
+    # analysis runs as a background job the client polls for
     assert response.status_code == 200
-    data = response.json()
+    job_id = response.json()["job_id"]
+
+    response = poll_suggest_job(client, token, job_id)
+    assert response.status_code == 200
+    assert response.json()["status"] == "done"
+    data = response.json()["result"]
 
     assert data["page_title"] == "Example Blog | Great Posts"
     assert data["suggested_source_name"] == "Example Blog"
@@ -103,6 +127,34 @@ def test_suggest_without_template_is_503(client, token, monkeypatch):
     response = client.post(**args)
 
     assert response.status_code == 503
+
+
+def test_suggest_job_errors_are_surfaced_on_poll(
+    client, token, css_selector_template, monkeypatch
+):
+    def failing_fetch(url):
+        raise AnalyzeError("Couldn't fetch the page", status_code=502)
+
+    monkeypatch.setattr("routers.source_analyze.fetch_page", failing_fetch)
+
+    args = build_api_request_args(
+        path="/source_analyze/suggest",
+        token=token,
+        data={"url": "https://example.com/blog/"},
+    )
+    job_id = client.post(**args).json()["job_id"]
+
+    response = poll_suggest_job(client, token, job_id)
+    assert response.status_code == 502
+    assert "Couldn't fetch" in response.json()["detail"]
+
+
+def test_suggest_result_unknown_job_is_404(client, token):
+    response = client.get(
+        "/source_analyze/suggest_result?job_id=nope",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 404
 
 
 def test_suggest_requires_auth(client):

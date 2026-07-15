@@ -35,6 +35,18 @@ class AnalyzeResponse(BaseRouteModel):
     defaults: Dict[str, str]
 
 
+class AnalyzeJobResponse(BaseRouteModel):
+    # analysis runs as a background job (an LLM pass can outlive proxy
+    # timeouts); the client polls suggest_result with this id
+    job_id: str
+
+
+class AnalyzeJobStatus(BaseRouteModel):
+    # "running" while the job works; "done" comes with the result attached
+    status: str
+    result: Optional[AnalyzeResponse] = None
+
+
 class PreviewRequest(BaseRouteModel):
     # CssSelectorComplexBridge parameters (home_page, entry_element_selector, ...)
     parameters: Dict[str, str]

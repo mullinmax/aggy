@@ -1272,6 +1272,27 @@ function resetAnalyzeTab() {
   $('analyzeBtn').disabled = false;
 }
 
+// Analysis runs server-side as a background job (LLM passes can take minutes
+// on CPU, longer than most reverse-proxy timeouts allow a request to live),
+// so we start it and poll for the result every couple of seconds.
+const ANALYZE_POLL_MS = 2000;
+const ANALYZE_TIMEOUT_MS = 8 * 60 * 1000;
+
+async function pollAnalyzeJob(jobId) {
+  const started = Date.now();
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, ANALYZE_POLL_MS));
+    const job = await sdk.sourceAnalyzeSuggestResult({ job_id: jobId });
+    if (job.status === 'done') return job.result;
+    if (Date.now() - started > ANALYZE_TIMEOUT_MS) {
+      throw new Error('Analysis timed out — Ollama may be overloaded or the model is still loading');
+    }
+    const seconds = Math.round((Date.now() - started) / 1000);
+    $('analyzeProgressText').textContent =
+      `Asking Ollama for selectors — ${seconds}s. The first run after a restart is slowest (the model loads into memory).`;
+  }
+}
+
 async function handleAnalyzeWebsite(e) {
   e.preventDefault();
   const url = $('analyzeUrl').value.trim();
@@ -1280,9 +1301,10 @@ async function handleAnalyzeWebsite(e) {
   $('analyzeBtn').disabled = true;
   $('analyzeProgress').classList.remove('hidden');
   $('analyzeProgressText').textContent =
-    'Scraping the page and asking Ollama for selectors — this can take a minute…';
+    'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
   try {
-    const suggestion = await sdk.sourceAnalyzeSuggest({ body: { url } });
+    const job = await sdk.sourceAnalyzeSuggest({ body: { url } });
+    const suggestion = await pollAnalyzeJob(job.job_id);
     analyzeState = { suggestion, params: { ...suggestion.defaults } };
     $('analyzeSourceName').value = suggestion.suggested_source_name || '';
     renderAnalyzeFields();
