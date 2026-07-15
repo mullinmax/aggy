@@ -1303,9 +1303,11 @@ async function handleAnalyzeWebsite(e) {
   $('analyzeProgressText').textContent =
     'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
   try {
-    const job = await sdk.sourceAnalyzeSuggest({ body: { url } });
+    const cookie = $('analyzeCookie').value.trim() || null;
+    const job = await sdk.sourceAnalyzeSuggest({ body: { url, cookie } });
     const suggestion = await pollAnalyzeJob(job.job_id);
-    analyzeState = { suggestion, params: { ...suggestion.defaults } };
+    // custom: fields where the user typed a selector instead of picking one
+    analyzeState = { suggestion, params: { ...suggestion.defaults }, custom: {} };
     $('analyzeSourceName').value = suggestion.suggested_source_name || '';
     renderAnalyzeFields();
     $('analyzeInputStep').classList.add('hidden');
@@ -1319,48 +1321,83 @@ async function handleAnalyzeWebsite(e) {
   }
 }
 
-// A candidate's samples, shown under its dropdown so the user can judge the
-// selection without reading CSS.
-function analyzeSampleLine(field) {
+// A candidate's extracted samples, one per line so it's obvious where each
+// title/link ends and the next begins (a bad parse looks like one long run).
+function analyzeFieldSamples(field) {
+  if (analyzeState.custom[field.key]) return [];
   const candidates = analyzeState.suggestion.candidates[field.key] || [];
   const current = candidates.find((c) => c.selector === analyzeState.params[field.key]);
-  if (!current || !current.samples.length) return '';
-  return current.samples.join('  ·  ');
+  return current ? current.samples : [];
 }
+
+const ANALYZE_CUSTOM = '__custom__';
 
 function renderAnalyzeFields() {
   render($('analyzeFields'), ANALYZE_FIELDS.map((field) => {
     const candidates = analyzeState.suggestion.candidates[field.key] || [];
-    if (!candidates.length && !field.required) return null;
+    const isCustom = !!analyzeState.custom[field.key];
 
-    const sampleId = `analyzeSample_${field.key}`;
     const select = h('select', {
       class: 'select select-bordered select-sm w-full font-mono',
       onchange: (e) => {
-        analyzeState.params[field.key] = e.target.value;
-        if (field.key === 'time_selector') {
-          // the bridge needs the matching PHP format alongside the selector
-          const chosen = candidates.find((c) => c.selector === e.target.value);
-          analyzeState.params.time_format = (chosen && chosen.time_format) || '';
+        if (e.target.value === ANALYZE_CUSTOM) {
+          analyzeState.custom[field.key] = true;
+        } else {
+          analyzeState.custom[field.key] = false;
+          analyzeState.params[field.key] = e.target.value;
+          if (field.key === 'time_selector') {
+            // the bridge needs the matching PHP format alongside the selector
+            const chosen = candidates.find((c) => c.selector === e.target.value);
+            analyzeState.params.time_format = (chosen && chosen.time_format) || '';
+          }
+          scheduleAnalyzePreview();
         }
-        $(sampleId).textContent = analyzeSampleLine(field);
-        scheduleAnalyzePreview();
+        renderAnalyzeFields();
       },
     },
       field.none ? h('option', {
-        value: '', selected: !analyzeState.params[field.key],
+        value: '', selected: !isCustom && !analyzeState.params[field.key],
       }, `(${field.none})`) : null,
       candidates.map((c) => h('option', {
-        value: c.selector, selected: analyzeState.params[field.key] === c.selector,
-      }, `${c.selector}  (${c.match_count} match${c.match_count === 1 ? '' : 'es'})`)));
+        value: c.selector,
+        selected: !isCustom && analyzeState.params[field.key] === c.selector,
+      }, `${c.selector}  (${c.match_count} match${c.match_count === 1 ? '' : 'es'})`)),
+      h('option', { value: ANALYZE_CUSTOM, selected: isCustom }, 'Custom selector…'));
 
+    // free-text override, so a wrong or missing suggestion is always fixable
+    const customInput = isCustom && h('input', {
+      type: 'text',
+      class: 'input input-bordered input-sm w-full font-mono mt-1',
+      value: analyzeState.params[field.key] || '',
+      placeholder: field.required ? 'div.article' : '.byline a',
+      oninput: (e) => { analyzeState.params[field.key] = e.target.value.trim(); scheduleAnalyzePreview(); },
+    });
+
+    // the date needs a parse format next to its selector; keep it editable so
+    // an off-by-hours or misparsed date can be corrected by hand
+    const showTimeFormat = field.key === 'time_selector'
+      && (isCustom || analyzeState.params.time_selector);
+    const timeFormatInput = showTimeFormat && h('div', { class: 'mt-1' },
+      h('label', { class: 'label py-0' },
+        h('span', { class: 'label-text-alt text-base-content/50' },
+          'Date format (PHP date(), e.g. Y-m-d\\TH:i:sP or d/m/Y H:i)')),
+      h('input', {
+        type: 'text',
+        class: 'input input-bordered input-sm w-full font-mono',
+        value: analyzeState.params.time_format || '',
+        oninput: (e) => { analyzeState.params.time_format = e.target.value.trim(); scheduleAnalyzePreview(); },
+      }));
+
+    const samples = analyzeFieldSamples(field);
     return h('div', { class: 'form-control mb-2' },
       h('label', { class: 'label py-1' },
         h('span', { class: 'label-text text-xs font-medium' },
           field.label + (field.required ? ' *' : ''))),
       select,
-      h('div', { class: 'text-xs text-base-content/40 truncate mt-0.5', id: sampleId },
-        analyzeSampleLine(field)));
+      customInput,
+      timeFormatInput,
+      samples.length ? h('div', { class: 'mt-0.5' },
+        samples.map((s) => h('div', { class: 'text-xs text-base-content/40 truncate' }, `‣ ${s}`))) : null);
   }));
 }
 

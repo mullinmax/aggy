@@ -60,8 +60,8 @@ _jobs_lock = threading.Lock()
 JOB_TTL_SECONDS = 15 * 60
 
 
-def _analyze(url: str, template_name_hash: str) -> AnalyzeResponse:
-    html = fetch_page(url)
+def _analyze(url: str, template_name_hash: str, cookie: str) -> AnalyzeResponse:
+    html = fetch_page(url, cookie=cookie)
     raw = request_selector_suggestions(url, html)
     candidates = validate_suggestions(html, url, raw)
 
@@ -78,6 +78,7 @@ def _analyze(url: str, template_name_hash: str) -> AnalyzeResponse:
         # nice-to-haves, and a bad time selector can break the whole feed
         defaults={
             "home_page": url,
+            "cookie": cookie,
             "entry_element_selector": best("entry_element_selector"),
             "title_selector": best("title_selector"),
             "url_selector": best("url_selector"),
@@ -89,9 +90,11 @@ def _analyze(url: str, template_name_hash: str) -> AnalyzeResponse:
     )
 
 
-def _run_suggest_job(job_id: str, url: str, template_name_hash: str) -> None:
+def _run_suggest_job(
+    job_id: str, url: str, template_name_hash: str, cookie: str
+) -> None:
     try:
-        result = _analyze(url, template_name_hash)
+        result = _analyze(url, template_name_hash, cookie)
         update = {"status": "done", "result": result}
     except AnalyzeError as e:
         update = {"status": "error", "detail": str(e), "status_code": e.status_code}
@@ -130,7 +133,7 @@ def suggest_selectors(
         }
     threading.Thread(
         target=_run_suggest_job,
-        args=(job_id, request.url, template.name_hash),
+        args=(job_id, request.url, template.name_hash, request.cookie or ""),
         daemon=True,
     ).start()
     return AnalyzeJobResponse(job_id=job_id)

@@ -5,6 +5,9 @@ from .base import BaseRouteModel
 
 class AnalyzeRequest(BaseRouteModel):
     url: str
+    # optional raw Cookie header, for sites that hide content behind a
+    # consent/age wall; carried through to the saved source's bridge config
+    cookie: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {"example": {"url": "https://example.com/blog/"}}

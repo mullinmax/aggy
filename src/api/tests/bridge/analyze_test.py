@@ -108,9 +108,9 @@ def test_condense_html_strips_noise_and_truncates_text():
 def test_condense_html_caps_length_and_collapses_repeats():
     huge = "<body>" + "<div class='x'><span>word</span></div>" * 20000 + "</body>"
     condensed = condense_html(huge)
-    assert len(condensed) <= 20_000
+    assert len(condensed) <= 60_000
     # repeated identical siblings collapse to a few exemplars
-    assert condensed.count('<div class="x">') == 5
+    assert condensed.count('<div class="x">') == 8
 
 
 def test_php_time_format_to_strptime():

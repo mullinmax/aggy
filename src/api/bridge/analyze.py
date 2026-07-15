@@ -40,9 +40,10 @@ PAGE_FETCH_HEADERS = {
 
 # HTML attributes that help identify elements; everything else is stripped
 # before the page is shown to the model to save context space.
-KEPT_ATTRIBUTES = ("class", "id", "href", "datetime", "itemprop")
-# Tags that never contain the article list and only slow the model down.
-# nav/footer hold link farms; media/form elements carry no selector info.
+KEPT_ATTRIBUTES = ("class", "id", "href", "src", "datetime", "itemprop")
+# Only tags that carry no selector information at all are stripped; the
+# sibling-collapse below is what keeps the prompt small, so page structure
+# (nav, footers, forms, images) survives for the model to reason about.
 STRIPPED_TAGS = (
     "script",
     "style",
@@ -52,32 +53,19 @@ STRIPPED_TAGS = (
     "link",
     "meta",
     "template",
-    "nav",
-    "footer",
-    "form",
-    "input",
-    "button",
-    "select",
-    "textarea",
-    "img",
-    "picture",
-    "source",
-    "video",
-    "audio",
-    "canvas",
 )
-CONDENSED_HTML_MAX_CHARS = 20_000
-CONDENSED_TEXT_MAX_CHARS = 60
+CONDENSED_HTML_MAX_CHARS = 60_000
+CONDENSED_TEXT_MAX_CHARS = 100
 # Repeated sibling groups (the article list itself) are cut down to this many
 # exemplars: the model only needs a few entries to name the pattern, and long
 # listing pages otherwise blow the context/processing budget.
-REPEATED_SIBLINGS_KEPT = 5
+REPEATED_SIBLINGS_KEPT = 8
 
 # sanity bounds for an "article entry" selector: one match is a page layout
 # element, hundreds are navigation links or tag clouds
 ENTRY_MATCH_MIN = 2
 ENTRY_MATCH_MAX = 300
-MAX_CANDIDATES_PER_FIELD = 4
+MAX_CANDIDATES_PER_FIELD = 6
 SAMPLES_PER_CANDIDATE = 3
 SAMPLE_MAX_CHARS = 120
 
@@ -90,16 +78,25 @@ class AnalyzeError(Exception):
         self.status_code = status_code
 
 
-def fetch_page(url: str) -> str:
-    """Download a page's HTML, with guardrails on scheme, size, and type."""
+def fetch_page(url: str, cookie: str = "") -> str:
+    """Download a page's HTML, with guardrails on scheme, size, and type.
+
+    ``cookie`` is an optional raw Cookie header, for sites that hide their
+    content behind a consent/age wall until a stored cookie says otherwise
+    (the same value is passed to rss-bridge's cookie parameter later).
+    """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise AnalyzeError("URL must start with http:// or https://")
 
+    headers = dict(PAGE_FETCH_HEADERS)
+    if cookie:
+        headers["Cookie"] = cookie
+
     try:
         response = requests.get(
             url,
-            headers=PAGE_FETCH_HEADERS,
+            headers=headers,
             timeout=PAGE_FETCH_TIMEOUT_SECONDS,
             stream=True,
         )
@@ -205,20 +202,22 @@ _PROMPT = """You are helping turn a web page into an RSS feed by picking CSS sel
 Below is the condensed HTML of the page. It lists articles/posts/videos (the "entries").
 
 Propose selectors for these fields:
-- entry_element_selector: 2 to 4 alternative selectors, each matching exactly one element
+- entry_element_selector: 3 to 6 alternative selectors, each matching exactly one element
   per entry (the repeated card/row/list-item container). Prefer stable class names over
-  positional selectors. Every entry element must contain a link to the article.
-- title_selector: 1 to 3 selectors for the entry's title, RELATIVE to an entry element
+  positional selectors. Every entry element must contain a link to the article. Offer
+  genuinely different alternatives (different container levels, different class names).
+- title_selector: 2 to 4 selectors for the entry's title, RELATIVE to an entry element
   (e.g. "h2", "a.title").
-- url_selector: 1 to 3 selectors matching the `a` element whose href is the article link,
+- url_selector: 2 to 4 selectors matching the `a` element whose href is the article link,
   relative to an entry element. Use "a" if the first link is correct.
-- author_selector: 0 to 2 selectors for the author name inside an entry, or empty list.
-- time_selector: 0 to 2 selectors for the publication date inside an entry, each with the
+- author_selector: 0 to 3 selectors for the author name inside an entry, or empty list.
+- time_selector: 0 to 3 selectors for the publication date inside an entry, each with the
   PHP date() format string that parses its value (for `time` elements the `datetime`
   attribute is parsed, e.g. format "Y-m-d\\TH:i:sP"). Use an empty list when unsure.
 
 Rules: never invent class names that are not in the HTML. Avoid selectors tied to one
 specific entry (ids or nth-child). Do not select navigation, sidebar, footer, or ad content.
+Ignore cookie-consent or age-verification banners and overlays.
 
 Page URL: {url}
 
@@ -260,11 +259,13 @@ def _chat(client, model: str, prompt: str):
             "num_ctx": config.get_int("OLLAMA_ANALYSIS_NUM_CTX"),
         },
     }
-    # Thinking models (qwen3, deepseek-r1, ...) spend minutes on a reasoning
-    # trace before the JSON unless thinking is disabled. Older Ollama servers
-    # and non-thinking models reject the parameter, so fall back without it.
+    # Thinking models (qwen3, deepseek-r1, ...) reason noticeably better
+    # about page structure with their thinking trace enabled; the analysis
+    # runs as a polled background job, so the extra minutes are acceptable.
+    # Older Ollama servers and non-thinking models reject the parameter, so
+    # fall back without it.
     try:
-        return client.chat(think=False, **chat_kwargs)
+        return client.chat(think=True, **chat_kwargs)
     except Exception as e:
         if "think" in str(e).lower():
             return client.chat(**chat_kwargs)
@@ -293,7 +294,12 @@ def request_selector_suggestions(url: str, html: str) -> dict:
         )
 
     try:
-        return json.loads(response["message"]["content"])
+        content = response["message"]["content"]
+        # some Ollama versions leak the thinking trace into the content;
+        # drop it and anything else around the JSON object
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        start, end = content.find("{"), content.rfind("}")
+        return json.loads(content[start : end + 1])
     except (KeyError, TypeError, json.JSONDecodeError) as e:
         raise AnalyzeError(
             f"The analysis model returned unusable output: {e}", status_code=502

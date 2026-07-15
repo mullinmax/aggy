@@ -51,8 +51,9 @@ DEFAULT_CONFIG = {
     # structured (JSON schema) output works; qwen3:4b is small and reliable.
     "OLLAMA_ANALYSIS_MODEL": "qwen3:4b",
     # Web pages are large even after condensing, so the analysis model gets a
-    # bigger context window than Ollama's 2048 default.
-    "OLLAMA_ANALYSIS_NUM_CTX": 16384,
+    # bigger context window than Ollama's 2048 default. Also leaves room for
+    # the thinking trace on reasoning models.
+    "OLLAMA_ANALYSIS_NUM_CTX": 32768,
     "RSS_BRIDGE_PORT": 80,
     "BUILD_VERSION": "0.0.0-beta",
     "DB_PORT": 5432,

@@ -24,6 +24,7 @@ def css_selector_template():
         description="Convert any site to RSS feed using CSS selectors",
         parameters={
             "home_page": param("Site URL", required=True),
+            "cookie": param("Cookie"),
             "entry_element_selector": param("Entry selector", required=True),
             "url_selector": param("URL selector"),
             "title_selector": param("Title selector"),
@@ -77,7 +78,13 @@ def poll_suggest_job(client, token, job_id, timeout_seconds=10):
 def test_suggest_returns_validated_candidates(
     client, token, css_selector_template, monkeypatch
 ):
-    monkeypatch.setattr("routers.source_analyze.fetch_page", lambda url: SAMPLE_HTML)
+    seen = {}
+
+    def fake_fetch(url, cookie=""):
+        seen["cookie"] = cookie
+        return SAMPLE_HTML
+
+    monkeypatch.setattr("routers.source_analyze.fetch_page", fake_fetch)
     monkeypatch.setattr(
         "routers.source_analyze.request_selector_suggestions",
         lambda url, html: RAW_SUGGESTIONS,
@@ -86,7 +93,7 @@ def test_suggest_returns_validated_candidates(
     args = build_api_request_args(
         path="/source_analyze/suggest",
         token=token,
-        data={"url": "https://example.com/blog/"},
+        data={"url": "https://example.com/blog/", "cookie": "consent=yes"},
     )
     response = client.post(**args)
 
@@ -110,6 +117,10 @@ def test_suggest_returns_validated_candidates(
     assert data["candidates"]["title_selector"][0]["selector"] == "h2.post-title"
     assert data["candidates"]["time_selector"][0]["time_format"] == "Y-m-d\\TH:i:sP"
 
+    # the consent cookie is used for the fetch and kept for the saved source
+    assert seen["cookie"] == "consent=yes"
+    assert data["defaults"]["cookie"] == "consent=yes"
+
     # defaults are directly previewable, with author/time left off
     assert data["defaults"]["home_page"] == "https://example.com/blog/"
     assert data["defaults"]["entry_element_selector"] == "div.post"
@@ -132,7 +143,7 @@ def test_suggest_without_template_is_503(client, token, monkeypatch):
 def test_suggest_job_errors_are_surfaced_on_poll(
     client, token, css_selector_template, monkeypatch
 ):
-    def failing_fetch(url):
+    def failing_fetch(url, cookie=""):
         raise AnalyzeError("Couldn't fetch the page", status_code=502)
 
     monkeypatch.setattr("routers.source_analyze.fetch_page", failing_fetch)
