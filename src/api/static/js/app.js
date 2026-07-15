@@ -49,6 +49,7 @@ function bindControls() {
 
   $('importBtn').onclick = openImportModal;
   $('importParseBtn').onclick = handleImportParse;
+  $('importCopyScriptBtn').onclick = copyImportScript;
   $('importBackBtn').onclick = () => setImportStep('input');
   $('importCreateBtn').onclick = handleImportCreate;
   $('importSelectAll').onchange = (e) => {
@@ -1246,12 +1247,48 @@ async function handleCreateManualSource(e) {
 // subscription data (export file, pasted list, or username), review the
 // detected sources and assign each to a feed, then import.
 
+// Reddit's official data export can take up to 30 days, so we offer a
+// browser-console script that pulls subscriptions instantly instead.
+const REDDIT_EXPORT_SCRIPT = `(async () => {
+  const subs = [];
+  let after = null;
+
+  do {
+    const url = new URL('https://www.reddit.com/subreddits/mine/subscriber.json');
+    url.searchParams.set('limit', '100');
+    if (after) url.searchParams.set('after', after);
+
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(\`Request failed: \${res.status} \${res.statusText}\`);
+
+    const json = await res.json();
+    for (const child of json.data.children) {
+      subs.push(child.data.display_name_prefixed);
+    }
+    after = json.data.after;
+  } while (after);
+
+  subs.sort((a, b) => a.localeCompare(b));
+  console.log(\`Found \${subs.length} subscriptions\`);
+  console.table(subs);
+
+  const blob = new Blob([subs.join('\\n')], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'my-subreddits.txt';
+  a.click();
+
+  window.mySubs = subs;
+})();`;
+
 const IMPORT_PLATFORMS = {
   reddit: {
     label: 'Reddit',
-    help: 'Upload subscribed_subreddits.csv from your Reddit data export '
-      + '(reddit.com → Settings → Request data), or paste subreddit names or links below.',
-    fileAccept: '.csv,text/csv',
+    help: 'While logged in to reddit.com, open your browser console '
+      + '(F12 → Console), paste the copied script, and press Enter — it downloads '
+      + 'my-subreddits.txt with all your subscriptions. Upload or paste that below.',
+    script: REDDIT_EXPORT_SCRIPT,
+    fileAccept: '.csv,.txt,text/csv,text/plain',
     textPlaceholder: 'r/selfhosted\nr/alligators\nhttps://www.reddit.com/r/aquariums',
   },
   youtube: {
@@ -1304,6 +1341,7 @@ function selectImportPlatform(platform) {
         onclick: () => selectImportPlatform(key),
       }, p.label)));
   $('importHelp').textContent = cfg.help;
+  $('importScriptControl').classList.toggle('hidden', !cfg.script);
   $('importFileControl').classList.toggle('hidden', !cfg.fileAccept);
   $('importTextControl').classList.toggle('hidden', !cfg.textPlaceholder);
   $('importUsernameControl').classList.toggle('hidden', !cfg.username);
@@ -1311,6 +1349,17 @@ function selectImportPlatform(platform) {
   $('importFile').value = '';
   $('importText').value = '';
   $('importText').placeholder = cfg.textPlaceholder || '';
+}
+
+async function copyImportScript() {
+  const cfg = IMPORT_PLATFORMS[importState.platform];
+  if (!cfg.script) return;
+  try {
+    await navigator.clipboard.writeText(cfg.script);
+    toast('Script copied — paste it into the browser console on reddit.com');
+  } catch {
+    toast('Couldn\'t access the clipboard — copy the script manually', 'alert-error');
+  }
 }
 
 const readFileText = (file) => new Promise((resolve, reject) => {
@@ -1422,7 +1471,8 @@ function applyImportFeedToSelected() {
 }
 
 // Inline feed creation so the wizard works before any feed exists. The new
-// feed is assigned to the selected rows right away.
+// feed only fills in selected rows that don't have a feed picked yet —
+// dropdowns the user already set are left alone.
 async function createImportFeed() {
   const name = prompt('Name for the new feed:');
   if (!name || !name.trim()) return;
@@ -1433,9 +1483,11 @@ async function createImportFeed() {
     }
     renderImportFeedOptions();
     $('importAssignFeed').value = feed.feed_name_hash;
-    importState.candidates.forEach((row) => { if (row.selected) row.feedHash = feed.feed_name_hash; });
+    importState.candidates.forEach((row) => {
+      if (row.selected && !row.feedHash) row.feedHash = feed.feed_name_hash;
+    });
     renderImportCandidates();
-    toast(`Feed "${feed.feed_name}" created and assigned to selected sources`);
+    toast(`Feed "${feed.feed_name}" created and assigned to unassigned selected sources`);
   } catch (err) {
     toast(err.message, 'alert-error');
   }
