@@ -1284,11 +1284,9 @@ const REDDIT_EXPORT_SCRIPT = `(async () => {
 const IMPORT_PLATFORMS = {
   reddit: {
     label: 'Reddit',
-    help: 'Fastest: while logged in to reddit.com, open your browser console '
+    help: 'While logged in to reddit.com, open your browser console '
       + '(F12 → Console), paste the copied script, and press Enter — it downloads '
-      + 'my-subreddits.txt with all your subscriptions instantly. Upload or paste '
-      + 'that below. (The official data export at reddit.com → Settings → Request '
-      + 'data also works, but can take up to 30 days.)',
+      + 'my-subreddits.txt with all your subscriptions. Upload or paste that below.',
     script: REDDIT_EXPORT_SCRIPT,
     fileAccept: '.csv,.txt,text/csv,text/plain',
     textPlaceholder: 'r/selfhosted\nr/alligators\nhttps://www.reddit.com/r/aquariums',
