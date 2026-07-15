@@ -25,6 +25,7 @@ def build_app():
     from routers.feed import feed_router
     from routers.source_template import source_template_router
     from routers.source import source_router
+    from routers.source_analyze import source_analyze_router
     from routers.bulk_import import bulk_import_router
     from routers.item import item_router
 
@@ -36,6 +37,9 @@ def build_app():
         source_template_router, prefix="/source_template", tags=["Source Templates"]
     )
     app.include_router(source_router, prefix="/source", tags=["Sources"])
+    app.include_router(
+        source_analyze_router, prefix="/source_analyze", tags=["Source Analysis"]
+    )
     app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
     app.include_router(item_router, prefix="/item", tags=["Items"])
     return app

@@ -170,6 +170,16 @@ class AggySDK {
     return this._request("POST", "/source/update", { body });
   }
 
+  /** Preview the feed produced by a set of CSS selectors */
+  async sourceAnalyzePreview({ body }) {
+    return this._request("POST", "/source_analyze/preview", { body });
+  }
+
+  /** Analyze a website and suggest CSS selectors for a feed */
+  async sourceAnalyzeSuggest({ body }) {
+    return this._request("POST", "/source_analyze/suggest", { body });
+  }
+
   /** Create a source from a template */
   async sourceTemplateCreate({ body }) {
     return this._request("POST", "/source_template/create", { body });

@@ -1,0 +1,66 @@
+from typing import Dict, List, Optional
+
+from .base import BaseRouteModel
+
+
+class AnalyzeRequest(BaseRouteModel):
+    url: str
+
+    model_config = {
+        "json_schema_extra": {"example": {"url": "https://example.com/blog/"}}
+    }
+
+
+class SelectorCandidate(BaseRouteModel):
+    selector: str
+    # how many elements the selector matched on the page (entry selector) or
+    # in how many entries it matched something (per-entry selectors)
+    match_count: int
+    # extracted text/urls from the first few matches, so the user can judge a
+    # candidate without reading CSS
+    samples: List[str] = []
+    # PHP date format for time selectors (CssSelectorComplexBridge needs it)
+    time_format: Optional[str] = None
+
+
+class AnalyzeResponse(BaseRouteModel):
+    page_title: Optional[str] = None
+    suggested_source_name: str
+    # template used to create the source (CSS Selector Complex bridge)
+    template_name_hash: str
+    # candidates per bridge parameter: entry_element_selector, title_selector,
+    # url_selector, time_selector, author_selector
+    candidates: Dict[str, List[SelectorCandidate]]
+    # preselected value per bridge parameter, ready to preview
+    defaults: Dict[str, str]
+
+
+class PreviewRequest(BaseRouteModel):
+    # CssSelectorComplexBridge parameters (home_page, entry_element_selector, ...)
+    parameters: Dict[str, str]
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "parameters": {
+                    "home_page": "https://example.com/blog/",
+                    "entry_element_selector": "div.article",
+                    "limit": "10",
+                }
+            }
+        }
+    }
+
+
+class PreviewItem(BaseRouteModel):
+    title: Optional[str] = None
+    url: Optional[str] = None
+    author: Optional[str] = None
+    date_published: Optional[str] = None
+    excerpt: Optional[str] = None
+    image: Optional[str] = None
+
+
+class PreviewResponse(BaseRouteModel):
+    feed_title: Optional[str] = None
+    items: List[PreviewItem]

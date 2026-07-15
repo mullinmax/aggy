@@ -19,6 +19,8 @@ KNOWN_CONFIG_VALUES = [
     "OLLAMA_PASSWORD",
     "OLLAMA_EMBEDDING_MODEL",
     "OLLAMA_EMBEDDING_NUM_CTX",
+    "OLLAMA_ANALYSIS_MODEL",
+    "OLLAMA_ANALYSIS_NUM_CTX",
     "RSS_BRIDGE_HOST",
     "RSS_BRIDGE_PORT",
     "BUILD_VERSION",
@@ -44,6 +46,13 @@ DEFAULT_CONFIG = {
     # large to process" and end up with no embedding. nomic-embed-text
     # supports up to 8192 tokens, so we raise the default to match.
     "OLLAMA_EMBEDDING_NUM_CTX": 8192,
+    # Text-generation model used to propose CSS selectors when creating a
+    # source from a bare website URL. Any Ollama chat model that supports
+    # structured (JSON schema) output works; qwen3:4b is small and reliable.
+    "OLLAMA_ANALYSIS_MODEL": "qwen3:4b",
+    # Web pages are large even after condensing, so the analysis model gets a
+    # bigger context window than Ollama's 2048 default.
+    "OLLAMA_ANALYSIS_NUM_CTX": 16384,
     "RSS_BRIDGE_PORT": 80,
     "BUILD_VERSION": "0.0.0-beta",
     "DB_PORT": 5432,

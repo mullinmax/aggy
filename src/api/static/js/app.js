@@ -76,6 +76,10 @@ function bindControls() {
   $('addSourceBtn').onclick = openAddSourceModal;
   $('srcTabTemplate').onclick = () => switchSourceTab('template');
   $('srcTabManual').onclick = () => switchSourceTab('manual');
+  $('srcTabAnalyze').onclick = () => switchSourceTab('analyze');
+  $('analyzeForm').onsubmit = handleAnalyzeWebsite;
+  $('analyzeBackBtn').onclick = resetAnalyzeTab;
+  $('analyzeAddBtn').onclick = handleCreateAnalyzedSource;
   $('templateSearch').oninput = debounce(searchTemplates, 300);
   $('templateBackBtn').onclick = clearTemplateSelection;
   $('templateAddBtn').onclick = handleCreateSourceFromTemplate;
@@ -1218,8 +1222,10 @@ function confirmDeleteSource(source) {
 function switchSourceTab(tab) {
   $('srcTabTemplate').classList.toggle('tab-active', tab === 'template');
   $('srcTabManual').classList.toggle('tab-active', tab === 'manual');
+  $('srcTabAnalyze').classList.toggle('tab-active', tab === 'analyze');
   $('sourceTabTemplate').classList.toggle('hidden', tab !== 'template');
   $('sourceTabManual').classList.toggle('hidden', tab !== 'manual');
+  $('sourceTabAnalyze').classList.toggle('hidden', tab !== 'analyze');
 }
 
 async function handleCreateManualSource(e) {
@@ -1238,6 +1244,171 @@ async function handleCreateManualSource(e) {
     setTimeout(loadSources, 5000);
   } catch (err) {
     toast(err.message, 'alert-error');
+  }
+}
+
+// ---------- analyze a website into selectors (✨ From Website tab) ----------
+
+// The backend asks Ollama for candidate CSS selectors per rss-bridge
+// parameter; the user can switch between candidates and watch the preview
+// (rendered by rss-bridge itself) update before saving the source.
+const ANALYZE_FIELDS = [
+  { key: 'entry_element_selector', label: 'Article entries', required: true },
+  { key: 'title_selector', label: 'Title', none: 'Page default' },
+  { key: 'url_selector', label: 'Article link', none: 'First link in entry' },
+  { key: 'author_selector', label: 'Author', none: 'None' },
+  { key: 'time_selector', label: 'Published date', none: 'None' },
+];
+
+let analyzeState = null; // { suggestion, params } while the result step is open
+let analyzePreviewSeq = 0; // ignore out-of-order preview responses
+
+function resetAnalyzeTab() {
+  analyzeState = null;
+  analyzePreviewSeq += 1;
+  $('analyzeInputStep').classList.remove('hidden');
+  $('analyzeResultStep').classList.add('hidden');
+  $('analyzeProgress').classList.add('hidden');
+  $('analyzeBtn').disabled = false;
+}
+
+async function handleAnalyzeWebsite(e) {
+  e.preventDefault();
+  const url = $('analyzeUrl').value.trim();
+  if (!url) return;
+
+  $('analyzeBtn').disabled = true;
+  $('analyzeProgress').classList.remove('hidden');
+  $('analyzeProgressText').textContent =
+    'Scraping the page and asking Ollama for selectors — this can take a minute…';
+  try {
+    const suggestion = await sdk.sourceAnalyzeSuggest({ body: { url } });
+    analyzeState = { suggestion, params: { ...suggestion.defaults } };
+    $('analyzeSourceName').value = suggestion.suggested_source_name || '';
+    renderAnalyzeFields();
+    $('analyzeInputStep').classList.add('hidden');
+    $('analyzeResultStep').classList.remove('hidden');
+    loadAnalyzePreview();
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    $('analyzeBtn').disabled = false;
+    $('analyzeProgress').classList.add('hidden');
+  }
+}
+
+// A candidate's samples, shown under its dropdown so the user can judge the
+// selection without reading CSS.
+function analyzeSampleLine(field) {
+  const candidates = analyzeState.suggestion.candidates[field.key] || [];
+  const current = candidates.find((c) => c.selector === analyzeState.params[field.key]);
+  if (!current || !current.samples.length) return '';
+  return current.samples.join('  ·  ');
+}
+
+function renderAnalyzeFields() {
+  render($('analyzeFields'), ANALYZE_FIELDS.map((field) => {
+    const candidates = analyzeState.suggestion.candidates[field.key] || [];
+    if (!candidates.length && !field.required) return null;
+
+    const sampleId = `analyzeSample_${field.key}`;
+    const select = h('select', {
+      class: 'select select-bordered select-sm w-full font-mono',
+      onchange: (e) => {
+        analyzeState.params[field.key] = e.target.value;
+        if (field.key === 'time_selector') {
+          // the bridge needs the matching PHP format alongside the selector
+          const chosen = candidates.find((c) => c.selector === e.target.value);
+          analyzeState.params.time_format = (chosen && chosen.time_format) || '';
+        }
+        $(sampleId).textContent = analyzeSampleLine(field);
+        scheduleAnalyzePreview();
+      },
+    },
+      field.none ? h('option', {
+        value: '', selected: !analyzeState.params[field.key],
+      }, `(${field.none})`) : null,
+      candidates.map((c) => h('option', {
+        value: c.selector, selected: analyzeState.params[field.key] === c.selector,
+      }, `${c.selector}  (${c.match_count} match${c.match_count === 1 ? '' : 'es'})`)));
+
+    return h('div', { class: 'form-control mb-2' },
+      h('label', { class: 'label py-1' },
+        h('span', { class: 'label-text text-xs font-medium' },
+          field.label + (field.required ? ' *' : ''))),
+      select,
+      h('div', { class: 'text-xs text-base-content/40 truncate mt-0.5', id: sampleId },
+        analyzeSampleLine(field)));
+  }));
+}
+
+const scheduleAnalyzePreview = debounce(loadAnalyzePreview, 500);
+
+async function loadAnalyzePreview() {
+  if (!analyzeState) return;
+  const seq = ++analyzePreviewSeq;
+  $('analyzePreviewStatus').textContent = 'rendering via rss-bridge…';
+  render($('analyzePreview'), h('div', { class: 'p-6' }, spinner()));
+  try {
+    const preview = await sdk.sourceAnalyzePreview({
+      body: { parameters: analyzeState.params },
+    });
+    if (seq !== analyzePreviewSeq || !analyzeState) return;
+    $('analyzePreviewStatus').textContent =
+      `${preview.items.length} item${preview.items.length === 1 ? '' : 's'}`;
+    if (!preview.items.length) {
+      render($('analyzePreview'), h('div', { class: 'p-4 text-center text-sm text-base-content/50' },
+        'No items — try a different "Article entries" selector'));
+      return;
+    }
+    render($('analyzePreview'), preview.items.map((item) =>
+      h('div', { class: 'flex gap-3 px-3 py-2 border-b border-base-300 last:border-b-0' },
+        item.image && h('img', {
+          src: item.image, class: 'w-14 h-14 object-cover rounded flex-shrink-0', loading: 'lazy',
+        }),
+        h('div', { class: 'min-w-0' },
+          h('a', {
+            class: 'text-sm font-medium link link-hover', href: item.url || '#',
+            target: '_blank', rel: 'noopener',
+          }, item.title || '(no title)'),
+          (item.author || item.date_published) && h('div', { class: 'text-xs text-base-content/40' },
+            [item.author, item.date_published].filter(Boolean).join(' · ')),
+          item.excerpt && h('div', { class: 'text-xs text-base-content/60 line-clamp-2' },
+            item.excerpt)))));
+  } catch (err) {
+    if (seq !== analyzePreviewSeq || !analyzeState) return;
+    $('analyzePreviewStatus').textContent = '';
+    render($('analyzePreview'), h('div', { class: 'p-4 text-sm text-error' }, err.message));
+  }
+}
+
+async function handleCreateAnalyzedSource() {
+  if (!analyzeState || !currentFeed) return;
+  const name = $('analyzeSourceName').value.trim();
+  if (!name) { toast('Please enter a source name', 'alert-error'); return; }
+
+  const btn = $('analyzeAddBtn');
+  btn.disabled = true;
+  try {
+    await sdk.sourceTemplateCreate({
+      body: {
+        source_template_name_hash: analyzeState.suggestion.template_name_hash,
+        feed_hash: currentFeed.feed_name_hash,
+        source_name: name,
+        parameters: analyzeState.params,
+      },
+    });
+    closeModal('addSourceModal');
+    toast(`Source "${name}" added`);
+    resetAnalyzeTab();
+    $('analyzeUrl').value = '';
+    loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -1590,6 +1761,7 @@ function renderImportResults(response) {
 function openAddSourceModal() {
   showModal('addSourceModal');
   clearTemplateSelection();
+  resetAnalyzeTab();
   searchTemplates();
 }
 

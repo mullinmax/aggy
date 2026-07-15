@@ -31,6 +31,7 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 ### Available now:
 
 - **RSS source support** with predefined templates for faster setup
+- **Any website as a source**: paste a URL and a local Ollama model works out the CSS selectors (via RSS-Bridge), with a live preview to fine-tune before saving
 - **Bulk subscription import** from Reddit, YouTube, Bluesky, and any OPML export (Feedly, Inoreader, podcast apps), with per-source feed assignment
 - **Embedding generation** for text to improve content relevance
 
