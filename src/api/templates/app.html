@@ -227,6 +227,7 @@
     <div role="tablist" class="tabs tabs-boxed mb-4" id="sourceTabs">
       <a role="tab" class="tab tab-active" id="srcTabTemplate">From Template</a>
       <a role="tab" class="tab" id="srcTabManual">Manual URL</a>
+      <a role="tab" class="tab" id="srcTabAnalyze">✨ From Website</a>
     </div>
 
     <!-- Template Tab -->
@@ -262,6 +263,58 @@
           <button type="submit" class="btn btn-primary">Add Source</button>
         </div>
       </form>
+    </div>
+
+    <!-- Analyze (AI) Tab -->
+    <div id="sourceTabAnalyze" class="hidden">
+      <div id="analyzeInputStep">
+        <p class="text-sm text-base-content/60 mb-3">
+          Paste the address of a page that lists articles (a blog index, news
+          section, release page...). Aggy scrapes it and uses the local Ollama
+          model to work out which parts of the page are the articles.
+        </p>
+        <form id="analyzeForm">
+          <div class="form-control mb-3">
+            <label class="label" for="analyzeUrl"><span class="label-text">Website URL</span></label>
+            <input type="url" class="input input-bordered w-full" id="analyzeUrl" placeholder="https://example.com/blog/" required>
+          </div>
+          <div class="form-control mb-3">
+            <label class="label" for="analyzeCookie">
+              <span class="label-text">Cookie <span class="text-base-content/40">(optional)</span></span>
+            </label>
+            <input type="text" class="input input-bordered w-full font-mono text-sm" id="analyzeCookie" placeholder="consent=yes; age_verified=1">
+            <label class="label"><span class="label-text-alt text-base-content/40">
+              For sites behind a consent or age gate: copy the Cookie header from your browser's
+              dev tools (F12 → Network → the page request) after clicking through the banner.
+              It's also used when the source checks for new articles later.
+            </span></label>
+          </div>
+          <div class="flex justify-end">
+            <button type="submit" class="btn btn-primary btn-sm" id="analyzeBtn">Analyze Website</button>
+          </div>
+        </form>
+        <div id="analyzeProgress" class="hidden text-sm text-base-content/60 mt-3">
+          <span class="loading loading-spinner loading-sm align-middle mr-2"></span>
+          <span id="analyzeProgressText">Analyzing…</span>
+        </div>
+      </div>
+
+      <div id="analyzeResultStep" class="hidden">
+        <div class="form-control mb-3">
+          <label class="label" for="analyzeSourceName"><span class="label-text">Source Name</span></label>
+          <input type="text" class="input input-bordered w-full" id="analyzeSourceName" required>
+        </div>
+        <div id="analyzeFields" class="mb-3"></div>
+        <div class="flex items-center justify-between mb-1">
+          <span class="label-text font-medium">Preview</span>
+          <span class="text-xs text-base-content/40" id="analyzePreviewStatus"></span>
+        </div>
+        <div class="max-h-[40vh] overflow-y-auto border border-base-300 rounded-lg" id="analyzePreview"></div>
+        <div class="flex gap-2 justify-end mt-4">
+          <button class="btn btn-ghost btn-sm" id="analyzeBackBtn">Back</button>
+          <button class="btn btn-primary btn-sm" id="analyzeAddBtn">Add Source</button>
+        </div>
+      </div>
     </div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>

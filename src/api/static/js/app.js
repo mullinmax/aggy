@@ -76,6 +76,10 @@ function bindControls() {
   $('addSourceBtn').onclick = openAddSourceModal;
   $('srcTabTemplate').onclick = () => switchSourceTab('template');
   $('srcTabManual').onclick = () => switchSourceTab('manual');
+  $('srcTabAnalyze').onclick = () => switchSourceTab('analyze');
+  $('analyzeForm').onsubmit = handleAnalyzeWebsite;
+  $('analyzeBackBtn').onclick = resetAnalyzeTab;
+  $('analyzeAddBtn').onclick = handleCreateAnalyzedSource;
   $('templateSearch').oninput = debounce(searchTemplates, 300);
   $('templateBackBtn').onclick = clearTemplateSelection;
   $('templateAddBtn').onclick = handleCreateSourceFromTemplate;
@@ -1218,8 +1222,10 @@ function confirmDeleteSource(source) {
 function switchSourceTab(tab) {
   $('srcTabTemplate').classList.toggle('tab-active', tab === 'template');
   $('srcTabManual').classList.toggle('tab-active', tab === 'manual');
+  $('srcTabAnalyze').classList.toggle('tab-active', tab === 'analyze');
   $('sourceTabTemplate').classList.toggle('hidden', tab !== 'template');
   $('sourceTabManual').classList.toggle('hidden', tab !== 'manual');
+  $('sourceTabAnalyze').classList.toggle('hidden', tab !== 'analyze');
 }
 
 async function handleCreateManualSource(e) {
@@ -1238,6 +1244,230 @@ async function handleCreateManualSource(e) {
     setTimeout(loadSources, 5000);
   } catch (err) {
     toast(err.message, 'alert-error');
+  }
+}
+
+// ---------- analyze a website into selectors (✨ From Website tab) ----------
+
+// The backend asks Ollama for candidate CSS selectors per rss-bridge
+// parameter; the user can switch between candidates and watch the preview
+// (rendered by rss-bridge itself) update before saving the source.
+const ANALYZE_FIELDS = [
+  { key: 'entry_element_selector', label: 'Article entries', required: true },
+  { key: 'title_selector', label: 'Title', none: 'Page default' },
+  { key: 'url_selector', label: 'Article link', none: 'First link in entry' },
+  { key: 'author_selector', label: 'Author', none: 'None' },
+  { key: 'time_selector', label: 'Published date', none: 'None' },
+];
+
+let analyzeState = null; // { suggestion, params } while the result step is open
+let analyzePreviewSeq = 0; // ignore out-of-order preview responses
+
+function resetAnalyzeTab() {
+  analyzeState = null;
+  analyzePreviewSeq += 1;
+  $('analyzeInputStep').classList.remove('hidden');
+  $('analyzeResultStep').classList.add('hidden');
+  $('analyzeProgress').classList.add('hidden');
+  $('analyzeBtn').disabled = false;
+}
+
+// Analysis runs server-side as a background job (LLM passes can take minutes
+// on CPU, longer than most reverse-proxy timeouts allow a request to live),
+// so we start it and poll for the result every couple of seconds.
+const ANALYZE_POLL_MS = 2000;
+const ANALYZE_TIMEOUT_MS = 8 * 60 * 1000;
+
+async function pollAnalyzeJob(jobId) {
+  const started = Date.now();
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, ANALYZE_POLL_MS));
+    const job = await sdk.sourceAnalyzeSuggestResult({ job_id: jobId });
+    if (job.status === 'done') return job.result;
+    if (Date.now() - started > ANALYZE_TIMEOUT_MS) {
+      throw new Error('Analysis timed out — Ollama may be overloaded or the model is still loading');
+    }
+    const seconds = Math.round((Date.now() - started) / 1000);
+    $('analyzeProgressText').textContent =
+      `Asking Ollama for selectors — ${seconds}s. The first run after a restart is slowest (the model loads into memory).`;
+  }
+}
+
+async function handleAnalyzeWebsite(e) {
+  e.preventDefault();
+  const url = $('analyzeUrl').value.trim();
+  if (!url) return;
+
+  $('analyzeBtn').disabled = true;
+  $('analyzeProgress').classList.remove('hidden');
+  $('analyzeProgressText').textContent =
+    'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
+  try {
+    const cookie = $('analyzeCookie').value.trim() || null;
+    const job = await sdk.sourceAnalyzeSuggest({ body: { url, cookie } });
+    const suggestion = await pollAnalyzeJob(job.job_id);
+    // custom: fields where the user typed a selector instead of picking one
+    analyzeState = { suggestion, params: { ...suggestion.defaults }, custom: {} };
+    $('analyzeSourceName').value = suggestion.suggested_source_name || '';
+    renderAnalyzeFields();
+    $('analyzeInputStep').classList.add('hidden');
+    $('analyzeResultStep').classList.remove('hidden');
+    loadAnalyzePreview();
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    $('analyzeBtn').disabled = false;
+    $('analyzeProgress').classList.add('hidden');
+  }
+}
+
+// A candidate's extracted samples, one per line so it's obvious where each
+// title/link ends and the next begins (a bad parse looks like one long run).
+function analyzeFieldSamples(field) {
+  if (analyzeState.custom[field.key]) return [];
+  const candidates = analyzeState.suggestion.candidates[field.key] || [];
+  const current = candidates.find((c) => c.selector === analyzeState.params[field.key]);
+  return current ? current.samples : [];
+}
+
+const ANALYZE_CUSTOM = '__custom__';
+
+function renderAnalyzeFields() {
+  render($('analyzeFields'), ANALYZE_FIELDS.map((field) => {
+    const candidates = analyzeState.suggestion.candidates[field.key] || [];
+    const isCustom = !!analyzeState.custom[field.key];
+
+    const select = h('select', {
+      class: 'select select-bordered select-sm w-full font-mono',
+      onchange: (e) => {
+        if (e.target.value === ANALYZE_CUSTOM) {
+          analyzeState.custom[field.key] = true;
+        } else {
+          analyzeState.custom[field.key] = false;
+          analyzeState.params[field.key] = e.target.value;
+          if (field.key === 'time_selector') {
+            // the bridge needs the matching PHP format alongside the selector
+            const chosen = candidates.find((c) => c.selector === e.target.value);
+            analyzeState.params.time_format = (chosen && chosen.time_format) || '';
+          }
+          scheduleAnalyzePreview();
+        }
+        renderAnalyzeFields();
+      },
+    },
+      field.none ? h('option', {
+        value: '', selected: !isCustom && !analyzeState.params[field.key],
+      }, `(${field.none})`) : null,
+      candidates.map((c) => h('option', {
+        value: c.selector,
+        selected: !isCustom && analyzeState.params[field.key] === c.selector,
+      }, `${c.selector}  (${c.match_count} match${c.match_count === 1 ? '' : 'es'})`)),
+      h('option', { value: ANALYZE_CUSTOM, selected: isCustom }, 'Custom selector…'));
+
+    // free-text override, so a wrong or missing suggestion is always fixable
+    const customInput = isCustom && h('input', {
+      type: 'text',
+      class: 'input input-bordered input-sm w-full font-mono mt-1',
+      value: analyzeState.params[field.key] || '',
+      placeholder: field.required ? 'div.article' : '.byline a',
+      oninput: (e) => { analyzeState.params[field.key] = e.target.value.trim(); scheduleAnalyzePreview(); },
+    });
+
+    // the date needs a parse format next to its selector; keep it editable so
+    // an off-by-hours or misparsed date can be corrected by hand
+    const showTimeFormat = field.key === 'time_selector'
+      && (isCustom || analyzeState.params.time_selector);
+    const timeFormatInput = showTimeFormat && h('div', { class: 'mt-1' },
+      h('label', { class: 'label py-0' },
+        h('span', { class: 'label-text-alt text-base-content/50' },
+          'Date format (PHP date(), e.g. Y-m-d\\TH:i:sP or d/m/Y H:i)')),
+      h('input', {
+        type: 'text',
+        class: 'input input-bordered input-sm w-full font-mono',
+        value: analyzeState.params.time_format || '',
+        oninput: (e) => { analyzeState.params.time_format = e.target.value.trim(); scheduleAnalyzePreview(); },
+      }));
+
+    const samples = analyzeFieldSamples(field);
+    return h('div', { class: 'form-control mb-2' },
+      h('label', { class: 'label py-1' },
+        h('span', { class: 'label-text text-xs font-medium' },
+          field.label + (field.required ? ' *' : ''))),
+      select,
+      customInput,
+      timeFormatInput,
+      samples.length ? h('div', { class: 'mt-0.5' },
+        samples.map((s) => h('div', { class: 'text-xs text-base-content/40 truncate' }, `‣ ${s}`))) : null);
+  }));
+}
+
+const scheduleAnalyzePreview = debounce(loadAnalyzePreview, 500);
+
+async function loadAnalyzePreview() {
+  if (!analyzeState) return;
+  const seq = ++analyzePreviewSeq;
+  $('analyzePreviewStatus').textContent = 'rendering via rss-bridge…';
+  render($('analyzePreview'), h('div', { class: 'p-6' }, spinner()));
+  try {
+    const preview = await sdk.sourceAnalyzePreview({
+      body: { parameters: analyzeState.params },
+    });
+    if (seq !== analyzePreviewSeq || !analyzeState) return;
+    $('analyzePreviewStatus').textContent =
+      `${preview.items.length} item${preview.items.length === 1 ? '' : 's'}`;
+    if (!preview.items.length) {
+      render($('analyzePreview'), h('div', { class: 'p-4 text-center text-sm text-base-content/50' },
+        'No items — try a different "Article entries" selector'));
+      return;
+    }
+    render($('analyzePreview'), preview.items.map((item) =>
+      h('div', { class: 'flex gap-3 px-3 py-2 border-b border-base-300 last:border-b-0' },
+        item.image && h('img', {
+          src: item.image, class: 'w-14 h-14 object-cover rounded flex-shrink-0', loading: 'lazy',
+        }),
+        h('div', { class: 'min-w-0' },
+          h('a', {
+            class: 'text-sm font-medium link link-hover', href: item.url || '#',
+            target: '_blank', rel: 'noopener',
+          }, item.title || '(no title)'),
+          (item.author || item.date_published) && h('div', { class: 'text-xs text-base-content/40' },
+            [item.author, item.date_published].filter(Boolean).join(' · ')),
+          item.excerpt && h('div', { class: 'text-xs text-base-content/60 line-clamp-2' },
+            item.excerpt)))));
+  } catch (err) {
+    if (seq !== analyzePreviewSeq || !analyzeState) return;
+    $('analyzePreviewStatus').textContent = '';
+    render($('analyzePreview'), h('div', { class: 'p-4 text-sm text-error' }, err.message));
+  }
+}
+
+async function handleCreateAnalyzedSource() {
+  if (!analyzeState || !currentFeed) return;
+  const name = $('analyzeSourceName').value.trim();
+  if (!name) { toast('Please enter a source name', 'alert-error'); return; }
+
+  const btn = $('analyzeAddBtn');
+  btn.disabled = true;
+  try {
+    await sdk.sourceTemplateCreate({
+      body: {
+        source_template_name_hash: analyzeState.suggestion.template_name_hash,
+        feed_hash: currentFeed.feed_name_hash,
+        source_name: name,
+        parameters: analyzeState.params,
+      },
+    });
+    closeModal('addSourceModal');
+    toast(`Source "${name}" added`);
+    resetAnalyzeTab();
+    $('analyzeUrl').value = '';
+    loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -1590,6 +1820,7 @@ function renderImportResults(response) {
 function openAddSourceModal() {
   showModal('addSourceModal');
   clearTemplateSelection();
+  resetAnalyzeTab();
   searchTemplates();
 }
 

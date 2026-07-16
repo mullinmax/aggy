@@ -106,9 +106,7 @@ class SourceTemplate(AggyBaseModel):
                     values[name] = kwargs[name]
                 elif parameter.default is not None:
                     values[name] = parameter.default
-            quoted = {
-                k: urllib.parse.quote(str(v), safe="") for k, v in values.items()
-            }
+            quoted = {k: urllib.parse.quote(str(v), safe="") for k, v in values.items()}
             return self.url_template.format(**quoted)
 
         url_params = {
@@ -199,6 +197,23 @@ class SourceTemplate(AggyBaseModel):
                 "SELECT name, bridge_short_name, url, description, context, "
                 "parameters, url_template FROM source_templates WHERE name_hash = %s",
                 (name_hash,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+        return cls._from_row(row)
+
+    @classmethod
+    def read_by_bridge_short_name(
+        cls, bridge_short_name: str
+    ) -> Optional["SourceTemplate"]:
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT name, bridge_short_name, url, description, context, "
+                "parameters, url_template FROM source_templates "
+                "WHERE bridge_short_name = %s LIMIT 1",
+                (bridge_short_name,),
             )
             row = cur.fetchone()
 
