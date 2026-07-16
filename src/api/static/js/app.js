@@ -361,7 +361,12 @@ const MODEL_LABELS = {
   source_mean: 'Source average',
   knn_embedding: 'Similar posts (kNN)',
   ridge: 'Linear model (ridge)',
-  neural_net: 'Neural net',
+  logistic: 'Logistic regression',
+  svr: 'Support vector regression',
+  random_forest: 'Random forest',
+  gradient_boost: 'Gradient boosting',
+  neural_net: 'Neural net (shallow)',
+  deep_neural_net: 'Deep neural net',
 };
 
 function renderStats(stats) {
