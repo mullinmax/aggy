@@ -7,25 +7,22 @@ COPY templates ./templates
 COPY static/js ./static/js
 RUN npx tailwindcss -i ./input.css -o ./output.css --minify
 
-FROM python:3.11-alpine as aggy-api
+FROM python:3.11-slim AS aggy-api
 WORKDIR /src
 
 ENV TZ=America/New_York
 
-# musl (alpine) gives threads a 128KB stack; OpenBLAS worker threads assume
-# ~2MB and segfault (exit 139) on the first big numpy operation. Keep BLAS
-# single-threaded so it never spawns them.
+# Keep BLAS from oversubscribing the CPU with worker threads inside the
+# container; the ranking models are small and run fine single-threaded.
 ENV OPENBLAS_NUM_THREADS=1 \
     OMP_NUM_THREADS=1
 
-# psycopg2-binary needs libpq at runtime; build deps for any source wheels.
-RUN apk add --no-cache libpq
-
+# On this glibc base numpy/scipy/scikit-learn and psycopg2-binary all install
+# from prebuilt manylinux wheels (psycopg2-binary bundles libpq), so no
+# compiler toolchain or system libs are needed.
 COPY requirements.txt .
 
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev libpq-dev \
-    && pip install --no-cache-dir -r requirements.txt \
-    && apk del .build-deps
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /src/api
 COPY --from=css-builder /build/output.css /src/api/static/css/tailwind.css
