@@ -17,4 +17,5 @@ python-multipart
 rapidfuzz
 psycopg2-binary
 requests
+scikit-learn
 uvicorn

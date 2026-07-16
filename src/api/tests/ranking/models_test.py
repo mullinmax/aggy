@@ -6,11 +6,16 @@ import numpy as np
 import pytest
 
 from ranking.models import (
+    DeepMLPModel,
     GlobalMeanModel,
+    GradientBoostModel,
     ItemFeatures,
     KNNEmbeddingModel,
+    LogisticVoteModel,
     MLPModel,
+    RandomForestModel,
     RidgeModel,
+    SVRModel,
     SourceMeanModel,
     all_models,
     evaluate_models,
@@ -106,17 +111,82 @@ def test_ridge_learns_direction():
     assert (np.abs(scores) <= 1).all()
 
 
+def _up_down_probes():
+    return [
+        make_item(100, [5, 0, 0, 0, 0, 0, 0, 0]),
+        make_item(101, [-5, 0, 0, 0, 0, 0, 0, 0]),
+    ]
+
+
 def test_mlp_learns_direction():
     items = two_cluster_data(n=40)
     model = MLPModel(epochs=200)
     model.fit(items)
-    scores, _ = model.predict(
-        [
-            make_item(100, [5, 0, 0, 0, 0, 0, 0, 0]),
-            make_item(101, [-5, 0, 0, 0, 0, 0, 0, 0]),
-        ]
-    )
+    scores, _ = model.predict(_up_down_probes())
     assert scores[0] > 0 > scores[1]
+
+
+def test_mlp_accepts_multiple_hidden_layers():
+    # a bare int and an explicit stack are both valid ways to size the net
+    assert MLPModel(hidden=16).hidden == (16,)
+    model = MLPModel(hidden=(12, 8), epochs=200)
+    assert model.hidden == (12, 8)
+    model.fit(two_cluster_data(n=40))
+    scores, confs = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+    assert (confs >= 0).all() and (confs <= 1).all()
+
+
+def test_deep_mlp_learns_direction():
+    # three hidden layers of ReLU units still recover the separation
+    items = two_cluster_data(n=60)
+    model = DeepMLPModel(hidden=(32, 16, 8), epochs=400)
+    assert len(model.hidden) == 3
+    model.fit(items)
+    scores, confs = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+    assert (np.abs(scores) <= 1).all()
+    assert (confs >= 0).all() and (confs <= 1).all()
+
+
+def test_logistic_learns_direction():
+    items = two_cluster_data(n=40)
+    model = LogisticVoteModel()
+    model.fit(items)
+    scores, confs = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+    assert (np.abs(scores) <= 1).all()
+    assert (confs >= 0).all() and (confs <= 1).all()
+
+
+def test_svr_learns_direction():
+    items = two_cluster_data(n=40)
+    model = SVRModel()
+    model.fit(items)
+    scores, confs = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+    assert (np.abs(scores) <= 1).all()
+    assert (confs >= 0).all() and (confs <= 1).all()
+
+
+def test_random_forest_learns_direction():
+    items = two_cluster_data(n=40)
+    model = RandomForestModel(n_trees=25)
+    model.fit(items)
+    scores, confs = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+    assert (np.abs(scores) <= 1).all()
+    assert (confs >= 0).all() and (confs <= 1).all()
+
+
+def test_gradient_boost_learns_direction():
+    items = two_cluster_data(n=40)
+    model = GradientBoostModel(max_iter=60)
+    model.fit(items)
+    scores, confs = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+    assert (np.abs(scores) <= 1).all()
+    assert (confs >= 0).all() and (confs <= 1).all()
 
 
 def test_evaluate_models_reports_all_and_picks_one():
@@ -133,6 +203,28 @@ def test_evaluate_models_reports_all_and_picks_one():
     knn = next(s for s in stats if s.model_name == "knn_embedding")
     assert knn.mae < 0.5
     assert knn.sign_accuracy > 0.8
+
+
+def test_evaluate_all_models_when_well_labeled():
+    # with plenty of votes every model (including the deep net) should be
+    # eligible, produce real metrics, and one winner is chosen
+    items = two_cluster_data(n=60)
+    stats = evaluate_models(items)
+    by_name = {s.model_name: s for s in stats}
+    assert set(by_name) == {m.name for m in all_models()}
+    for name in (
+        "logistic",
+        "svr",
+        "random_forest",
+        "gradient_boost",
+        "neural_net",
+        "deep_neural_net",
+    ):
+        assert by_name[name].mae is not None, f"{name} produced no metrics"
+    chosen = [s for s in stats if s.chosen]
+    assert len(chosen) == 1
+    baseline = by_name["global_mean"]
+    assert chosen[0].mae <= baseline.mae
 
 
 def test_evaluate_models_with_few_labels():

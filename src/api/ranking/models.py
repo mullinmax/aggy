@@ -1,10 +1,21 @@
 """Vote-prediction models.
 
 Each model learns from the user's past votes (-1..1) on items in a feed and
-predicts a (score, confidence) pair for unseen items. Several methodologies
-are implemented — from a trivial global mean up to a small neural net — and
+predicts a (score, confidence) pair for unseen items. A whole zoo of
+methodologies is implemented — from a trivial global mean, through classic
+regressors (source averages, kNN, ridge, logistic, SVR) and tree ensembles
+(random forest, gradient boosting), up to shallow and deep neural nets — and
 `ranking.engine` cross-validates them all, keeps stats for each, and ranks the
 feed with whichever performs best at the current amount of training data.
+
+The heavier learners are scikit-learn estimators wrapped behind a tiny
+`VoteModel` adapter, so they're the standard, well-optimized implementations
+rather than hand-rolled numpy. The neural nets are `MLPRegressor`s; "deep
+learning / more hidden layers" is literally a longer `hidden_layer_sizes`
+tuple, which is how the shallow `neural_net` and the multi-layer
+`deep_neural_net` differ. (torch was considered for the deep net, but the only
+proxy-reachable wheel drags in gigabytes of unused CUDA libraries, so we keep
+the image lean and let sklearn's MLP do the deep net on CPU.)
 
 All models consume `ItemFeatures`: the article's text embedding plus scalar
 side information (source, author, post age, media presence). Image/thumbnail
@@ -13,11 +24,19 @@ until then a has-image flag stands in.
 """
 
 import hashlib
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
 
 AUTHOR_BUCKETS = 8
 SOURCE_BUCKETS = 16
@@ -211,14 +230,21 @@ class KNNEmbeddingModel(VoteModel):
         return np.asarray(scores), np.asarray(confs)
 
 
-class RidgeModel(VoteModel):
-    """L2-regularized linear regression on [embedding | side features]."""
+class _SklearnModel(VoteModel):
+    """Adapter: build the design matrix, fit a scikit-learn regressor (behind a
+    StandardScaler when the estimator is scale-sensitive), and turn its output
+    into a clipped (score, confidence) pair. Subclasses just supply
+    `_build_estimator` plus `name`/`min_labels`.
 
-    name = "ridge"
-    min_labels = 5
+    Confidence is a monotone function of |score|: a prediction near the
+    extremes reads as a confident like/dislike, one near zero as a shrug. It's
+    a display signal for the "most certain" sort, not a calibrated probability.
+    """
 
-    def __init__(self, alpha: float = 10.0):
-        self.alpha = alpha
+    use_scaler = True
+
+    def _build_estimator(self):
+        raise NotImplementedError
 
     def _dim(self, items):
         for i in items:
@@ -229,94 +255,234 @@ class RidgeModel(VoteModel):
     def fit(self, items):
         self.now = datetime.now(timezone.utc)
         self.dim = self._dim(items)
-        self.mean = float(np.mean([i.label for i in items])) if items else 0.0
         X = _design_matrix(items, self.dim, self.now)
-        y = np.asarray([i.label for i in items]) - self.mean
-        # closed-form ridge: (X'X + aI)^-1 X'y
-        n_feat = X.shape[1]
-        self.weights = np.linalg.solve(X.T @ X + self.alpha * np.eye(n_feat), X.T @ y)
+        y = np.asarray([i.label for i in items], dtype=float)
+        estimator = self._build_estimator()
+        self.model = (
+            make_pipeline(StandardScaler(), estimator) if self.use_scaler else estimator
+        )
+        self.model.fit(X, y)
 
     def predict(self, items):
         X = _design_matrix(items, self.dim, self.now)
-        raw = X @ self.weights + self.mean
-        scores = np.clip(raw, -1.0, 1.0)
-        confs = np.clip(np.abs(scores) * 0.8 + 0.1, 0.0, 1.0)
+        scores = np.clip(self.model.predict(X), -1.0, 1.0)
+        confs = np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
         return scores, confs
 
 
-class MLPModel(VoteModel):
-    """Tiny two-layer neural net (numpy, full-batch Adam). Only eligible once
-    there's enough data for it to beat the simpler models honestly."""
+class RidgeModel(_SklearnModel):
+    """L2-regularized linear regression on [embedding | side features]."""
+
+    name = "ridge"
+    min_labels = 5
+
+    def __init__(self, alpha: float = 10.0):
+        self.alpha = alpha
+
+    def _build_estimator(self):
+        return Ridge(alpha=self.alpha)
+
+
+class SVRModel(_SklearnModel):
+    """Support-vector regression with an RBF kernel: a non-linear model that
+    stays well-behaved on modest data and captures smooth structure the linear
+    models can't."""
+
+    name = "svr"
+    min_labels = 12
+
+    def __init__(self, C: float = 1.0, epsilon: float = 0.1, gamma: str = "scale"):
+        self.C = C
+        self.epsilon = epsilon
+        self.gamma = gamma
+
+    def _build_estimator(self):
+        return SVR(kernel="rbf", C=self.C, epsilon=self.epsilon, gamma=self.gamma)
+
+
+class RandomForestModel(_SklearnModel):
+    """Bagged regression trees over [embedding | side features]. Robust with
+    modest data and captures non-linear, feature-interaction structure the
+    linear models miss. Trees are scale-invariant, so no scaler."""
+
+    name = "random_forest"
+    # above the leave-one-out CV cutoff (40) so it always evaluates with cheap
+    # 5-fold; with few votes the simpler models (kNN especially) already win.
+    min_labels = 45
+    use_scaler = False
+
+    def __init__(
+        self, n_trees: int = 200, max_depth: Optional[int] = None, seed: int = 0
+    ):
+        self.n_trees = n_trees
+        self.max_depth = max_depth
+        self.seed = seed
+
+    def _build_estimator(self):
+        return RandomForestRegressor(
+            n_estimators=self.n_trees,
+            max_depth=self.max_depth,
+            min_samples_leaf=1,
+            random_state=self.seed,
+            n_jobs=1,
+        )
+
+
+class GradientBoostModel(_SklearnModel):
+    """Histogram gradient boosting: additive shallow trees on the loss
+    gradient. Usually the strongest tree model once the feed is well-labeled.
+    Scale-invariant, so no scaler."""
+
+    name = "gradient_boost"
+    min_labels = 45
+    use_scaler = False
+
+    def __init__(
+        self,
+        max_iter: int = 200,
+        learning_rate: float = 0.1,
+        max_leaf_nodes: int = 15,
+        seed: int = 0,
+    ):
+        self.max_iter = max_iter
+        self.learning_rate = learning_rate
+        self.max_leaf_nodes = max_leaf_nodes
+        self.seed = seed
+
+    def _build_estimator(self):
+        return HistGradientBoostingRegressor(
+            max_iter=self.max_iter,
+            learning_rate=self.learning_rate,
+            max_leaf_nodes=self.max_leaf_nodes,
+            l2_regularization=1.0,
+            random_state=self.seed,
+        )
+
+
+class _MLPModel(_SklearnModel):
+    """Shared plumbing for the neural-net models. `hidden` is the
+    `hidden_layer_sizes` tuple — one entry per hidden layer — so a deeper net
+    is just a longer tuple. Accepts a bare int for a single hidden layer."""
+
+    activation = "relu"
+    default_hidden: Sequence[int] = (64,)
+    default_epochs = 500
+    default_alpha = 1e-3
+    learning_rate = 0.01
+    use_scaler = True
+
+    def __init__(self, hidden=None, epochs=None, alpha=None, seed: int = 0):
+        chosen = self.default_hidden if hidden is None else hidden
+        self.hidden = (chosen,) if isinstance(chosen, int) else tuple(chosen)
+        self.epochs = epochs if epochs is not None else self.default_epochs
+        self.alpha = alpha if alpha is not None else self.default_alpha
+        self.seed = seed
+
+    def _build_estimator(self):
+        return MLPRegressor(
+            hidden_layer_sizes=tuple(self.hidden),
+            activation=self.activation,
+            solver="adam",
+            alpha=self.alpha,
+            learning_rate_init=self.learning_rate,
+            max_iter=self.epochs,
+            random_state=self.seed,
+        )
+
+    def fit(self, items):
+        # Not fully converging on a small feed is expected and harmless (the
+        # cross-validated MAE decides whether the net competes at all), so we
+        # don't want ConvergenceWarning spamming the ranking job's logs.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=ConvergenceWarning)
+            super().fit(items)
+
+
+class MLPModel(_MLPModel):
+    """Shallow one-hidden-layer net. Eligible once there's enough data for it
+    to beat the simpler models honestly."""
 
     name = "neural_net"
     min_labels = 20
+    default_hidden = (64,)
 
-    def __init__(
-        self, hidden: int = 16, epochs: int = 300, lr: float = 0.01, seed: int = 0
-    ):
-        self.hidden = hidden
-        self.epochs = epochs
-        self.lr = lr
-        self.seed = seed
+
+class DeepMLPModel(_MLPModel):
+    """A genuinely deep net: four ReLU hidden layers over the embedding plus
+    side features, with stronger weight decay. Needs a good number of votes
+    before it stops overfitting, so it only enters the contest once the feed is
+    well-labeled (also keeping it above the leave-one-out CV cutoff) — at which
+    point it can capture interactions the shallow net and the linear models
+    can't."""
+
+    name = "deep_neural_net"
+    min_labels = 50
+    default_hidden = (256, 128, 64, 32)
+    default_epochs = 800
+    default_alpha = 1e-2
+
+
+class LogisticVoteModel(VoteModel):
+    """Logistic regression on [embedding | side features]. Learns the
+    probability that an article is upvoted and maps it back to a [-1, 1]
+    score, so — unlike ridge — it saturates rather than extrapolating wildly
+    on far-out embeddings."""
+
+    name = "logistic"
+    min_labels = 8
+
+    def __init__(self, C: float = 1.0):
+        self.C = C
+
+    def _dim(self, items):
+        for i in items:
+            if i.embedding is not None:
+                return len(i.embedding)
+        return 0
 
     def fit(self, items):
         self.now = datetime.now(timezone.utc)
-        self.dim = 0
-        for i in items:
-            if i.embedding is not None:
-                self.dim = len(i.embedding)
-                break
+        self.dim = self._dim(items)
         X = _design_matrix(items, self.dim, self.now)
-        y = np.asarray([i.label for i in items], dtype=float)
-        rng = np.random.default_rng(self.seed)
-        n_in = X.shape[1]
-        W1 = rng.normal(0, 1.0 / np.sqrt(n_in), (n_in, self.hidden))
-        b1 = np.zeros(self.hidden)
-        W2 = rng.normal(0, 1.0 / np.sqrt(self.hidden), (self.hidden, 1))
-        b2 = np.zeros(1)
-        params = [W1, b1, W2, b2]
-        m = [np.zeros_like(p) for p in params]
-        v = [np.zeros_like(p) for p in params]
-        beta1, beta2, eps, decay = 0.9, 0.999, 1e-8, 1e-4
-        n = len(y)
-        for t in range(1, self.epochs + 1):
-            h = np.tanh(X @ W1 + b1)
-            out = np.tanh(h @ W2 + b2).ravel()
-            err = out - y
-            d_out = (2.0 / n) * err * (1 - out**2)
-            gW2 = h.T @ d_out[:, None] + decay * W2
-            gb2 = np.array([d_out.sum()])
-            d_h = d_out[:, None] @ W2.T * (1 - h**2)
-            gW1 = X.T @ d_h + decay * W1
-            gb1 = d_h.sum(axis=0)
-            for p, g, mi, vi in zip(params, [gW1, gb1, gW2, gb2], m, v):
-                mi *= beta1
-                mi += (1 - beta1) * g
-                vi *= beta2
-                vi += (1 - beta2) * g**2
-                p -= (
-                    self.lr
-                    * (mi / (1 - beta1**t))
-                    / (np.sqrt(vi / (1 - beta2**t)) + eps)
-                )
-        self.params = params
+        labels = np.asarray([i.label for i in items], dtype=float)
+        self.scaler = StandardScaler().fit(X)
+        Xs = self.scaler.transform(X)
+        y = (labels > 0).astype(int)  # "did the user react positively?"
+        # a single observed class can't train a classifier; fall back to a
+        # constant prediction of the mean vote in that (degenerate) case.
+        if len(np.unique(y)) < 2:
+            self.clf = None
+            self.constant = float(np.clip(np.mean(labels), -1.0, 1.0))
+            return
+        self.clf = LogisticRegression(C=self.C, max_iter=1000).fit(Xs, y)
 
     def predict(self, items):
-        W1, b1, W2, b2 = self.params
         X = _design_matrix(items, self.dim, self.now)
-        h = np.tanh(X @ W1 + b1)
-        scores = np.tanh(h @ W2 + b2).ravel()
-        confs = np.clip(np.abs(scores) * 0.8 + 0.1, 0.0, 1.0)
+        if self.clf is None:
+            scores = np.full(len(items), self.constant)
+            return scores, np.full(len(items), 0.1)
+        p = self.clf.predict_proba(self.scaler.transform(X))[:, 1]
+        scores = np.clip(2.0 * p - 1.0, -1.0, 1.0)
+        confs = np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
         return scores, confs
 
 
 def all_models() -> List[VoteModel]:
+    """The full model zoo, cheap-and-simple first. `evaluate_models` runs each
+    eligible one and the best MAE wins, so adding a model here just gives the
+    feed another candidate — it never hurts a well-labeled feed and quietly
+    sits out (null metrics) until it has enough votes to compete."""
     return [
         GlobalMeanModel(),
         SourceMeanModel(),
         KNNEmbeddingModel(),
         RidgeModel(),
+        LogisticVoteModel(),
+        SVRModel(),
+        RandomForestModel(),
+        GradientBoostModel(),
         MLPModel(),
+        DeepMLPModel(),
     ]
 
 
