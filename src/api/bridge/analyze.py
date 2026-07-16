@@ -259,13 +259,12 @@ def _chat(client, model: str, prompt: str):
             "num_ctx": config.get_int("OLLAMA_ANALYSIS_NUM_CTX"),
         },
     }
-    # Thinking models (qwen3, deepseek-r1, ...) reason noticeably better
-    # about page structure with their thinking trace enabled; the analysis
-    # runs as a polled background job, so the extra minutes are acceptable.
-    # Older Ollama servers and non-thinking models reject the parameter, so
-    # fall back without it.
+    # Thinking models (qwen3, deepseek-r1, ...) spend minutes on a reasoning
+    # trace before the JSON unless thinking is disabled, which is far too slow
+    # for this. Older Ollama servers and non-thinking models reject the
+    # parameter, so fall back without it.
     try:
-        return client.chat(think=True, **chat_kwargs)
+        return client.chat(think=False, **chat_kwargs)
     except Exception as e:
         if "think" in str(e).lower():
             return client.chat(**chat_kwargs)
