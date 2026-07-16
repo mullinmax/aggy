@@ -1,15 +1,17 @@
-FROM python:3.11-alpine as aggy-api
+FROM python:3.11-slim AS aggy-api
 WORKDIR /src
 
 ENV TZ=America/New_York
 
-RUN apk add --no-cache libpq
+# Match the runtime image: keep BLAS single-threaded in the container.
+ENV OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1
 
+# glibc base: numpy/scipy/scikit-learn and psycopg2-binary all ship manylinux
+# wheels, so no build toolchain is required.
 COPY requirements.txt .
 
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev libpq-dev \
-    && pip install --no-cache-dir -r requirements.txt \
-    && apk del .build-deps
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /src/api
 
