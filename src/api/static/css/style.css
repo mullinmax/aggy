@@ -1,1 +1,60 @@
 /* Custom overrides; base utilities/components are compiled into tailwind.css. */
+
+/* ---- YouTube player (Plyr + SponsorBlock) ---- */
+
+/* Match Plyr's accent to the app's primary colour. */
+.plyr {
+  --plyr-color-main: oklch(var(--p));
+}
+
+/* Play glyph shown on the poster before the player initialises. */
+.aggy-play-badge {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.6);
+  position: relative;
+}
+.aggy-play-badge::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 54%;
+  transform: translate(-50%, -50%);
+  border-style: solid;
+  border-width: 0.75rem 0 0.75rem 1.2rem;
+  border-color: transparent transparent transparent #fff;
+}
+
+/* SponsorBlock on/off chip, top-right so it clears the centred play button. */
+.aggy-sb-toggle {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 10;
+  opacity: 0.85;
+}
+.aggy-sb-toggle:hover {
+  opacity: 1;
+}
+
+/* Transient "Skipped …" flash. */
+.aggy-skip-notice {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 4rem;
+  z-index: 10;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 0.75rem;
+  pointer-events: none;
+  animation: aggy-fade 1.6s ease forwards;
+}
+@keyframes aggy-fade {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}

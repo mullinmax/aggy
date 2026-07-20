@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Aggy{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('vendor/plyr.css') }}">
+{% endblock %}
+
 {% block body %}
 <!-- Navbar -->
 <div class="navbar bg-base-200 border-b border-base-300 sticky top-0 z-40">
@@ -436,5 +440,6 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ static_url('vendor/plyr.min.js') }}"></script>
 <script src="{{ static_url('js/app.js') }}"></script>
 {% endblock %}

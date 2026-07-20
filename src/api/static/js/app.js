@@ -86,9 +86,11 @@ function bindControls() {
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
-  // stop gifs/videos/embeds when the reader closes: emptying the media
-  // host halts <video> playback and unloads youtube iframes
+  // stop gifs/videos/embeds when the reader closes: destroy the youtube
+  // player first (halts audio, clears its timers), then empty the media host
+  // to unload any <video>/iframe
   $('readerModal').addEventListener('close', () => {
+    destroyPlayersIn($('readerMedia'));
     render($('readerMedia'));
     updateGifPlayback();
   });
@@ -666,13 +668,184 @@ function youtubeId(url) {
   return null;
 }
 
+// ---------- youtube player (Plyr + SponsorBlock) ----------
+
+// Local sprite: Plyr's default iconUrl points at its CDN, which the app
+// can't rely on (and shouldn't, being self-hosted). Ships in /static/vendor.
+const PLYR_SPRITE_URL = '/static/vendor/plyr.svg';
+
+// SponsorBlock categories auto-skipped by default: paid sponsors, unpaid
+// self-promotion, and subscribe/like reminders — the extension's default
+// "skip" set. Intro/outro/music are deliberately left alone.
+const SPONSORBLOCK_CATEGORIES = ['sponsor', 'selfpromo', 'interaction'];
+const SPONSORBLOCK_API = 'https://sponsor.ajay.app/api/skipSegments';
+
+// SponsorBlock auto-skip defaults on; a viewer's choice is remembered.
+const sponsorBlockEnabled = () => localStorage.getItem('aggy_sponsorblock') !== 'off';
+const setSponsorBlockEnabled = (on) =>
+  localStorage.setItem('aggy_sponsorblock', on ? 'on' : 'off');
+
+// videoId -> Promise<[{start, end, category}]>. Cached for the page so many
+// feed cards (or a revisit) don't re-hit the API, which asks not to be abused.
+const sponsorCache = new Map();
+
+function fetchSponsorSegments(videoId) {
+  if (sponsorCache.has(videoId)) return sponsorCache.get(videoId);
+  const cats = encodeURIComponent(JSON.stringify(SPONSORBLOCK_CATEGORIES));
+  const url = `${SPONSORBLOCK_API}?videoID=${encodeURIComponent(videoId)}&categories=${cats}`;
+  // 404 = "no segments for this video"; network errors -> behave as none.
+  const p = fetch(url)
+    .then((r) => (r.ok ? r.json() : []))
+    .then((rows) => (Array.isArray(rows) ? rows : [])
+      .map((row) => ({ start: row.segment[0], end: row.segment[1], category: row.category }))
+      .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
+      .sort((a, b) => a.start - b.start))
+    .catch(() => []);
+  sponsorCache.set(videoId, p);
+  return p;
+}
+
+// Fullscreen orientation: the app is portrait-locked (see the manifest), but
+// a fullscreen video should follow the device. Unlock rotation on the way in,
+// restore the portrait default on the way out. Best-effort — the Screen
+// Orientation API isn't everywhere and lock() rejects outside fullscreen.
+function unlockOrientation() {
+  try { screen.orientation?.lock?.('any')?.catch?.(() => {}); } catch { /* unsupported */ }
+}
+function relockOrientation() {
+  try { screen.orientation?.unlock?.(); } catch { /* unsupported */ }
+}
+
+// Only build the real player when a card nears the viewport, mirroring the
+// old loading="lazy" iframes so a feed full of videos doesn't spin up dozens
+// of players at once.
+const ytPlayerObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    ytPlayerObserver.unobserve(entry.target);
+    initYouTubePlayer(entry.target);
+  }
+}, { rootMargin: '300px' });
+
+// A YouTube video id -> placeholder element that upgrades itself into a full
+// Plyr player (skip buttons, real fullscreen, SponsorBlock) once on screen.
 function youtubeEmbed(id) {
-  return h('div', { class: 'aspect-video w-full' },
-    h('iframe', {
-      class: 'w-full h-full', src: `https://www.youtube-nocookie.com/embed/${id}`,
-      title: 'YouTube video player', loading: 'lazy', allowfullscreen: true,
-      allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture',
-    }));
+  const wrap = h('div', {
+    class: 'aggy-player relative w-full',
+    // in the feed the card opens the reader on click; player clicks are its own
+    onclick: (e) => e.stopPropagation(),
+  });
+  wrap.dataset.videoId = id;
+  // 16:9 poster + play glyph so the box isn't blank (and doesn't shift)
+  // before the player initialises. Plyr provides its own ratio afterwards.
+  wrap.append(
+    h('div', { class: 'aspect-video w-full bg-black relative overflow-hidden' },
+      h('img', {
+        class: 'absolute inset-0 w-full h-full object-cover',
+        src: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, alt: '', loading: 'lazy',
+        onerror: (e) => e.target.remove(),
+      }),
+      h('div', { class: 'absolute inset-0 grid place-items-center pointer-events-none' },
+        h('div', { class: 'aggy-play-badge' }))));
+  ytPlayerObserver.observe(wrap);
+  return wrap;
+}
+
+function initYouTubePlayer(wrap) {
+  if (wrap._plyr) return;
+  const id = wrap.dataset.videoId;
+  const embed = h('div', { 'data-plyr-provider': 'youtube', 'data-plyr-embed-id': id });
+  render(wrap, embed); // drop the poster, hand the box to Plyr
+
+  // library missing (offline shell without vendor JS): plain nocookie iframe
+  if (typeof Plyr === 'undefined') {
+    render(wrap, h('div', { class: 'aspect-video w-full' },
+      h('iframe', {
+        class: 'w-full h-full', src: `https://www.youtube-nocookie.com/embed/${id}`,
+        title: 'YouTube video player', loading: 'lazy', allowfullscreen: true,
+        allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture',
+      })));
+    return;
+  }
+
+  const player = new Plyr(embed, {
+    iconUrl: PLYR_SPRITE_URL,
+    controls: ['play-large', 'rewind', 'play', 'fast-forward', 'progress',
+      'current-time', 'mute', 'volume', 'settings', 'fullscreen'],
+    settings: ['quality', 'speed'],
+    ratio: '16:9',
+    youtube: { noCookie: true, rel: 0, modestbranding: 1, playsinline: 1 },
+    fullscreen: { enabled: true, iosNative: true },
+    storage: { enabled: false },
+  });
+  wrap._plyr = player;
+
+  player.on('enterfullscreen', unlockOrientation);
+  player.on('exitfullscreen', relockOrientation);
+
+  // Fetch segments the first time the video actually plays (so idle feed
+  // cards don't call the API), then skip flagged ranges as they come up.
+  let segments = null;
+  const loadSegments = () => {
+    if (segments !== null) return;
+    segments = []; // guard against a second fetch while the first is in flight
+    fetchSponsorSegments(id).then((s) => { segments = s; });
+  };
+  player.on('playing', loadSegments);
+  player.on('timeupdate', () => {
+    if (!segments || !segments.length || !sponsorBlockEnabled()) return;
+    const t = player.currentTime;
+    for (const seg of segments) {
+      if (t >= seg.start && t < seg.end - 0.15) {
+        player.currentTime = seg.end;
+        showSkipNotice(player.elements.container, seg.category);
+        break;
+      }
+    }
+  });
+
+  // Overlay lives inside Plyr's container so it's visible in fullscreen too.
+  player.on('ready', () => player.elements.container.append(sponsorToggle(loadSegments)));
+}
+
+// Small corner chip to flip SponsorBlock auto-skip on/off (on by default).
+function sponsorToggle(loadSegments) {
+  const btn = h('button', {
+    type: 'button',
+    title: 'SponsorBlock auto-skip',
+    onclick: (e) => {
+      e.stopPropagation();
+      const on = !sponsorBlockEnabled();
+      setSponsorBlockEnabled(on);
+      if (on) loadSegments();
+      paint();
+      toast(on ? 'SponsorBlock on' : 'SponsorBlock off');
+    },
+  });
+  const paint = () => {
+    const on = sponsorBlockEnabled();
+    btn.className = `aggy-sb-toggle btn btn-xs ${on ? 'btn-primary' : 'btn-ghost'}`;
+    btn.textContent = on ? 'SponsorBlock' : 'SB off';
+  };
+  paint();
+  return btn;
+}
+
+// Brief "Skipped …" flash when a segment is jumped, matching the extension.
+function showSkipNotice(container, category) {
+  const labels = { sponsor: 'sponsor', selfpromo: 'self-promo', interaction: 'reminder' };
+  const note = h('div', { class: 'aggy-skip-notice' }, `Skipped ${labels[category] || category}`);
+  container.append(note);
+  setTimeout(() => note.remove(), 1600);
+}
+
+// Destroy any players inside a host (stops audio, clears timers) before it's
+// emptied — used when the reader modal closes.
+function destroyPlayersIn(host) {
+  host.querySelectorAll('.aggy-player').forEach((wrap) => {
+    ytPlayerObserver.unobserve(wrap);
+    if (wrap._plyr) { try { wrap._plyr.destroy(); } catch { /* already gone */ } wrap._plyr = null; }
+  });
 }
 
 // Gif playback policy: pause everything offscreen, and of the gifs on
