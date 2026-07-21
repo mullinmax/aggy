@@ -146,6 +146,9 @@ class Feed(ItemCollection):
             "SELECT i.*, c.score, c.added_at, "
             "c.predicted_score, c.predicted_confidence, "
             "st.score AS user_score, st.is_read AS is_read, "
+            "EXISTS (SELECT 1 FROM list_items li"
+            " WHERE li.user_hash = c.user_hash"
+            "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
             "src.name AS source_name, src.color AS source_color, "
             "ROW_NUMBER() OVER (PARTITION BY src.name_hash "
             f"ORDER BY {order_by}) AS source_rank "
@@ -219,6 +222,7 @@ class Feed(ItemCollection):
                 "source_color": row.pop("source_color", None),
                 "user_score": row.pop("user_score", None),
                 "is_read": row.pop("is_read", None),
+                "in_list": row.pop("in_list", None),
                 "predicted_score": row.pop("predicted_score", None),
                 "predicted_confidence": row.pop("predicted_confidence", None),
             }

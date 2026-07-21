@@ -28,6 +28,7 @@ def build_app():
     from routers.source_analyze import source_analyze_router
     from routers.bulk_import import bulk_import_router
     from routers.item import item_router
+    from routers.list import list_router
 
     app = FastAPI()
     app.include_router(admin_router, tags=["Admin"])
@@ -42,6 +43,7 @@ def build_app():
     )
     app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
     app.include_router(item_router, prefix="/item", tags=["Items"])
+    app.include_router(list_router, prefix="/list", tags=["Lists"])
     return app
 
 

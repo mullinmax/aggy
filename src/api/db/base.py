@@ -97,6 +97,8 @@ class AggyBaseModel(BaseModel):
 # Tables managed by Flyway. Listed for use by the test/dev flush helper.
 _ALL_TABLES = (
     "ranking_model_stats",
+    "list_items",
+    "lists",
     "item_states",
     "source_items",
     "feed_items",

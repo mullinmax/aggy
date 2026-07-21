@@ -86,6 +86,9 @@ function bindControls() {
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
+  $('createListForm').onsubmit = handleCreateList;
+  $('listSaveBtn').onclick = handleListSave;
+
   // stop gifs/videos/embeds when the reader closes: destroy the youtube
   // player first (halts audio, clears its timers), then empty the media host
   // to unload any <video>/iframe
@@ -1027,11 +1030,11 @@ function itemCard(item) {
   const excerpt = cleanExcerpt(item);
 
   const mediaBlock = ytId
-    ? h('figure', { class: 'bg-base-300' }, youtubeEmbed(ytId))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, youtubeEmbed(ytId))
     : media
-    ? h('figure', { class: 'bg-base-300' }, mediaGallery(media))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media))
     : imageUrl
-      ? h('figure', { class: 'bg-base-300' },
+      ? h('figure', { class: 'bg-base-300 aggy-card-media' },
           h('img', {
             src: imageUrl, class: 'w-full max-h-[70vh] object-contain', alt: '', loading: 'lazy',
             onerror: (e) => { e.target.closest('figure').remove(); },
@@ -1074,6 +1077,7 @@ function itemCard(item) {
         published && h('span', { class: 'whitespace-nowrap' }, published),
         predictedBadge),
       h('div', { class: 'flex items-center gap-1 ml-auto' },
+        listButton(item),
         voteButton('▲', 1, 'Upvote'),
         voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
         voteButton('▼', -1, 'Downvote'))));
@@ -1146,6 +1150,115 @@ async function voteItem(item, score, btn) {
       const card = btn.closest('.card');
       if (card) collapseCard(card);
     }
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
+// ---------- lists ----------
+// The current item + its list button while the list modal is open, so a save
+// can update the card in place.
+let listModalItem = null;
+let listModalBtn = null;
+
+// Bookmark icon; filled when the article is saved to at least one list.
+function listIconSvg(filled) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', filled ? 'currentColor' : 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('class', 'w-5 h-5');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('d', 'M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 '
+    + '1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 '
+    + '013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z');
+  svg.appendChild(path);
+  return svg;
+}
+
+// The "add to list" button shown in each card's action row.
+function listButton(item) {
+  return h('button', {
+    class: `btn btn-ghost btn-sm btn-square ${item.item_in_list ? 'text-primary' : 'text-base-content/60'}`,
+    title: 'Add to a list',
+    onclick: (e) => { e.stopPropagation(); openListModal(item, e.currentTarget); },
+  }, listIconSvg(!!item.item_in_list));
+}
+
+// One row of the list checklist: a checkbox + name + item count.
+function listChecklistRow(l) {
+  return h('label', {
+    class: 'label cursor-pointer justify-start gap-3 py-1.5 px-2 rounded-lg hover:bg-base-200',
+  },
+    h('input', {
+      type: 'checkbox', class: 'checkbox checkbox-sm checkbox-primary',
+      checked: !!l.list_contains_item, 'data-list-hash': l.list_name_hash,
+    }),
+    h('span', { class: 'label-text flex-1 min-w-0 truncate' }, l.list_name),
+    h('span', { class: 'text-xs text-base-content/40' }, String(l.list_item_count ?? 0)));
+}
+
+async function openListModal(item, btn) {
+  listModalItem = item;
+  listModalBtn = btn || null;
+  $('newListName').value = '';
+  showModal('listModal');
+  render($('listChecklist'), spinner());
+  try {
+    const lists = await sdk.listList({ item_url_hash: item.item_hash });
+    renderListChecklist(lists);
+  } catch (err) {
+    render($('listChecklist'), h('p', { class: 'text-sm text-error py-2' }, err.message));
+  }
+}
+
+function renderListChecklist(lists) {
+  if (!lists.length) {
+    render($('listChecklist'),
+      h('p', { class: 'text-sm text-base-content/50 py-2' }, 'No lists yet — create one below.'));
+    return;
+  }
+  render($('listChecklist'), lists.map(listChecklistRow));
+}
+
+// Create a new list from the inline field and add its (pre-checked) row without
+// reloading, so any boxes the user already ticked stay ticked.
+async function handleCreateList(e) {
+  e.preventDefault();
+  const name = $('newListName').value.trim();
+  if (!name) return;
+  try {
+    const created = await sdk.listCreate({ list_name: name });
+    $('newListName').value = '';
+    const box = $('listChecklist');
+    if (!box.querySelector('input')) render(box); // clear the "no lists yet" note
+    box.append(listChecklistRow({ ...created, list_contains_item: true }));
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
+async function handleListSave() {
+  if (!listModalItem) return;
+  const hashes = Array.from($('listChecklist').querySelectorAll('input:checked'))
+    .map((i) => i.getAttribute('data-list-hash'));
+  try {
+    await sdk.listSetItemLists({
+      item_url_hash: listModalItem.item_hash,
+      list_hashes: hashes.join(','),
+    });
+    const inList = hashes.length > 0;
+    listModalItem.item_in_list = inList;
+    if (listModalBtn) {
+      listModalBtn.classList.toggle('text-primary', inList);
+      listModalBtn.classList.toggle('text-base-content/60', !inList);
+      render(listModalBtn, listIconSvg(inList));
+    }
+    closeModal('listModal');
+    toast(inList ? 'Saved to lists' : 'Removed from all lists');
   } catch (err) {
     toast(err.message, 'alert-error');
   }

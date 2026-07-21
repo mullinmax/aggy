@@ -40,6 +40,20 @@ def _parse_embedding(embeddings) -> Optional[np.ndarray]:
     return None
 
 
+def _effective_label(vote, list_added_at):
+    """Fold list membership into the training label.
+
+    Adding an item to a list counts as an extra positive vote: it lifts the
+    label by one upvote (clamped to the +1..-1 vote scale). An unvoted but
+    listed item therefore reads as an upvote; a downvoted-but-listed one lands
+    back at neutral.
+    """
+    if list_added_at is None:
+        return vote
+    base = 0.0 if vote is None else float(vote)
+    return max(-1.0, min(1.0, base + 1.0))
+
+
 def _row_to_features(row) -> ItemFeatures:
     media = row.get("media")
     if isinstance(media, str):
@@ -47,6 +61,7 @@ def _row_to_features(row) -> ItemFeatures:
             media = json.loads(media)
         except (TypeError, ValueError):
             media = None
+    list_added_at = row.get("list_added_at")
     return ItemFeatures(
         url_hash=row["url_hash"],
         embedding=_parse_embedding(row.get("embeddings")),
@@ -55,8 +70,9 @@ def _row_to_features(row) -> ItemFeatures:
         date_published=row.get("date_published"),
         has_image=bool(row.get("image_url")),
         has_media=bool(media),
-        label=row.get("vote"),
-        label_date=row.get("vote_date"),
+        label=_effective_label(row.get("vote"), list_added_at),
+        # an unvoted-but-listed item is labelled as of when it was listed
+        label_date=row.get("vote_date") or list_added_at,
     )
 
 
@@ -67,7 +83,12 @@ _FEED_ITEMS_SQL = (
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
     " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
-    "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
+    "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name, ("
+    # earliest time this item was added to any of the user's lists; a listed
+    # item counts as an extra positive vote (see _effective_label)
+    " SELECT MIN(li.added_at) FROM list_items li"
+    " WHERE li.user_hash = c.user_hash"
+    "  AND li.item_url_hash = c.item_url_hash) AS list_added_at "
     "FROM feed_items c "
     "JOIN items i ON i.url_hash = c.item_url_hash "
     "LEFT JOIN item_states st ON st.user_hash = c.user_hash "
@@ -171,21 +192,33 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
 
 
 def feeds_needing_rank() -> List[Feed]:
-    """Feeds with at least one vote where votes or items are newer than the
+    """Feeds with at least one label — an explicit vote or a listed item, since
+    list membership counts as a vote — where a label or item is newer than the
     latest prediction (or no prediction exists yet)."""
     with get_db_con() as cur:
         cur.execute(
-            "SELECT f.user_hash, f.name FROM feeds f WHERE EXISTS ("
-            " SELECT 1 FROM item_states st"
-            " WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash"
-            "  AND st.score IS NOT NULL"
+            "SELECT f.user_hash, f.name FROM feeds f WHERE ("
+            " EXISTS (SELECT 1 FROM item_states st"
+            "  WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash"
+            "   AND st.score IS NOT NULL)"
+            " OR EXISTS (SELECT 1 FROM feed_items c"
+            "  JOIN list_items li ON li.user_hash = c.user_hash"
+            "   AND li.item_url_hash = c.item_url_hash"
+            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash)"
             ") AND ("
             " EXISTS (SELECT 1 FROM feed_items c"
             "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash"
             "   AND c.predicted_at IS NULL)"
-            " OR COALESCE((SELECT MAX(st.score_date) FROM item_states st"
-            "  WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash),"
-            "  'epoch') > COALESCE((SELECT MAX(c.predicted_at) FROM feed_items c"
+            " OR GREATEST("
+            "  COALESCE((SELECT MAX(st.score_date) FROM item_states st"
+            "   WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash),"
+            "   'epoch'),"
+            "  COALESCE((SELECT MAX(li.added_at) FROM feed_items c"
+            "   JOIN list_items li ON li.user_hash = c.user_hash"
+            "    AND li.item_url_hash = c.item_url_hash"
+            "   WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
+            "   'epoch')"
+            " ) > COALESCE((SELECT MAX(c.predicted_at) FROM feed_items c"
             "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
             "  'epoch'))",
         )

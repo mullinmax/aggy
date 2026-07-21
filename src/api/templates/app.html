@@ -154,6 +154,28 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 
+<!-- Add to List Modal -->
+<dialog class="modal" id="listModal">
+  <div class="modal-box max-w-sm">
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
+    <h3 class="text-lg font-bold mb-1">Add to list</h3>
+    <p class="text-xs text-base-content/60 mb-3">
+      Pick any lists for this article. Adding it to a list also counts as an upvote.
+    </p>
+    <div id="listChecklist" class="flex flex-col gap-1 max-h-[40vh] overflow-y-auto"></div>
+    <form id="createListForm" class="flex gap-2 mt-3 pt-3 border-t border-base-300">
+      <input type="text" class="input input-bordered input-sm flex-1" id="newListName"
+        placeholder="New list name" maxlength="100" autocomplete="off">
+      <button type="submit" class="btn btn-sm btn-square btn-primary" title="Create list">+</button>
+    </form>
+    <div class="modal-action">
+      <button type="button" class="btn btn-ghost btn-sm" data-close-modal>Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" id="listSaveBtn">Save</button>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
 <!-- Model Stats Modal -->
 <dialog class="modal" id="statsModal">
   <div class="modal-box max-w-2xl">
