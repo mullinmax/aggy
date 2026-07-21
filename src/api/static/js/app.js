@@ -8,6 +8,7 @@ const sdk = new AggySDK();
 // ---------- state ----------
 const PAGE_SIZE = 20;
 let currentFeed = null;
+let currentList = null; // the list being browsed in the list-detail view
 let itemSkip = 0;
 let lastItemBand = null; // sort-band of the last rendered item, for threshold dividers
 // filter/sort state for the current feed; sources: null means "all sources"
@@ -39,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   router
     .add('', showDashboard)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
+    .add('list/:hash', ({ hash }) => showList(hash))
     .start();
 });
 
@@ -88,6 +90,7 @@ function bindControls() {
 
   $('createListForm').onsubmit = handleCreateList;
   $('listSaveBtn').onclick = handleListSave;
+  $('deleteListBtn').onclick = confirmDeleteList;
 
   // stop gifs/videos/embeds when the reader closes: destroy the youtube
   // player first (halts audio, clears its timers), then empty the media host
@@ -134,6 +137,7 @@ function setupAutoHideNav() {
 function setView(name) {
   $('viewDashboard').classList.toggle('hidden', name !== 'dashboard');
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
+  $('viewList').classList.toggle('hidden', name !== 'list');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -142,7 +146,24 @@ function setView(name) {
 function showDashboard() {
   setView('dashboard');
   currentFeed = null;
+  currentList = null;
   loadFeeds();
+  loadLists();
+}
+
+// The lists section only appears once the user has at least one list; lists
+// are created by bookmarking articles from a feed.
+async function loadLists() {
+  const section = $('listsSection');
+  const grid = $('listGrid');
+  try {
+    const lists = await sdk.listList({});
+    if (!lists.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    render(grid, lists.map(listCard));
+  } catch {
+    section.classList.add('hidden');
+  }
 }
 
 async function loadFeeds() {
@@ -192,22 +213,36 @@ function onboardingWelcome() {
 }
 
 function feedCard(feed) {
-  // summary line: total posts, unread, average posts/day (last 30 days)
+  // summary line: unread count (or total when nothing's unread) + posts/day
   const stats = [];
   if (feed.feed_item_count != null) {
-    stats.push(`${feed.feed_item_count} post${feed.feed_item_count === 1 ? '' : 's'}`);
-    if (feed.feed_unread_count != null) stats.push(`${feed.feed_unread_count} unread`);
+    if (feed.feed_unread_count) stats.push(`${feed.feed_unread_count} unread`);
+    else stats.push(`${feed.feed_item_count} post${feed.feed_item_count === 1 ? '' : 's'}`);
     if (feed.feed_posts_per_day != null) stats.push(`~${feed.feed_posts_per_day}/day`);
   }
   return h('div', {
-    class: 'card bg-base-200 shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-base-300 hover:border-primary',
+    class: 'card bg-base-200 border border-base-300 hover:border-primary transition-colors cursor-pointer',
     onclick: () => router.go(`feed/${feed.feed_name_hash}`),
   },
-    h('div', { class: 'card-body p-5' },
-      h('div', { class: 'badge badge-primary badge-outline font-bold text-lg p-3' },
-        feed.feed_name.charAt(0).toUpperCase()),
-      h('h2', { class: 'card-title text-base mt-2' }, feed.feed_name),
-      stats.length ? h('div', { class: 'text-xs text-base-content/50' }, stats.join(' · ')) : null));
+    h('div', { class: 'card-body p-3 gap-1' },
+      h('h2', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, feed.feed_name),
+      stats.length ? h('div', { class: 'text-xs text-base-content/50 truncate' }, stats.join(' · ')) : null));
+}
+
+// Compact card for a saved list, mirroring the feed cards but visually
+// distinct (a bookmark glyph + secondary hover accent).
+function listCard(list) {
+  const count = list.list_item_count ?? 0;
+  return h('div', {
+    class: 'card bg-base-200 border border-base-300 hover:border-secondary transition-colors cursor-pointer',
+    onclick: () => router.go(`list/${list.list_name_hash}`),
+  },
+    h('div', { class: 'card-body p-3 gap-1' },
+      h('div', { class: 'flex items-center gap-1.5 min-w-0' },
+        h('span', { class: 'text-secondary flex-none' }, '\u{1F516}'),
+        h('h2', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, list.list_name)),
+      h('div', { class: 'text-xs text-base-content/50 truncate' },
+        `${count} item${count === 1 ? '' : 's'}`)));
 }
 
 async function handleCreateFeed(e) {
@@ -268,6 +303,7 @@ async function handleRenameFeed(e) {
 // ---------- feed view ----------
 async function showFeed(hash) {
   setView('feed');
+  currentList = null; // leaving any list-detail context
   itemSkip = 0;
   render($('itemList'), spinner());
 
@@ -313,6 +349,63 @@ function switchFeedTab(tab) {
   $('filterBtn').classList.toggle('hidden', tab !== 'items');
   if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
+}
+
+// ---------- list detail view ----------
+// A list browses like a feed's article list, but with no recommendation
+// engine: no sort/filter, model stats, predictions, or vote buttons — just
+// the saved articles, newest-added first.
+async function showList(hash) {
+  setView('list');
+  currentFeed = null; // no feed context: the reader won't record vote state
+  render($('listItemList'), spinner());
+
+  if (!currentList || currentList.list_name_hash !== hash) {
+    try {
+      currentList = await sdk.listGet({ list_name_hash: hash });
+    } catch (err) {
+      toast(err.message, 'alert-error');
+      router.go('');
+      return;
+    }
+  }
+
+  $('listTitle').textContent = currentList.list_name;
+  $('listBreadcrumb').textContent = currentList.list_name;
+  loadListItems();
+}
+
+async function loadListItems() {
+  const list = $('listItemList');
+  render(list, spinner());
+  try {
+    const items = await sdk.listItems({ list_name_hash: currentList.list_name_hash });
+    if (!items.length) {
+      render(list, emptyState('\u{1F516}', 'This list is empty',
+        'Save articles to this list from any feed with the bookmark button.'));
+      return;
+    }
+    render(list);
+    items.forEach((item) => list.append(itemCard(item, { listMode: true })));
+  } catch (err) {
+    render(list, h('div', { class: 'text-center py-16 text-base-content/50' }, 'Failed to load list'));
+    toast(err.message, 'alert-error');
+  }
+}
+
+function confirmDeleteList() {
+  if (!currentList) return;
+  confirmDialog({
+    title: 'Delete List',
+    message: `Delete "${currentList.list_name}"? The articles stay in their feeds; only the list is removed.`,
+    action: 'Delete List',
+    onConfirm: async () => {
+      await sdk.listDelete({ list_name_hash: currentList.list_name_hash });
+      currentList = null;
+      toast('List deleted');
+      router.go('');
+    },
+  });
 }
 
 // ---------- filters ----------
@@ -1021,8 +1114,10 @@ function mediaGallery(mediaList) {
 }
 
 // Reddit-app-style card: meta row and title up top, full-feed-width media
-// below, then the vote row.
-function itemCard(item) {
+// below, then the action row. In `listMode` the recommendation-engine bits
+// (the "why recommended" button, the predicted-match badge, and the vote
+// buttons) are dropped — a list is a plain saved collection.
+function itemCard(item, { listMode = false } = {}) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
   const ytId = youtubeId(item.item_url);
   const media = !ytId && (item.item_media || []).length ? item.item_media : null;
@@ -1066,7 +1161,7 @@ function itemCard(item) {
     h('div', { class: 'px-4 pt-3 pb-2' },
       h('div', { class: 'flex items-start gap-2' },
         h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0 line-clamp-2' }, item.item_title || 'Untitled'),
-        explainButton(item),
+        listMode ? null : explainButton(item),
         openLinkButton(item.item_url)),
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
     mediaBlock,
@@ -1075,12 +1170,12 @@ function itemCard(item) {
         sourceBadge(item.item_source_name, item.item_source_color),
         item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
         published && h('span', { class: 'whitespace-nowrap' }, published),
-        predictedBadge),
+        listMode ? null : predictedBadge),
       h('div', { class: 'flex items-center gap-1 ml-auto' },
         listButton(item),
-        voteButton('▲', 1, 'Upvote'),
-        voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
-        voteButton('▼', -1, 'Downvote'))));
+        listMode ? null : voteButton('▲', 1, 'Upvote'),
+        listMode ? null : voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
+        listMode ? null : voteButton('▼', -1, 'Downvote'))));
 }
 
 // ---------- why recommended ----------
@@ -1259,6 +1354,8 @@ async function handleListSave() {
     }
     closeModal('listModal');
     toast(inList ? 'Saved to lists' : 'Removed from all lists');
+    // while browsing a list, membership changes can add/remove the card
+    if (currentList) loadListItems();
   } catch (err) {
     toast(err.message, 'alert-error');
   }

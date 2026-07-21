@@ -59,6 +59,14 @@ def get_lists(
     ]
 
 
+@list_router.get("/get", summary="Get a list", response_model=ListResponse)
+def get_list(
+    list_name_hash: str, user: User = Depends(authenticate)
+) -> ListResponse:
+    lst = get_list_by_name_hash(user.name_hash, list_name_hash)
+    return ListResponse.from_db_model(lst, item_count=lst.item_count())
+
+
 @list_router.delete(
     "/delete",
     summary="Delete a list",

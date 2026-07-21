@@ -155,6 +155,11 @@ class AggySDK {
     return this._request("DELETE", "/list/delete", { query: { list_name_hash } });
   }
 
+  /** Get a list */
+  async listGet({ list_name_hash }) {
+    return this._request("GET", "/list/get", { query: { list_name_hash } });
+  }
+
   /** List the items in a list */
   async listItems({ list_name_hash }) {
     return this._request("GET", "/list/items", { query: { list_name_hash } });

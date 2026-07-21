@@ -63,6 +63,28 @@ def test_list_lists_with_item_membership(
     assert row["list_item_count"] == 1
 
 
+def test_get_list(client, existing_list, existing_item_strict, token):
+    existing_list.add_item(existing_item_strict.url_hash)
+    args = build_api_request_args(
+        path="/list/get",
+        token=token,
+        params={"list_name_hash": existing_list.name_hash},
+    )
+    response = client.get(**args)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["list_name"] == existing_list.name
+    assert body["list_item_count"] == 1
+
+
+def test_get_missing_list_404(client, token):
+    args = build_api_request_args(
+        path="/list/get", token=token, params={"list_name_hash": "missing"}
+    )
+    response = client.get(**args)
+    assert response.status_code == 404
+
+
 def test_delete_list(client, existing_list, existing_user, token):
     args = build_api_request_args(
         path="/list/delete",
