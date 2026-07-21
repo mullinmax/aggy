@@ -680,10 +680,12 @@ const PLYR_SPRITE_URL = '/static/vendor/plyr.svg';
 const SPONSORBLOCK_CATEGORIES = ['sponsor', 'selfpromo', 'interaction'];
 const SPONSORBLOCK_API = 'https://sponsor.ajay.app/api/skipSegments';
 
-// SponsorBlock auto-skip defaults on; a viewer's choice is remembered.
-const sponsorBlockEnabled = () => localStorage.getItem('aggy_sponsorblock') !== 'off';
-const setSponsorBlockEnabled = (on) =>
-  localStorage.setItem('aggy_sponsorblock', on ? 'on' : 'off');
+// Human-readable segment names for the countdown chip.
+const SPONSOR_LABELS = {
+  sponsor: 'sponsor',
+  selfpromo: 'self promotion',
+  interaction: 'interaction reminder',
+};
 
 // videoId -> Promise<[{start, end, category}]>. Cached for the page so many
 // feed cards (or a revisit) don't re-hit the API, which asks not to be abused.
@@ -705,14 +707,14 @@ function fetchSponsorSegments(videoId) {
   return p;
 }
 
-// Fullscreen orientation: the app is portrait-locked (see the manifest), but
-// a fullscreen video should follow the device. Unlock rotation on the way in,
-// restore the portrait default on the way out. Best-effort — the Screen
-// Orientation API isn't everywhere and lock() rejects outside fullscreen.
-function unlockOrientation() {
-  try { screen.orientation?.lock?.('any')?.catch?.(() => {}); } catch { /* unsupported */ }
+// Fullscreen orientation: force landscape on the way in (so it rotates even
+// when the phone's auto-rotate is off), release it again on the way out.
+// Best-effort — the Screen Orientation API isn't everywhere and lock() only
+// works while fullscreen; on iOS the native video fullscreen handles rotation.
+function lockLandscape() {
+  try { screen.orientation?.lock?.('landscape')?.catch?.(() => {}); } catch { /* unsupported */ }
 }
-function relockOrientation() {
+function unlockOrientation() {
   try { screen.orientation?.unlock?.(); } catch { /* unsupported */ }
 }
 
@@ -779,64 +781,85 @@ function initYouTubePlayer(wrap) {
     storage: { enabled: false },
   });
   wrap._plyr = player;
+  player.on('ready', () => setupPlayerOverlays(player, id));
+}
 
-  player.on('enterfullscreen', unlockOrientation);
-  player.on('exitfullscreen', relockOrientation);
+// SponsorBlock auto-skip + fullscreen skip zones, both living inside Plyr's
+// container so they show (and rotate) in fullscreen too.
+function setupPlayerOverlays(player, id) {
+  const container = player.elements.container;
 
-  // Fetch segments the first time the video actually plays (so idle feed
-  // cards don't call the API), then skip flagged ranges as they come up.
+  // Force landscape in fullscreen, release it on the way out, and flag the
+  // container so the tap-to-skip zones only arm while fullscreen.
+  player.on('enterfullscreen', () => { container.classList.add('aggy-fs'); lockLandscape(); });
+  player.on('exitfullscreen', () => { container.classList.remove('aggy-fs'); unlockOrientation(); });
+
+  // --- SponsorBlock ---------------------------------------------------------
+  // Segments load on first play so idle feed cards don't hit the API. Each is
+  // skipped only after a 5s countdown the viewer can cancel by tapping.
   let segments = null;
+  const cancelled = new Set(); // segments the viewer chose to keep
   const loadSegments = () => {
     if (segments !== null) return;
     segments = []; // guard against a second fetch while the first is in flight
     fetchSponsorSegments(id).then((s) => { segments = s; });
   };
   player.on('playing', loadSegments);
-  player.on('timeupdate', () => {
-    if (!segments || !segments.length || !sponsorBlockEnabled()) return;
-    const t = player.currentTime;
-    for (const seg of segments) {
-      if (t >= seg.start && t < seg.end - 0.15) {
-        player.currentTime = seg.end;
-        showSkipNotice(player.elements.container, seg.category);
-        break;
-      }
-    }
-  });
 
-  // Overlay lives inside Plyr's container so it's visible in fullscreen too.
-  player.on('ready', () => player.elements.container.append(sponsorToggle(loadSegments)));
-}
-
-// Small corner chip to flip SponsorBlock auto-skip on/off (on by default).
-function sponsorToggle(loadSegments) {
-  const btn = h('button', {
-    type: 'button',
-    title: 'SponsorBlock auto-skip',
-    onclick: (e) => {
-      e.stopPropagation();
-      const on = !sponsorBlockEnabled();
-      setSponsorBlockEnabled(on);
-      if (on) loadSegments();
-      paint();
-      toast(on ? 'SponsorBlock on' : 'SponsorBlock off');
-    },
-  });
-  const paint = () => {
-    const on = sponsorBlockEnabled();
-    btn.className = `aggy-sb-toggle btn btn-xs ${on ? 'btn-primary' : 'btn-ghost'}`;
-    btn.textContent = on ? 'SponsorBlock' : 'SB off';
+  // Countdown chip: appears ~5s before a skip, tap to cancel that skip.
+  let chipSeg = null;
+  const chipText = h('span', {});
+  const chip = h('button', {
+    type: 'button', class: 'aggy-sb-chip hidden', title: 'Tap to cancel the skip',
+    onclick: (e) => { e.stopPropagation(); if (chipSeg) cancelled.add(chipSeg); hideChip(); },
+  }, chipText, h('span', { class: 'aggy-sb-chip-hint' }, 'tap to cancel'));
+  const showChip = (seg, secs) => {
+    chipSeg = seg;
+    const label = SPONSOR_LABELS[seg.category] || seg.category;
+    chipText.textContent = `Skipping ${label} in ${secs}s`;
+    chip.classList.remove('hidden');
   };
-  paint();
-  return btn;
+  const hideChip = () => { chipSeg = null; chip.classList.add('hidden'); };
+
+  player.on('timeupdate', () => {
+    if (!segments || !segments.length) return hideChip();
+    const t = player.currentTime;
+    let upcoming = null;
+    for (const seg of segments) {
+      if (seg.end - 0.15 <= t) continue;   // already behind us
+      if (cancelled.has(seg)) continue;    // viewer opted to keep it
+      if (t >= seg.start) {                // inside the segment -> skip now
+        player.currentTime = seg.end;
+        return hideChip();
+      }
+      upcoming = seg;                       // first still-pending segment ahead
+      break;
+    }
+    if (upcoming && upcoming.start - t <= 5) showChip(upcoming, Math.max(1, Math.ceil(upcoming.start - t)));
+    else hideChip();
+  });
+
+  // --- Tap-to-skip zones (fullscreen only) ---------------------------------
+  // Left/right edges rewind/forward; they clear the bottom control bar and
+  // leave the centre free so play/pause and the controls still work.
+  const seek = player.config?.seekTime || 10;
+  const tapZone = (side, action) => h('button', {
+    type: 'button', class: `aggy-tap aggy-tap-${side}`,
+    'aria-label': side === 'left' ? `Rewind ${seek} seconds` : `Forward ${seek} seconds`,
+    onclick: (e) => { e.stopPropagation(); action(); flashTap(e.currentTarget); },
+  }, h('span', { class: 'aggy-tap-icon' }, side === 'left' ? `« ${seek}` : `${seek} »`));
+
+  container.append(
+    tapZone('left', () => player.rewind()),
+    tapZone('right', () => player.forward()),
+    chip);
 }
 
-// Brief "Skipped …" flash when a segment is jumped, matching the extension.
-function showSkipNotice(container, category) {
-  const labels = { sponsor: 'sponsor', selfpromo: 'self-promo', interaction: 'reminder' };
-  const note = h('div', { class: 'aggy-skip-notice' }, `Skipped ${labels[category] || category}`);
-  container.append(note);
-  setTimeout(() => note.remove(), 1600);
+// Briefly flash a tap zone's label so a skip tap gives visible feedback.
+function flashTap(el) {
+  el.classList.remove('aggy-tap-active');
+  void el.offsetWidth; // restart the animation
+  el.classList.add('aggy-tap-active');
 }
 
 // Destroy any players inside a host (stops audio, clears timers) before it's

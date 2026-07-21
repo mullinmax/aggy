@@ -26,35 +26,69 @@
   border-color: transparent transparent transparent #fff;
 }
 
-/* SponsorBlock on/off chip, top-right so it clears the centred play button. */
-.aggy-sb-toggle {
+/* SponsorBlock countdown chip: top-centre, shown only in the ~5s before a
+   skip. It's a button — tapping it cancels that skip. */
+.aggy-sb-chip {
   position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 10;
-  opacity: 0.85;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  max-width: 90%;
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.8rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.aggy-sb-toggle:hover {
-  opacity: 1;
+.aggy-sb-chip.hidden { display: none; }
+.aggy-sb-chip-hint {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
 }
 
-/* Transient "Skipped …" flash. */
-.aggy-skip-notice {
+/* Tap-to-skip zones on the left/right edges. Inactive until fullscreen so
+   they never swallow taps in the inline/feed player, and they stop short of
+   the bottom control bar. */
+.aggy-tap {
   position: absolute;
-  left: 0.75rem;
+  top: 0;
   bottom: 4rem;
-  z-index: 10;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
-  background: rgba(0, 0, 0, 0.75);
+  width: 25%;
+  z-index: 5;
+  border: 0;
+  background: transparent;
   color: #fff;
-  font-size: 0.75rem;
   pointer-events: none;
-  animation: aggy-fade 1.6s ease forwards;
+  display: grid;
+  place-items: center;
 }
-@keyframes aggy-fade {
-  0% { opacity: 0; }
-  10% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { opacity: 0; }
+.aggy-tap-left { left: 0; }
+.aggy-tap-right { right: 0; }
+.plyr.aggy-fs .aggy-tap { pointer-events: auto; }
+
+/* Skip-amount label, flashed briefly on tap. */
+.aggy-tap-icon {
+  padding: 0.35rem 0.6rem;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 1rem;
+  font-weight: 600;
+  opacity: 0;
+}
+.aggy-tap-active .aggy-tap-icon { animation: aggy-tap-flash 0.5s ease; }
+@keyframes aggy-tap-flash {
+  0% { opacity: 0; transform: scale(0.85); }
+  25% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
 }
