@@ -57,7 +57,11 @@ async def service_worker():
 
 @web_router.get("/manifest.webmanifest", include_in_schema=False)
 async def manifest():
+    # No-cache so a changed manifest (e.g. orientation) is re-read on the next
+    # visit instead of a stale copy lingering — installed PWAs otherwise keep
+    # the manifest captured at install time until the browser refreshes it.
     return FileResponse(
         BASE_DIR / "static" / "manifest.webmanifest",
         media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
     )
