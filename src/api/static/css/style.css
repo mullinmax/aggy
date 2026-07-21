@@ -1,1 +1,94 @@
 /* Custom overrides; base utilities/components are compiled into tailwind.css. */
+
+/* ---- YouTube player (Plyr + SponsorBlock) ---- */
+
+/* Match Plyr's accent to the app's primary colour. */
+.plyr {
+  --plyr-color-main: oklch(var(--p));
+}
+
+/* Play glyph shown on the poster before the player initialises. */
+.aggy-play-badge {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.6);
+  position: relative;
+}
+.aggy-play-badge::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 54%;
+  transform: translate(-50%, -50%);
+  border-style: solid;
+  border-width: 0.75rem 0 0.75rem 1.2rem;
+  border-color: transparent transparent transparent #fff;
+}
+
+/* SponsorBlock countdown chip: top-centre, shown only in the ~5s before a
+   skip. It's a button — tapping it cancels that skip. */
+.aggy-sb-chip {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  max-width: 90%;
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.8rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.aggy-sb-chip.hidden { display: none; }
+.aggy-sb-chip-hint {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+/* Tap-to-skip zones on the left/right edges. Inactive until fullscreen so
+   they never swallow taps in the inline/feed player, and they stop short of
+   the bottom control bar. */
+.aggy-tap {
+  position: absolute;
+  top: 0;
+  bottom: 4rem;
+  width: 25%;
+  z-index: 5;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+}
+.aggy-tap-left { left: 0; }
+.aggy-tap-right { right: 0; }
+.plyr.aggy-fs .aggy-tap { pointer-events: auto; }
+
+/* Skip-amount label, flashed briefly on tap. */
+.aggy-tap-icon {
+  padding: 0.35rem 0.6rem;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 1rem;
+  font-weight: 600;
+  opacity: 0;
+}
+.aggy-tap-active .aggy-tap-icon { animation: aggy-tap-flash 0.5s ease; }
+@keyframes aggy-tap-flash {
+  0% { opacity: 0; transform: scale(0.85); }
+  25% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}

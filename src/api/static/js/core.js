@@ -133,6 +133,9 @@ const auth = {
 
 // ---------- misc ----------
 
+// Always a relative "… ago" string, no matter how old — "3d ago", "2w ago",
+// "5mo ago", "1y ago" — never an absolute date like "Jan 1st" or "2022".
+// Minutes stay "m"; months use "mo" so the two don't collide.
 function timeAgo(dateStr) {
   try {
     const d = new Date(dateStr);
@@ -144,11 +147,9 @@ function timeAgo(dateStr) {
     if (diffHours < 24) return `${diffHours}h ago`;
     const diffDays = Math.floor(diffHours / 24);
     if (diffDays < 7) return `${diffDays}d ago`;
-    return d.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    });
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+    return `${Math.floor(diffDays / 365)}y ago`;
   } catch {
     return '';
   }

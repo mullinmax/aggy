@@ -86,9 +86,11 @@ function bindControls() {
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
-  // stop gifs/videos/embeds when the reader closes: emptying the media
-  // host halts <video> playback and unloads youtube iframes
+  // stop gifs/videos/embeds when the reader closes: destroy the youtube
+  // player first (halts audio, clears its timers), then empty the media host
+  // to unload any <video>/iframe
   $('readerModal').addEventListener('close', () => {
+    destroyPlayersIn($('readerMedia'));
     render($('readerMedia'));
     updateGifPlayback();
   });
@@ -99,11 +101,38 @@ function bindControls() {
     const btn = $('loadMoreBtn');
     if (entries.some((en) => en.isIntersecting) && !btn.classList.contains('hidden')) btn.click();
   }, { rootMargin: '600px' }).observe($('loadMoreBtn'));
+
+  setupAutoHideNav();
+}
+
+// Hide-on-scroll navbar: tuck it away when scrolling down, bring it back when
+// scrolling up (and always show it near the very top). A small threshold keeps
+// tiny/jittery scrolls from flickering it.
+function setupAutoHideNav() {
+  const nav = $('appNavbar');
+  if (!nav) return;
+  let lastY = window.scrollY;
+  let ticking = false;
+  const THRESHOLD = 8;
+  const update = () => {
+    ticking = false;
+    const y = Math.max(0, window.scrollY);
+    if (Math.abs(y - lastY) < THRESHOLD) return;
+    // near the top, or scrolling up -> show; scrolling down past the bar -> hide
+    const hide = y > nav.offsetHeight && y > lastY;
+    nav.classList.toggle('-translate-y-full', hide);
+    lastY = y;
+  };
+  window.addEventListener('scroll', () => {
+    if (!ticking) { ticking = true; requestAnimationFrame(update); }
+  }, { passive: true });
 }
 
 function setView(name) {
   $('viewDashboard').classList.toggle('hidden', name !== 'dashboard');
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
+  // never leave the navbar tucked away when switching views
+  $('appNavbar')?.classList.remove('-translate-y-full');
 }
 
 // ---------- dashboard ----------
@@ -666,13 +695,207 @@ function youtubeId(url) {
   return null;
 }
 
+// ---------- youtube player (Plyr + SponsorBlock) ----------
+
+// Local sprite: Plyr's default iconUrl points at its CDN, which the app
+// can't rely on (and shouldn't, being self-hosted). Ships in /static/vendor.
+const PLYR_SPRITE_URL = '/static/vendor/plyr.svg';
+
+// SponsorBlock categories auto-skipped by default: paid sponsors, unpaid
+// self-promotion, and subscribe/like reminders — the extension's default
+// "skip" set. Intro/outro/music are deliberately left alone.
+const SPONSORBLOCK_CATEGORIES = ['sponsor', 'selfpromo', 'interaction'];
+const SPONSORBLOCK_API = 'https://sponsor.ajay.app/api/skipSegments';
+
+// Human-readable segment names for the countdown chip.
+const SPONSOR_LABELS = {
+  sponsor: 'sponsor',
+  selfpromo: 'self promotion',
+  interaction: 'interaction reminder',
+};
+
+// videoId -> Promise<[{start, end, category}]>. Cached for the page so many
+// feed cards (or a revisit) don't re-hit the API, which asks not to be abused.
+const sponsorCache = new Map();
+
+function fetchSponsorSegments(videoId) {
+  if (sponsorCache.has(videoId)) return sponsorCache.get(videoId);
+  const cats = encodeURIComponent(JSON.stringify(SPONSORBLOCK_CATEGORIES));
+  const url = `${SPONSORBLOCK_API}?videoID=${encodeURIComponent(videoId)}&categories=${cats}`;
+  // 404 = "no segments for this video"; network errors -> behave as none.
+  const p = fetch(url)
+    .then((r) => (r.ok ? r.json() : []))
+    .then((rows) => (Array.isArray(rows) ? rows : [])
+      .map((row) => ({ start: row.segment[0], end: row.segment[1], category: row.category }))
+      .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
+      .sort((a, b) => a.start - b.start))
+    .catch(() => []);
+  sponsorCache.set(videoId, p);
+  return p;
+}
+
+// Fullscreen orientation: force landscape on the way in (so it rotates even
+// when the phone's auto-rotate is off), release it again on the way out.
+// Best-effort — the Screen Orientation API isn't everywhere and lock() only
+// works while fullscreen; on iOS the native video fullscreen handles rotation.
+function lockLandscape() {
+  try { screen.orientation?.lock?.('landscape')?.catch?.(() => {}); } catch { /* unsupported */ }
+}
+function unlockOrientation() {
+  try { screen.orientation?.unlock?.(); } catch { /* unsupported */ }
+}
+
+// Only build the real player when a card nears the viewport, mirroring the
+// old loading="lazy" iframes so a feed full of videos doesn't spin up dozens
+// of players at once.
+const ytPlayerObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    ytPlayerObserver.unobserve(entry.target);
+    initYouTubePlayer(entry.target);
+  }
+}, { rootMargin: '300px' });
+
+// A YouTube video id -> placeholder element that upgrades itself into a full
+// Plyr player (skip buttons, real fullscreen, SponsorBlock) once on screen.
 function youtubeEmbed(id) {
-  return h('div', { class: 'aspect-video w-full' },
-    h('iframe', {
-      class: 'w-full h-full', src: `https://www.youtube-nocookie.com/embed/${id}`,
-      title: 'YouTube video player', loading: 'lazy', allowfullscreen: true,
-      allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture',
-    }));
+  const wrap = h('div', {
+    class: 'aggy-player relative w-full',
+    // in the feed the card opens the reader on click; player clicks are its own
+    onclick: (e) => e.stopPropagation(),
+  });
+  wrap.dataset.videoId = id;
+  // 16:9 poster + play glyph so the box isn't blank (and doesn't shift)
+  // before the player initialises. Plyr provides its own ratio afterwards.
+  wrap.append(
+    h('div', { class: 'aspect-video w-full bg-black relative overflow-hidden' },
+      h('img', {
+        class: 'absolute inset-0 w-full h-full object-cover',
+        src: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, alt: '', loading: 'lazy',
+        onerror: (e) => e.target.remove(),
+      }),
+      h('div', { class: 'absolute inset-0 grid place-items-center pointer-events-none' },
+        h('div', { class: 'aggy-play-badge' }))));
+  ytPlayerObserver.observe(wrap);
+  return wrap;
+}
+
+function initYouTubePlayer(wrap) {
+  if (wrap._plyr) return;
+  const id = wrap.dataset.videoId;
+  const embed = h('div', { 'data-plyr-provider': 'youtube', 'data-plyr-embed-id': id });
+  render(wrap, embed); // drop the poster, hand the box to Plyr
+
+  // library missing (offline shell without vendor JS): plain nocookie iframe
+  if (typeof Plyr === 'undefined') {
+    render(wrap, h('div', { class: 'aspect-video w-full' },
+      h('iframe', {
+        class: 'w-full h-full', src: `https://www.youtube-nocookie.com/embed/${id}`,
+        title: 'YouTube video player', loading: 'lazy', allowfullscreen: true,
+        allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture',
+      })));
+    return;
+  }
+
+  const player = new Plyr(embed, {
+    iconUrl: PLYR_SPRITE_URL,
+    controls: ['play-large', 'rewind', 'play', 'fast-forward', 'progress',
+      'current-time', 'mute', 'volume', 'settings', 'fullscreen'],
+    settings: ['quality', 'speed'],
+    ratio: '16:9',
+    youtube: { noCookie: true, rel: 0, modestbranding: 1, playsinline: 1 },
+    fullscreen: { enabled: true, iosNative: true },
+    storage: { enabled: false },
+  });
+  wrap._plyr = player;
+  player.on('ready', () => setupPlayerOverlays(player, id));
+}
+
+// SponsorBlock auto-skip + fullscreen skip zones, both living inside Plyr's
+// container so they show (and rotate) in fullscreen too.
+function setupPlayerOverlays(player, id) {
+  const container = player.elements.container;
+
+  // Force landscape in fullscreen, release it on the way out, and flag the
+  // container so the tap-to-skip zones only arm while fullscreen.
+  player.on('enterfullscreen', () => { container.classList.add('aggy-fs'); lockLandscape(); });
+  player.on('exitfullscreen', () => { container.classList.remove('aggy-fs'); unlockOrientation(); });
+
+  // --- SponsorBlock ---------------------------------------------------------
+  // Segments load on first play so idle feed cards don't hit the API. Each is
+  // skipped only after a 5s countdown the viewer can cancel by tapping.
+  let segments = null;
+  const cancelled = new Set(); // segments the viewer chose to keep
+  const loadSegments = () => {
+    if (segments !== null) return;
+    segments = []; // guard against a second fetch while the first is in flight
+    fetchSponsorSegments(id).then((s) => { segments = s; });
+  };
+  player.on('playing', loadSegments);
+
+  // Countdown chip: appears ~5s before a skip, tap to cancel that skip.
+  let chipSeg = null;
+  const chipText = h('span', {});
+  const chip = h('button', {
+    type: 'button', class: 'aggy-sb-chip hidden', title: 'Tap to cancel the skip',
+    onclick: (e) => { e.stopPropagation(); if (chipSeg) cancelled.add(chipSeg); hideChip(); },
+  }, chipText, h('span', { class: 'aggy-sb-chip-hint' }, 'tap to cancel'));
+  const showChip = (seg, secs) => {
+    chipSeg = seg;
+    const label = SPONSOR_LABELS[seg.category] || seg.category;
+    chipText.textContent = `Skipping ${label} in ${secs}s`;
+    chip.classList.remove('hidden');
+  };
+  const hideChip = () => { chipSeg = null; chip.classList.add('hidden'); };
+
+  player.on('timeupdate', () => {
+    if (!segments || !segments.length) return hideChip();
+    const t = player.currentTime;
+    let upcoming = null;
+    for (const seg of segments) {
+      if (seg.end - 0.15 <= t) continue;   // already behind us
+      if (cancelled.has(seg)) continue;    // viewer opted to keep it
+      if (t >= seg.start) {                // inside the segment -> skip now
+        player.currentTime = seg.end;
+        return hideChip();
+      }
+      upcoming = seg;                       // first still-pending segment ahead
+      break;
+    }
+    if (upcoming && upcoming.start - t <= 5) showChip(upcoming, Math.max(1, Math.ceil(upcoming.start - t)));
+    else hideChip();
+  });
+
+  // --- Tap-to-skip zones (fullscreen only) ---------------------------------
+  // Left/right edges rewind/forward; they clear the bottom control bar and
+  // leave the centre free so play/pause and the controls still work.
+  const seek = player.config?.seekTime || 10;
+  const tapZone = (side, action) => h('button', {
+    type: 'button', class: `aggy-tap aggy-tap-${side}`,
+    'aria-label': side === 'left' ? `Rewind ${seek} seconds` : `Forward ${seek} seconds`,
+    onclick: (e) => { e.stopPropagation(); action(); flashTap(e.currentTarget); },
+  }, h('span', { class: 'aggy-tap-icon' }, side === 'left' ? `« ${seek}` : `${seek} »`));
+
+  container.append(
+    tapZone('left', () => player.rewind()),
+    tapZone('right', () => player.forward()),
+    chip);
+}
+
+// Briefly flash a tap zone's label so a skip tap gives visible feedback.
+function flashTap(el) {
+  el.classList.remove('aggy-tap-active');
+  void el.offsetWidth; // restart the animation
+  el.classList.add('aggy-tap-active');
+}
+
+// Destroy any players inside a host (stops audio, clears timers) before it's
+// emptied — used when the reader modal closes.
+function destroyPlayersIn(host) {
+  host.querySelectorAll('.aggy-player').forEach((wrap) => {
+    ytPlayerObserver.unobserve(wrap);
+    if (wrap._plyr) { try { wrap._plyr.destroy(); } catch { /* already gone */ } wrap._plyr = null; }
+  });
 }
 
 // Gif playback policy: pause everything offscreen, and of the gifs on
