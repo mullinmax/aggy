@@ -101,11 +101,38 @@ function bindControls() {
     const btn = $('loadMoreBtn');
     if (entries.some((en) => en.isIntersecting) && !btn.classList.contains('hidden')) btn.click();
   }, { rootMargin: '600px' }).observe($('loadMoreBtn'));
+
+  setupAutoHideNav();
+}
+
+// Hide-on-scroll navbar: tuck it away when scrolling down, bring it back when
+// scrolling up (and always show it near the very top). A small threshold keeps
+// tiny/jittery scrolls from flickering it.
+function setupAutoHideNav() {
+  const nav = $('appNavbar');
+  if (!nav) return;
+  let lastY = window.scrollY;
+  let ticking = false;
+  const THRESHOLD = 8;
+  const update = () => {
+    ticking = false;
+    const y = Math.max(0, window.scrollY);
+    if (Math.abs(y - lastY) < THRESHOLD) return;
+    // near the top, or scrolling up -> show; scrolling down past the bar -> hide
+    const hide = y > nav.offsetHeight && y > lastY;
+    nav.classList.toggle('-translate-y-full', hide);
+    lastY = y;
+  };
+  window.addEventListener('scroll', () => {
+    if (!ticking) { ticking = true; requestAnimationFrame(update); }
+  }, { passive: true });
 }
 
 function setView(name) {
   $('viewDashboard').classList.toggle('hidden', name !== 'dashboard');
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
+  // never leave the navbar tucked away when switching views
+  $('appNavbar')?.classList.remove('-translate-y-full');
 }
 
 // ---------- dashboard ----------
