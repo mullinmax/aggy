@@ -14,6 +14,7 @@ from ranking.models import (
     LogisticVoteModel,
     MLPModel,
     RandomForestModel,
+    RandomModel,
     RidgeModel,
     SVRModel,
     SourceMeanModel,
@@ -187,6 +188,31 @@ def test_gradient_boost_learns_direction():
     assert scores[0] > 0 > scores[1]
     assert (np.abs(scores) <= 1).all()
     assert (confs >= 0).all() and (confs <= 1).all()
+
+
+def test_random_model_predicts_in_range_and_reproducibly():
+    items = two_cluster_data(n=20)
+    model = RandomModel()
+    model.fit(items)
+    probes = _up_down_probes()
+    scores, confs = model.predict(probes)
+    assert (np.abs(scores) <= 1).all()
+    assert (confs >= 0).all() and (confs <= 1).all()
+    # same seed -> same guesses, so the stats don't jitter on every recompute
+    again = RandomModel()
+    again.fit(items)
+    assert again.predict(probes)[0] == pytest.approx(scores)
+
+
+def test_random_baseline_is_never_chosen():
+    # separable data: real models beat chance, and the random baseline — even
+    # if it got lucky — is excluded from winning because it's not rankable
+    items = two_cluster_data(n=40)
+    stats = evaluate_models(items)
+    by_name = {s.model_name: s for s in stats}
+    assert by_name["random"].mae is not None  # still reported for comparison
+    assert not by_name["random"].chosen
+    assert next(m for m in all_models() if m.name == "random").rankable is False
 
 
 def test_evaluate_models_reports_all_and_picks_one():

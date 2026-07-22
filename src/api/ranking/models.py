@@ -2,7 +2,8 @@
 
 Each model learns from the user's past votes (-1..1) on items in a feed and
 predicts a (score, confidence) pair for unseen items. A whole zoo of
-methodologies is implemented — from a trivial global mean, through classic
+methodologies is implemented — from a random-guessing baseline and a trivial
+global mean, through classic
 regressors (source averages, kNN, ridge, logistic, SVR) and tree ensembles
 (random forest, gradient boosting), up to shallow and deep neural nets — and
 `ranking.engine` cross-validates them all, keeps stats for each, and ranks the
@@ -118,12 +119,40 @@ class VoteModel:
 
     name: str = "base"
     min_labels: int = 1
+    # Whether this model may be picked to actually order the feed. A model with
+    # `rankable = False` still gets cross-validated and reported in the stats UI
+    # (as a yardstick to compare the real models against) but is never chosen as
+    # the winner.
+    rankable: bool = True
 
     def fit(self, items: Sequence[ItemFeatures]) -> None:
         raise NotImplementedError
 
     def predict(self, items: Sequence[ItemFeatures]) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
+
+
+class RandomModel(VoteModel):
+    """Chance baseline: ignore the features and guess a uniformly random vote in
+    [-1, 1]. It learns nothing, so it's the yardstick every real model should
+    beat — the stats UI shows it purely so you can see how far ahead the chosen
+    model is. Never used to actually rank a feed (`rankable = False`)."""
+
+    name = "random"
+    rankable = False
+
+    def __init__(self, seed: int = 0):
+        self.seed = seed
+
+    def fit(self, items):
+        # Nothing to learn; seed a generator so the cross-validated metrics are
+        # reproducible instead of jittering on every recompute.
+        self.rng = np.random.default_rng(self.seed)
+
+    def predict(self, items):
+        n = len(items)
+        scores = self.rng.uniform(-1.0, 1.0, n)
+        return scores, np.full(n, 0.05)
 
 
 class GlobalMeanModel(VoteModel):
@@ -473,6 +502,7 @@ def all_models() -> List[VoteModel]:
     feed another candidate — it never hurts a well-labeled feed and quietly
     sits out (null metrics) until it has enough votes to compete."""
     return [
+        RandomModel(),
         GlobalMeanModel(),
         SourceMeanModel(),
         KNNEmbeddingModel(),
@@ -554,8 +584,10 @@ def evaluate_models(
             )
         )
 
-    # pick the winner: lowest MAE among models that produced metrics
-    scored = [r for r in results if r.mae is not None]
+    # pick the winner: lowest MAE among models that both produced metrics and
+    # are allowed to rank (the random baseline is reported but never chosen)
+    rankable = {m.name for m in models if m.rankable}
+    scored = [r for r in results if r.mae is not None and r.model_name in rankable]
     if scored:
         best = min(scored, key=lambda r: r.mae)
         best.chosen = True
