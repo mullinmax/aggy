@@ -19,6 +19,8 @@ KNOWN_CONFIG_VALUES = [
     "OLLAMA_PASSWORD",
     "OLLAMA_EMBEDDING_MODEL",
     "OLLAMA_EMBEDDING_NUM_CTX",
+    "OLLAMA_IMAGE_EMBEDDING_MODEL",
+    "OLLAMA_IMAGE_EMBEDDING_TIMEOUT_SECONDS",
     "OLLAMA_ANALYSIS_MODEL",
     "OLLAMA_ANALYSIS_NUM_CTX",
     "RSS_BRIDGE_HOST",
@@ -46,6 +48,13 @@ DEFAULT_CONFIG = {
     # large to process" and end up with no embedding. nomic-embed-text
     # supports up to 8192 tokens, so we raise the default to match.
     "OLLAMA_EMBEDDING_NUM_CTX": 8192,
+    # Vision model used to embed an item's preview image, so the recommender can
+    # score the picture on its own instead of only "has an image or not". Unset
+    # by default (OLLAMA_IMAGE_EMBEDDING_MODEL has no default) so deployments
+    # without a vision-capable Ollama model simply skip image embeddings and
+    # fall back to the presence flag. Any Ollama model whose embed endpoint
+    # accepts an image works (e.g. a CLIP-style embedder).
+    "OLLAMA_IMAGE_EMBEDDING_TIMEOUT_SECONDS": 30,
     # Text-generation model used to propose CSS selectors when creating a
     # source from a bare website URL. Any Ollama chat model that supports
     # structured (JSON schema) output works; qwen3:4b is small and reliable.

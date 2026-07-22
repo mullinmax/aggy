@@ -273,9 +273,20 @@ def explain_item(
     baseline = float(model.predict([target])[0][0])
     meta = _load_display_meta(feed)
 
+    # When the feed carries real image embeddings, score the Image field on the
+    # picture itself; otherwise fall back to the has-image presence flag.
+    has_image_embeddings = any(f.image_embedding is not None for f in features)
+
     rng = random.Random(seed)
     contributions: List[FieldContribution] = []
     for field, label, attr, description, dedup in _FIELDS:
+        if field == "image" and has_image_embeddings:
+            attr = "image_embedding"
+            description = (
+                "Just the preview image, embedded by the vision model. Swapping "
+                "other posts' images in shows which pictures the model treats as "
+                "a plus or a minus."
+            )
         population = [getattr(f, attr) for f in features]
         variations = [
             replace(target, **{attr: rng.choice(population)}) for _ in range(samples)

@@ -1,6 +1,9 @@
 from pydantic import field_validator, StringConstraints, HttpUrl, model_validator
 from datetime import datetime
+import base64
+import logging
 import dateparser
+import httpx
 from bleach import clean
 from typing import Optional, List, Dict
 import html
@@ -23,7 +26,11 @@ class ItemBase(AggyBaseModel):
     # Rich media extracted at ingest time (gifs, videos, galleries): a list
     # of {"type": "image"|"gif"|"video", "url": ..., "poster": ...} dicts.
     media: Optional[List[Dict[str, Optional[str]]]] = None
+    # Text embeddings of the article body, keyed by model name.
     embeddings: Optional[Dict[str, List[float]]] = None
+    # Embeddings of the preview image, keyed by vision model name. Kept apart
+    # from the text embeddings so the recommender scores each piece on its own.
+    image_embeddings: Optional[Dict[str, List[float]]] = None
 
     @property
     def key(self):
@@ -56,6 +63,9 @@ class ItemBase(AggyBaseModel):
             "embeddings": json.dumps(data["embeddings"])
             if data.get("embeddings") is not None
             else None,
+            "image_embeddings": json.dumps(data["image_embeddings"])
+            if data.get("image_embeddings") is not None
+            else None,
         }
 
     def create(self, overwrite=False):
@@ -66,17 +76,19 @@ class ItemBase(AggyBaseModel):
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO items (url_hash, url, title, author, domain, excerpt, "
-                "content, image_url, media, date_published, embeddings) "
+                "content, image_url, media, date_published, embeddings, "
+                "image_embeddings) "
                 "VALUES (%(url_hash)s, %(url)s, %(title)s, %(author)s, %(domain)s, "
                 "%(excerpt)s, %(content)s, %(image_url)s, %(media)s, "
-                "%(date_published)s, %(embeddings)s) "
+                "%(date_published)s, %(embeddings)s, %(image_embeddings)s) "
                 "ON CONFLICT (url_hash) DO UPDATE SET "
                 "url = EXCLUDED.url, title = EXCLUDED.title, author = EXCLUDED.author, "
                 "domain = EXCLUDED.domain, excerpt = EXCLUDED.excerpt, "
                 "content = EXCLUDED.content, image_url = EXCLUDED.image_url, "
                 "media = EXCLUDED.media, "
                 "date_published = EXCLUDED.date_published, "
-                "embeddings = EXCLUDED.embeddings",
+                "embeddings = EXCLUDED.embeddings, "
+                "image_embeddings = EXCLUDED.image_embeddings",
                 v,
             )
 
@@ -94,7 +106,8 @@ class ItemBase(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT url, title, author, domain, excerpt, content, image_url, "
-                "media, date_published, embeddings FROM items WHERE url_hash = %s",
+                "media, date_published, embeddings, image_embeddings "
+                "FROM items WHERE url_hash = %s",
                 (url_hash,),
             )
             row = cur.fetchone()
@@ -178,7 +191,7 @@ class ItemBase(AggyBaseModel):
         return v
 
     def __str__(self):
-        non_printable = ["url_hash", "key", "embeddings", "media"]
+        non_printable = ["url_hash", "key", "embeddings", "image_embeddings", "media"]
         # all fields besides url_hash, key, and item_embeddings
         print_attrs = [
             f"{k.upper()} {getattr(self, k)}"
@@ -229,6 +242,47 @@ class ItemBase(AggyBaseModel):
 
         # add the embedding to self
         self.embeddings[ollama_embedding_model] = embedding
+
+    @staticmethod
+    def _fetch_image_base64(image_url: str) -> Optional[str]:
+        """Download the preview image and return it base64-encoded, or None if
+        it can't be fetched (dead link, timeout, non-image response)."""
+        timeout = config.get_int("OLLAMA_IMAGE_EMBEDDING_TIMEOUT_SECONDS")
+        response = httpx.get(image_url, timeout=timeout, follow_redirects=True)
+        response.raise_for_status()
+        return base64.b64encode(response.content).decode("ascii")
+
+    def add_image_embedding(self, model_name: str, force_refresh=False) -> None:
+        """Embed the item's preview image with a vision model so the recommender
+        can score the picture itself rather than only whether one exists.
+
+        No-op when the item has no image. Stored in ``image_embeddings`` (keyed
+        by model name), kept separate from the text ``embeddings`` so the two
+        pieces are never blended into one signal."""
+        if not self.image_url:
+            return
+
+        if self.image_embeddings is None:
+            self.image_embeddings = {}
+
+        if model_name in self.image_embeddings and not force_refresh:
+            return
+
+        try:
+            image_base64 = self._fetch_image_base64(self.image_url)
+        except Exception as e:
+            logging.error(f"Error fetching image {self.image_url}: {e}")
+            return
+
+        ollama = get_ollama_connection()
+        # The Ollama embed endpoint returns {"embeddings": [[...]]} for a single
+        # input; the vision model must accept an image passed as base64 input.
+        response = ollama.embed(model=model_name, input=image_base64)
+        vectors = response["embeddings"]
+        if not vectors:
+            return
+
+        self.image_embeddings[model_name] = list(vectors[0])
 
 
 class ItemStrict(ItemBase):

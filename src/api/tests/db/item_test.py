@@ -214,3 +214,49 @@ def test_add_embedding_skips_when_already_present(unique_item_strict, monkeypatc
     unique_item_strict.add_embedding("nomic-embed-text")
 
     fake_client.embeddings.assert_not_called()
+
+
+def test_add_image_embedding_fetches_and_embeds(unique_item_strict, monkeypatch):
+    """The preview image is downloaded, embedded by the vision model, and stored
+    in image_embeddings (kept separate from the text embeddings)."""
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64", staticmethod(lambda url: "aGVsbG8=")
+    )
+    fake_client = MagicMock()
+    fake_client.embed.return_value = {"embeddings": [[0.4, 0.5, 0.6]]}
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    unique_item_strict.add_image_embedding("clip-model")
+
+    fake_client.embed.assert_called_once()
+    kwargs = fake_client.embed.call_args.kwargs
+    assert kwargs["model"] == "clip-model"
+    assert kwargs["input"] == "aGVsbG8="
+    assert unique_item_strict.image_embeddings["clip-model"] == [0.4, 0.5, 0.6]
+    # text embeddings are untouched by the image embedder
+    assert not unique_item_strict.embeddings
+
+
+def test_add_image_embedding_noop_without_image(unique_item_strict, monkeypatch):
+    """No image URL means nothing is fetched or embedded."""
+    fake_client = MagicMock()
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    unique_item_strict.image_url = None
+    unique_item_strict.add_image_embedding("clip-model")
+
+    fake_client.embed.assert_not_called()
+    assert unique_item_strict.image_embeddings is None
+
+
+def test_add_image_embedding_skips_when_already_present(
+    unique_item_strict, monkeypatch
+):
+    """An existing image embedding for the model is not recomputed unless forced."""
+    fake_client = MagicMock()
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    unique_item_strict.image_embeddings = {"clip-model": [0.0]}
+    unique_item_strict.add_image_embedding("clip-model")
+
+    fake_client.embed.assert_not_called()

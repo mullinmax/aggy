@@ -18,10 +18,13 @@ tuple, which is how the shallow `neural_net` and the multi-layer
 proxy-reachable wheel drags in gigabytes of unused CUDA libraries, so we keep
 the image lean and let sklearn's MLP do the deep net on CPU.)
 
-All models consume `ItemFeatures`: the article's text embedding plus scalar
-side information (source, author, post age, media presence). Image/thumbnail
-embeddings slot into the same structure once image embedding ingestion lands;
-until then a has-image flag stands in.
+All models consume `ItemFeatures`: the article's text embedding, a separate
+image (thumbnail) embedding, and scalar side information (source, author, post
+age, image/media presence). The text and image embeddings occupy distinct
+blocks in the design matrix, each with its own present/absent flag, so a
+picture is weighed independently of the words. When a deployment has no vision
+model configured the image block is simply zero-width and the has-image
+presence flag carries the signal on its own.
 """
 
 import hashlib
@@ -95,22 +98,47 @@ def _aux_vector(item: ItemFeatures, now: datetime) -> np.ndarray:
     return vec
 
 
-def _embedding_or_zeros(item: ItemFeatures, dim: int) -> Tuple[np.ndarray, float]:
-    if item.embedding is not None and len(item.embedding) == dim:
-        v = np.asarray(item.embedding, dtype=float)
+def _unit_or_zeros(vector, dim: int) -> Tuple[np.ndarray, float]:
+    """L2-normalize an embedding to a fixed length, or return zeros plus a
+    "missing" flag when it's absent or the wrong size."""
+    if vector is not None and len(vector) == dim:
+        v = np.asarray(vector, dtype=float)
         norm = np.linalg.norm(v)
         if norm > 0:
             return v / norm, 1.0
     return np.zeros(dim), 0.0
 
 
+def _embedding_or_zeros(item: ItemFeatures, dim: int) -> Tuple[np.ndarray, float]:
+    return _unit_or_zeros(item.embedding, dim)
+
+
+def _embedding_dim(items: Sequence[ItemFeatures], attr: str) -> int:
+    """Length of the first present embedding of the given kind, else 0 — so a
+    feed with no image embeddings simply contributes a zero-width image block."""
+    for item in items:
+        vec = getattr(item, attr)
+        if vec is not None:
+            return len(vec)
+    return 0
+
+
 def _design_matrix(
-    items: Sequence[ItemFeatures], dim: int, now: datetime
+    items: Sequence[ItemFeatures], dim: int, image_dim: int, now: datetime
 ) -> np.ndarray:
+    """Feature rows: [text embedding | has-text | image embedding | has-image |
+    scalar side features]. Text and image occupy separate blocks, each with its
+    own present/absent flag, so the model weighs the picture independently of
+    the words (and of the mere has-image flag in the side features)."""
     rows = []
     for item in items:
         emb, has_emb = _embedding_or_zeros(item, dim)
-        rows.append(np.concatenate([emb, [has_emb], _aux_vector(item, now)]))
+        img_emb, has_img_emb = _unit_or_zeros(item.image_embedding, image_dim)
+        rows.append(
+            np.concatenate(
+                [emb, [has_emb], img_emb, [has_img_emb], _aux_vector(item, now)]
+            )
+        )
     return np.asarray(rows)
 
 
@@ -276,15 +304,13 @@ class _SklearnModel(VoteModel):
         raise NotImplementedError
 
     def _dim(self, items):
-        for i in items:
-            if i.embedding is not None:
-                return len(i.embedding)
-        return 0
+        return _embedding_dim(items, "embedding")
 
     def fit(self, items):
         self.now = datetime.now(timezone.utc)
         self.dim = self._dim(items)
-        X = _design_matrix(items, self.dim, self.now)
+        self.image_dim = _embedding_dim(items, "image_embedding")
+        X = _design_matrix(items, self.dim, self.image_dim, self.now)
         y = np.asarray([i.label for i in items], dtype=float)
         estimator = self._build_estimator()
         self.model = (
@@ -293,7 +319,7 @@ class _SklearnModel(VoteModel):
         self.model.fit(X, y)
 
     def predict(self, items):
-        X = _design_matrix(items, self.dim, self.now)
+        X = _design_matrix(items, self.dim, self.image_dim, self.now)
         scores = np.clip(self.model.predict(X), -1.0, 1.0)
         confs = np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
         return scores, confs
@@ -464,15 +490,13 @@ class LogisticVoteModel(VoteModel):
         self.C = C
 
     def _dim(self, items):
-        for i in items:
-            if i.embedding is not None:
-                return len(i.embedding)
-        return 0
+        return _embedding_dim(items, "embedding")
 
     def fit(self, items):
         self.now = datetime.now(timezone.utc)
         self.dim = self._dim(items)
-        X = _design_matrix(items, self.dim, self.now)
+        self.image_dim = _embedding_dim(items, "image_embedding")
+        X = _design_matrix(items, self.dim, self.image_dim, self.now)
         labels = np.asarray([i.label for i in items], dtype=float)
         self.scaler = StandardScaler().fit(X)
         Xs = self.scaler.transform(X)
@@ -486,7 +510,7 @@ class LogisticVoteModel(VoteModel):
         self.clf = LogisticRegression(C=self.C, max_iter=1000).fit(Xs, y)
 
     def predict(self, items):
-        X = _design_matrix(items, self.dim, self.now)
+        X = _design_matrix(items, self.dim, self.image_dim, self.now)
         if self.clf is None:
             scores = np.full(len(items), self.constant)
             return scores, np.full(len(items), 0.1)

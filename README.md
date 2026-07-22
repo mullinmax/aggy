@@ -63,7 +63,7 @@ We’re still working on a contribution guide, but if you have ideas, we’d lov
 
 
 # TODO
-- [ ] generate embeddings for images
+- [x] generate embeddings for images
 - [ ] train models on user data + embeddings
 - [ ] use embeddings to help decide which image would be the best preview image
 - [ ] fix reddit albums getting very low res thumbnails

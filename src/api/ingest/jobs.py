@@ -129,6 +129,7 @@ def rescrape_source(source: Source) -> None:
     from ranking.engine import rank_feed  # local import avoids an import cycle
 
     embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
+    image_embedding_model = config.get("OLLAMA_IMAGE_EMBEDDING_MODEL", None)
     feeds_to_rerank: set = set()
 
     for item in source.query_items():
@@ -146,11 +147,13 @@ def rescrape_source(source: Source) -> None:
             # merge_instances doesn't carry embeddings over; keep the existing
             # ones so a re-scrape never drops them
             merged.embeddings = item.embeddings
+            merged.image_embeddings = item.image_embeddings
 
             after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
             text_changed = any(
                 after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS
             )
+            image_changed = after["image_url"] != before["image_url"]
 
             embedding_changed = False
             if text_changed and embedding_model is not None:
@@ -161,6 +164,18 @@ def rescrape_source(source: Source) -> None:
                     embedding_changed = merged.embeddings != item.embeddings
                 except Exception as e:
                     logging.error(f"Error re-embedding item {item.url}: {e}")
+
+            if image_changed and image_embedding_model is not None:
+                try:
+                    merged.add_image_embedding(
+                        model_name=image_embedding_model, force_refresh=True
+                    )
+                    embedding_changed = (
+                        embedding_changed
+                        or merged.image_embeddings != item.image_embeddings
+                    )
+                except Exception as e:
+                    logging.error(f"Error re-embedding image {item.url}: {e}")
 
             if after == before and not embedding_changed:
                 continue  # nothing changed, leave the row untouched
@@ -189,13 +204,17 @@ def rescrape_source(source: Source) -> None:
 
 
 def download_embedding_model_job() -> None:
-    embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
-
-    if embedding_model is None:
+    wanted = [
+        config.get("OLLAMA_EMBEDDING_MODEL", None),
+        config.get("OLLAMA_IMAGE_EMBEDDING_MODEL", None),
+    ]
+    wanted = [m for m in wanted if m is not None]
+    if not wanted:
         return
 
     ollama = get_ollama_connection()
 
     models = ollama.list()
-    if embedding_model not in models:
-        ollama.pull(embedding_model)
+    for model_name in wanted:
+        if model_name not in models:
+            ollama.pull(model_name)

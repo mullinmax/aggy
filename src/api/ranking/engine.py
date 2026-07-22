@@ -65,6 +65,7 @@ def _row_to_features(row) -> ItemFeatures:
     return ItemFeatures(
         url_hash=row["url_hash"],
         embedding=_parse_embedding(row.get("embeddings")),
+        image_embedding=_parse_embedding(row.get("image_embeddings")),
         source=row.get("source_name"),
         author=row.get("author"),
         date_published=row.get("date_published"),
@@ -81,7 +82,7 @@ def _row_to_features(row) -> ItemFeatures:
 # feed. So an upvote cast in one feed trains every feed the item appears in.
 _FEED_ITEMS_SQL = (
     "SELECT i.url_hash, i.author, i.date_published, i.image_url, i.media, "
-    "i.embeddings, v.score AS vote, v.score_date AS vote_date, ("
+    "i.embeddings, i.image_embeddings, v.score AS vote, v.score_date AS vote_date, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
