@@ -719,9 +719,10 @@ function sourceBadge(name, storedColor) {
   if (!name) return null;
   const color = sourceColor(name, storedColor);
   return h('span', {
-    class: 'badge badge-outline badge-xs',
+    class: 'badge badge-outline badge-xs aggy-source-badge',
     style: `border-color:${color};color:${color}`,
-  }, name);
+    title: name,
+  }, h('span', { class: 'truncate min-w-0' }, name));
 }
 
 // "Open in new tab" icon (matches the modal close button's size/style),
