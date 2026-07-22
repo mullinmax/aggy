@@ -19,6 +19,7 @@ the winning model on the feed's votes), because users look at it rarely.
 
 import random
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -41,67 +42,78 @@ _LEVEL2 = 0.12
 _EXAMPLES_PER_SIDE = 3
 _EXAMPLE_EPS = 1e-3
 
-# Fields the model actually consumes, in display order. Each entry is
-# (field id, label, ItemFeatures attribute perturbed, what-is-scored blurb).
-# "content" is the text embedding, generated from title + body together; the
-# image/media fields are currently presence flags (a real thumbnail embedding
-# slots into the same probe once image embeddings are ingested).
+# Fields the model consumes, in display order. Each is scored *in isolation* —
+# one piece of a fictional article is swapped and everything else held fixed —
+# so text and image never blur together. Entries are:
+#   (field id, label, ItemFeatures attr perturbed, blurb, dedup strategy)
+# dedup "item": every article is a distinct alternative (embeddings, dates, and
+# thumbnails, which we want to show individually even when a flag ties them).
+# dedup "value": the swap value repeats across articles (source/author/media),
+# so alternatives are collapsed to one per distinct value.
 _FIELDS = [
     (
-        "content",
-        "Content",
+        "text",
+        "Text",
         "embedding",
-        "The article's title and body text, turned into an embedding and "
-        "compared against the posts you've voted on.",
-    ),
-    (
-        "source",
-        "Source",
-        "source",
-        "Which source or subreddit the article came from.",
-    ),
-    (
-        "author",
-        "Author",
-        "author",
-        "Who wrote or posted the article.",
-    ),
-    (
-        "recency",
-        "Recency",
-        "date_published",
-        "How recently the article was published.",
+        "Just the article's title and body text, embedded and compared against "
+        "the posts you've voted on — the image is scored separately.",
+        "item",
     ),
     (
         "image",
         "Image",
         "has_image",
-        "Whether the article carries a preview image.",
+        "Just the preview image. Swapping other posts' thumbnails in shows "
+        "which images the model treats as a plus or a minus.",
+        "item",
+    ),
+    (
+        "source",
+        "Source",
+        "source",
+        "Just the source or subreddit the article came from.",
+        "value",
+    ),
+    (
+        "author",
+        "Author",
+        "author",
+        "Just who wrote or posted the article.",
+        "value",
+    ),
+    (
+        "recency",
+        "Recency",
+        "date_published",
+        "Just how recently the article was published.",
+        "item",
     ),
     (
         "media",
         "Media",
         "has_media",
-        "Whether the article has playable video or audio attached.",
+        "Just whether the article has playable video or audio attached.",
+        "value",
     ),
 ]
-
-# Fields whose swap value is a distinct per-item quantity (an embedding, a
-# timestamp): every article is its own example. The rest (source/author/flags)
-# repeat across items, so examples are de-duplicated by the value itself.
-_PER_ITEM_FIELDS = {"embedding", "image_embedding", "date_published"}
 
 
 @dataclass
 class FieldExample:
-    """One article whose value for a field the model scored differently from
-    the target's, used as concrete evidence behind the marks."""
+    """One alternative value the probe swapped in, scored against the target's.
+
+    Every display field is carried, but the UI shows only the *one* piece this
+    field changed (a thumbnail for image, text for text, a source chip for
+    source, …), never the whole article."""
 
     url_hash: str
     title: Optional[str]
     image_url: Optional[str]
     source: Optional[str]
     excerpt: Optional[str]
+    author: Optional[str]
+    date_published: Optional[datetime]
+    has_media: bool
     # substitute score minus baseline: >0 the model likes this value more than
     # the article's own, <0 less.
     delta: float
@@ -191,13 +203,17 @@ def _field_examples(
     attr: str,
     baseline: float,
     meta: Dict[str, dict],
+    dedup: str,
 ) -> tuple:
-    """Score the target with every other article's value for `attr` swapped in,
-    then return the articles that scored best and worst versus the baseline.
+    """Score fictional copies of the target with a single field swapped in from
+    each other article, then return the swaps that scored best and worst versus
+    the baseline.
 
-    This is the same permutation probe used for the marks, but keeping each
-    real article attached so the UI can show the actual images/text the model
-    was effectively weighing when it decided this field helps or hurts."""
+    Only that one field is altered per copy, so the resulting delta isolates
+    that field's effect. Each alternative keeps a reference to the article it
+    came from so the UI can show exactly the swapped piece (a thumbnail, a line
+    of text, a source name), never the whole article. `dedup` is "item" to keep
+    every article distinct or "value" to collapse repeated swap values."""
     others = [f for f in features if f.url_hash != target.url_hash]
     if not others:
         return [], []
@@ -207,7 +223,7 @@ def _field_examples(
     seen = set()
     entries = []
     for f, score in zip(others, scores):
-        key = f.url_hash if attr in _PER_ITEM_FIELDS else getattr(f, attr)
+        key = f.url_hash if dedup == "item" else getattr(f, attr)
         if key in seen:
             continue
         seen.add(key)
@@ -219,6 +235,9 @@ def _field_examples(
                 image_url=row.get("image_url"),
                 source=row.get("source_name"),
                 excerpt=row.get("excerpt"),
+                author=f.author,
+                date_published=f.date_published,
+                has_media=f.has_media,
                 delta=float(score) - baseline,
             )
         )
@@ -256,7 +275,7 @@ def explain_item(
 
     rng = random.Random(seed)
     contributions: List[FieldContribution] = []
-    for field, label, attr, description in _FIELDS:
+    for field, label, attr, description, dedup in _FIELDS:
         population = [getattr(f, attr) for f in features]
         variations = [
             replace(target, **{attr: rng.choice(population)}) for _ in range(samples)
@@ -265,7 +284,7 @@ def explain_item(
         delta = baseline - float(np.mean(substitute_scores))
         sign, level = _marks(delta)
         better, worse = _field_examples(
-            model, target, features, attr, baseline, meta
+            model, target, features, attr, baseline, meta, dedup
         )
         contributions.append(
             FieldContribution(

@@ -249,6 +249,9 @@ def get_item_explanation(
             image_url=e.image_url,
             source=e.source,
             excerpt=e.excerpt,
+            author=e.author,
+            date_published=e.date_published,
+            has_media=e.has_media,
             delta=e.delta,
         )
 

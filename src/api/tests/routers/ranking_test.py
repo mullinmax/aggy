@@ -219,21 +219,23 @@ def test_item_explanation(
     body = response.json()
     assert body["model_name"]
     fields = {f["field"]: f for f in body["fields"]}
-    assert {"content", "source", "author", "recency", "image", "media"} <= set(fields)
+    # text and image are scored as separate pieces, never lumped as "content"
+    assert {"text", "image", "source", "author", "recency", "media"} <= set(fields)
+    assert "content" not in fields
     # every field reports a valid mark count and direction
     for f in body["fields"]:
         assert f["level"] in (0, 1, 2)
         assert f["sign"] in (-1, 0, 1)
         assert (f["level"] == 0) == (f["sign"] == 0)
-    # content (the embedding) drives this recommendation and pushes it up
-    assert fields["content"]["level"] >= 1
-    assert fields["content"]["sign"] == 1
+    # text (the embedding) drives this recommendation and pushes it up
+    assert fields["text"]["level"] >= 1
+    assert fields["text"]["sign"] == 1
 
     # every field carries a plain-language description of what it scores
     assert all(f["description"] for f in body["fields"])
 
-    # examples are real feed articles the model scored higher (better) or lower
-    # (worse) on that field, sorted by how far from this article's own value
+    # examples are single-field swaps the model scored higher (better) or lower
+    # (worse), sorted by how far from this article's own value
     for f in body["fields"]:
         for ex in f["better"]:
             assert ex["delta"] > 0
@@ -241,12 +243,12 @@ def test_item_explanation(
         for ex in f["worse"]:
             assert ex["delta"] < 0
             assert ex["url_hash"] != items[4].url_hash
-    # the disliked (odd) cluster gives content the model scored lower; the
-    # liked (even) cluster gives content it scored higher
-    content = fields["content"]
-    assert content["better"] or content["worse"]
+    # swapping the disliked (odd) cluster's text scores lower; the swap examples
+    # carry the changed piece's display fields
+    text = fields["text"]
+    assert text["better"] or text["worse"]
     disliked = {items[1].url_hash, items[3].url_hash}
-    assert any(ex["url_hash"] in disliked for ex in content["worse"])
+    assert any(ex["url_hash"] in disliked for ex in text["worse"])
 
 
 def test_item_explanation_needs_votes(

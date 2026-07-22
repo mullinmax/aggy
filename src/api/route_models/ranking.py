@@ -32,6 +32,9 @@ class FieldExampleResponse(BaseRouteModel):
     image_url: Optional[str] = None
     source: Optional[str] = None
     excerpt: Optional[str] = None
+    author: Optional[str] = None
+    date_published: Optional[datetime] = None
+    has_media: bool = False
     # substitute score minus baseline: >0 the model scores this value higher
     # than the article's own, <0 lower
     delta: float
