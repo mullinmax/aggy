@@ -1,7 +1,34 @@
+import re
+from typing import Optional
+from urllib.parse import urlparse
+
 from ollama import Client
 from httpx import BasicAuth
 
 from config import config
+
+# Hosts whose links the UI renders as an inline player, and file extensions the
+# UI plays directly, even when the item has no stored `media` entry (see the
+# frontend's youtubeId/isVideoFile). Used so ranking treats these as playable
+# media rather than plain links.
+_PLAYABLE_MEDIA_HOSTS = {"youtube.com", "youtu.be", "youtube-nocookie.com"}
+_VIDEO_FILE_RE = re.compile(r"\.(mp4|webm)(\?|$)", re.IGNORECASE)
+
+
+def is_playable_media_url(url: Optional[str]) -> bool:
+    """True when this URL plays inline in the UI (a YouTube link or a direct
+    video file) even though it may carry no stored media entry."""
+    if not url:
+        return False
+    if _VIDEO_FILE_RE.search(url):
+        return True
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    if host.startswith("www.") or host.startswith("m."):
+        host = host.split(".", 1)[1]
+    return host in _PLAYABLE_MEDIA_HOSTS
 
 
 def get_ollama_connection() -> Client:

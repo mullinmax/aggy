@@ -1195,13 +1195,23 @@ function contributionMarks(sign, level) {
 // can see exactly what was scored, never the whole article.
 function fieldPreview(p, field) {
   if (field === 'image') {
-    return p.image_url
+    const thumb = p.image_url
       ? h('img', {
           src: p.image_url, alt: '', loading: 'lazy',
-          class: 'w-24 h-16 object-cover rounded bg-base-300 shrink-0',
+          class: 'w-24 h-16 object-cover rounded bg-base-300',
         })
-      : h('div', { class: 'w-24 h-16 rounded bg-base-300 flex items-center justify-center text-[10px] text-base-content/40 shrink-0' },
+      : h('div', { class: 'w-24 h-16 rounded bg-base-300 flex items-center justify-center text-[10px] text-base-content/40' },
           p.has_image ? 'image' : 'no image');
+    // spell out whether the picture is scored by a vision embedding or only by
+    // its presence, so it's clear what the model actually sees.
+    const note = !p.has_image
+      ? { txt: 'no image to score', cls: 'text-base-content/40' }
+      : p.image_embedded
+        ? { txt: '✓ scored by image embedding', cls: 'text-success' }
+        : { txt: 'presence only — no image embedding', cls: 'text-base-content/50' };
+    return h('div', { class: 'shrink-0' },
+      thumb,
+      h('p', { class: `text-[10px] mt-1 ${note.cls}` }, note.txt));
   }
   if (field === 'text') {
     return h('div', { class: 'w-full rounded bg-base-200 border border-base-300 p-2' },

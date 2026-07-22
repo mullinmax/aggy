@@ -238,7 +238,10 @@ def test_item_explanation(
     # the preview is this article's own data (same across fields, one per piece)
     text_preview = fields["text"]["preview"]
     assert text_preview["text"]  # the item's title/excerpt
-    assert fields["image"]["preview"]["has_image"] is True  # item[4] is even/imaged
+    image_preview = fields["image"]["preview"]
+    assert image_preview["has_image"] is True  # item[4] is even/imaged
+    # no vision model in the test, so the image is scored by presence only
+    assert image_preview["image_embedded"] is False
 
 
 def test_item_explanation_needs_votes(

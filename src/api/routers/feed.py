@@ -251,6 +251,7 @@ def get_item_explanation(
             date_published=p.date_published,
             has_image=p.has_image,
             has_media=p.has_media,
+            image_embedded=p.image_embedded,
         )
 
     return ItemExplanationResponse(

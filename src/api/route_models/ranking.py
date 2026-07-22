@@ -36,6 +36,8 @@ class FieldPreviewResponse(BaseRouteModel):
     date_published: Optional[datetime] = None
     has_image: bool = False
     has_media: bool = False
+    # whether the image is scored by a real vision embedding vs presence only
+    image_embedded: bool = False
 
 
 class FieldContributionResponse(BaseRouteModel):

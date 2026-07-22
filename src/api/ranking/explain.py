@@ -17,6 +17,7 @@ Computed on demand (it retrains the winning model on the feed's votes), because
 users look at it rarely.
 """
 
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import List, Optional
@@ -90,6 +91,9 @@ class FieldPreview:
     date_published: Optional[datetime]
     has_image: bool
     has_media: bool
+    # True when this article's image is scored by a real vision embedding, not
+    # just the has-image presence flag.
+    image_embedded: bool
 
 
 @dataclass
@@ -148,9 +152,9 @@ def _marks(delta: float):
 
 
 # Display data for the field previews; the ML features don't carry the title,
-# image URL or excerpt, so we pull them for the one item being explained.
+# image URL or body text, so we pull them for the one item being explained.
 _ITEM_DISPLAY_SQL = (
-    "SELECT i.title, i.image_url, i.excerpt, ("
+    "SELECT i.title, i.image_url, i.excerpt, i.content, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
@@ -161,11 +165,26 @@ _ITEM_DISPLAY_SQL = (
     "WHERE c.user_hash = %s AND c.feed_hash = %s AND c.item_url_hash = %s"
 )
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
 
 def _load_item_display(feed: Feed, url_hash: str) -> dict:
     with get_db_con() as cur:
         cur.execute(_ITEM_DISPLAY_SQL, (feed.user_hash, feed.name_hash, url_hash))
         return cur.fetchone() or {}
+
+
+def _preview_text(row: dict) -> Optional[str]:
+    """Title plus a body snippet, mirroring what's embedded for the text field
+    (the embedding covers the title *and* the article content, not just the
+    headline). Body prefers the clean excerpt, falling back to tag-stripped
+    content."""
+    title = row.get("title")
+    body = row.get("excerpt")
+    if not body and row.get("content"):
+        body = _TAG_RE.sub(" ", row["content"])
+        body = " ".join(body.split())[:500]
+    return "\n\n".join(part for part in (title, body) if part) or None
 
 
 def explain_item(
@@ -196,13 +215,14 @@ def explain_item(
 
     row = _load_item_display(feed, item_url_hash)
     preview = FieldPreview(
-        text=row.get("title") or row.get("excerpt"),
+        text=_preview_text(row),
         image_url=row.get("image_url"),
         source=row.get("source_name") or target.source,
         author=target.author,
         date_published=target.date_published,
         has_image=target.has_image,
         has_media=target.has_media,
+        image_embedded=target.image_embedding is not None,
     )
 
     contributions: List[FieldContribution] = []
