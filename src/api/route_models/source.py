@@ -19,6 +19,9 @@ class SourceRouteModel(BaseRouteModel):
     source_template_parameters: Optional[Dict[str, str]] = None
     source_ingest_interval_minutes: Optional[int] = None
     source_color: Optional[str] = None
+    # Set when this source mirrors another feed instead of an RSS URL.
+    source_feed_hash: Optional[str] = None
+    source_feed_name: Optional[str] = None
 
     @classmethod
     def from_db_model(cls, db_model: Source):
@@ -31,6 +34,7 @@ class SourceRouteModel(BaseRouteModel):
             source_template_parameters=db_model.template_parameters,
             source_ingest_interval_minutes=db_model.ingest_interval_minutes,
             source_color=db_model.color,
+            source_feed_hash=db_model.source_feed_hash,
         )
 
     @classmethod
@@ -47,4 +51,6 @@ class SourceRouteModel(BaseRouteModel):
             source_template_parameters=row.get("template_parameters"),
             source_ingest_interval_minutes=row.get("ingest_interval_minutes"),
             source_color=row.get("color"),
+            source_feed_hash=row.get("source_feed_hash"),
+            source_feed_name=row.get("source_feed_name"),
         )

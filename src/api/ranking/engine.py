@@ -76,9 +76,12 @@ def _row_to_features(row) -> ItemFeatures:
     )
 
 
+# Votes are shared across feeds: the label for an item comes from the user's
+# latest vote on it in *any* feed (the user_item_votes view), not just this
+# feed. So an upvote cast in one feed trains every feed the item appears in.
 _FEED_ITEMS_SQL = (
     "SELECT i.url_hash, i.author, i.date_published, i.image_url, i.media, "
-    "i.embeddings, st.score AS vote, st.score_date AS vote_date, ("
+    "i.embeddings, v.score AS vote, v.score_date AS vote_date, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
@@ -91,8 +94,8 @@ _FEED_ITEMS_SQL = (
     "  AND li.item_url_hash = c.item_url_hash) AS list_added_at "
     "FROM feed_items c "
     "JOIN items i ON i.url_hash = c.item_url_hash "
-    "LEFT JOIN item_states st ON st.user_hash = c.user_hash "
-    " AND st.feed_hash = c.feed_hash AND st.item_url_hash = c.item_url_hash "
+    "LEFT JOIN user_item_votes v ON v.user_hash = c.user_hash "
+    " AND v.item_url_hash = c.item_url_hash "
     "WHERE c.user_hash = %s AND c.feed_hash = %s"
 )
 
@@ -194,13 +197,18 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
 def feeds_needing_rank() -> List[Feed]:
     """Feeds with at least one label — an explicit vote or a listed item, since
     list membership counts as a vote — where a label or item is newer than the
-    latest prediction (or no prediction exists yet)."""
+    latest prediction (or no prediction exists yet).
+
+    Votes are shared: a label counts if the user voted on an item *in this
+    feed* from any feed (via user_item_votes), so voting in one feed schedules
+    every feed the item appears in for re-ranking."""
     with get_db_con() as cur:
         cur.execute(
             "SELECT f.user_hash, f.name FROM feeds f WHERE ("
-            " EXISTS (SELECT 1 FROM item_states st"
-            "  WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash"
-            "   AND st.score IS NOT NULL)"
+            " EXISTS (SELECT 1 FROM feed_items c"
+            "  JOIN user_item_votes v ON v.user_hash = c.user_hash"
+            "   AND v.item_url_hash = c.item_url_hash"
+            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash)"
             " OR EXISTS (SELECT 1 FROM feed_items c"
             "  JOIN list_items li ON li.user_hash = c.user_hash"
             "   AND li.item_url_hash = c.item_url_hash"
@@ -210,8 +218,10 @@ def feeds_needing_rank() -> List[Feed]:
             "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash"
             "   AND c.predicted_at IS NULL)"
             " OR GREATEST("
-            "  COALESCE((SELECT MAX(st.score_date) FROM item_states st"
-            "   WHERE st.user_hash = f.user_hash AND st.feed_hash = f.name_hash),"
+            "  COALESCE((SELECT MAX(v.score_date) FROM feed_items c"
+            "   JOIN user_item_votes v ON v.user_hash = c.user_hash"
+            "    AND v.item_url_hash = c.item_url_hash"
+            "   WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
             "   'epoch'),"
             "  COALESCE((SELECT MAX(li.added_at) FROM feed_items c"
             "   JOIN list_items li ON li.user_hash = c.user_hash"
@@ -237,12 +247,16 @@ def feed_ranking_job() -> None:
 
 def label_counts(feed: Feed) -> dict:
     with get_db_con() as cur:
+        # Shared votes: count each item in this feed the user has voted on in
+        # any feed (one row per item via user_item_votes).
         cur.execute(
-            "SELECT COUNT(*) FILTER (WHERE score > 0) AS up, "
-            "COUNT(*) FILTER (WHERE score < 0) AS down, "
-            "COUNT(*) FILTER (WHERE score = 0) AS neutral "
-            "FROM item_states WHERE user_hash = %s AND feed_hash = %s "
-            "AND score IS NOT NULL",
+            "SELECT COUNT(*) FILTER (WHERE v.score > 0) AS up, "
+            "COUNT(*) FILTER (WHERE v.score < 0) AS down, "
+            "COUNT(*) FILTER (WHERE v.score = 0) AS neutral "
+            "FROM feed_items c "
+            "JOIN user_item_votes v ON v.user_hash = c.user_hash "
+            " AND v.item_url_hash = c.item_url_hash "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s",
             (feed.user_hash, feed.name_hash),
         )
         counts = cur.fetchone()

@@ -79,6 +79,7 @@ function bindControls() {
   $('srcTabTemplate').onclick = () => switchSourceTab('template');
   $('srcTabManual').onclick = () => switchSourceTab('manual');
   $('srcTabAnalyze').onclick = () => switchSourceTab('analyze');
+  $('srcTabFeed').onclick = () => switchSourceTab('feed');
   $('analyzeForm').onsubmit = handleAnalyzeWebsite;
   $('analyzeBackBtn').onclick = resetAnalyzeTab;
   $('analyzeAddBtn').onclick = handleCreateAnalyzedSource;
@@ -1472,10 +1473,41 @@ function intervalLabel(mins) {
 
 function sourceRow(source) {
   const count = source.source_item_count ?? 0;
+  const isFeed = !!source.source_feed_hash;
+  // Feed sources mirror another feed rather than fetching an RSS URL, so they
+  // show the origin feed instead of a URL and skip the fetch-related actions.
+  const subtitle = isFeed
+    ? `\u{1F517} Feed: ${source.source_feed_name || source.source_name}`
+    : source.source_url;
   const checked = source.source_last_ingested_at
     ? `checked ${timeAgo(source.source_last_ingested_at)}`
     : 'not checked yet';
   const interval = intervalLabel(source.source_ingest_interval_minutes);
+  const meta = isFeed
+    ? `${count} article${count === 1 ? '' : 's'} · shared from another feed`
+    : `${count} article${count === 1 ? '' : 's'} · ${checked}${interval ? ` · checks ${interval}` : ''}`;
+  const actions = [
+    h('button', {
+      class: 'btn btn-ghost btn-xs',
+      title: 'Show only this source in the feed',
+      onclick: () => viewSourceInFeed(source),
+    }, 'View'),
+  ];
+  if (!isFeed) {
+    actions.push(h('button', {
+      class: 'btn btn-ghost btn-xs',
+      title: 'Re-collect images, content and previews for this source',
+      onclick: (e) => rescrapeSource(source, e.currentTarget),
+    }, 'Re-scrape'));
+    actions.push(h('button', {
+      class: 'btn btn-ghost btn-xs',
+      onclick: () => openEditSourceModal(source),
+    }, 'Edit'));
+  }
+  actions.push(h('button', {
+    class: 'btn btn-ghost btn-xs text-error',
+    onclick: () => confirmDeleteSource(source),
+  }, 'Remove'));
   return h('div', { class: 'flex items-center justify-between gap-3 p-3 bg-base-200 border border-base-300 rounded-lg mb-2' },
     h('div', { class: 'min-w-0' },
       h('div', { class: 'font-medium text-sm flex items-center gap-2' },
@@ -1484,30 +1516,11 @@ function sourceRow(source) {
           style: `background:${sourceColor(source.source_name, source.source_color)}`,
         }),
         source.source_name),
-      h('div', { class: 'text-xs text-base-content/40 truncate' }, source.source_url),
-      h('div', { class: 'text-xs text-base-content/60 mt-1' },
-        `${count} article${count === 1 ? '' : 's'} · ${checked}${interval ? ` · checks ${interval}` : ''}`),
+      h('div', { class: 'text-xs text-base-content/40 truncate' }, subtitle),
+      h('div', { class: 'text-xs text-base-content/60 mt-1' }, meta),
       source.source_last_ingest_error && h('div', { class: 'text-xs text-error mt-1' },
         `Last check failed: ${source.source_last_ingest_error}`)),
-    h('div', { class: 'flex gap-1 flex-shrink-0' },
-      h('button', {
-        class: 'btn btn-ghost btn-xs',
-        title: 'Show only this source in the feed',
-        onclick: () => viewSourceInFeed(source),
-      }, 'View'),
-      h('button', {
-        class: 'btn btn-ghost btn-xs',
-        title: 'Re-collect images, content and previews for this source',
-        onclick: (e) => rescrapeSource(source, e.currentTarget),
-      }, 'Re-scrape'),
-      h('button', {
-        class: 'btn btn-ghost btn-xs',
-        onclick: () => openEditSourceModal(source),
-      }, 'Edit'),
-      h('button', {
-        class: 'btn btn-ghost btn-xs text-error',
-        onclick: () => confirmDeleteSource(source),
-      }, 'Remove')));
+    h('div', { class: 'flex gap-1 flex-shrink-0' }, ...actions));
 }
 
 // Jump to the article list showing only this source, by seeding the source
@@ -1659,9 +1672,66 @@ function switchSourceTab(tab) {
   $('srcTabTemplate').classList.toggle('tab-active', tab === 'template');
   $('srcTabManual').classList.toggle('tab-active', tab === 'manual');
   $('srcTabAnalyze').classList.toggle('tab-active', tab === 'analyze');
+  $('srcTabFeed').classList.toggle('tab-active', tab === 'feed');
   $('sourceTabTemplate').classList.toggle('hidden', tab !== 'template');
   $('sourceTabManual').classList.toggle('hidden', tab !== 'manual');
   $('sourceTabAnalyze').classList.toggle('hidden', tab !== 'analyze');
+  $('sourceTabFeed').classList.toggle('hidden', tab !== 'feed');
+  if (tab === 'feed') loadFeedSourceOptions();
+}
+
+// List the user's other feeds as candidate feed-sources. The current feed and
+// any feed already added as a source are excluded.
+async function loadFeedSourceOptions() {
+  const list = $('feedSourceList');
+  render(list, spinner());
+  try {
+    const [feeds, existing] = await Promise.all([
+      sdk.feedList(),
+      sdk.feedSources({ feed_name_hash: currentFeed.feed_name_hash }),
+    ]);
+    const alreadySourced = new Set(
+      existing.filter((s) => s.source_feed_hash).map((s) => s.source_feed_hash));
+    const candidates = feeds.filter((f) =>
+      f.feed_name_hash !== currentFeed.feed_name_hash
+      && !alreadySourced.has(f.feed_name_hash));
+    if (!candidates.length) {
+      render(list, h('div', { class: 'p-4 text-center text-sm text-base-content/50' },
+        'No other feeds available to add'));
+      return;
+    }
+    render(list, candidates.map((f) =>
+      h('div', { class: 'flex items-center justify-between gap-3 p-3 border-b border-base-300 last:border-0' },
+        h('div', { class: 'min-w-0' },
+          h('div', { class: 'font-medium text-sm truncate' }, f.feed_name),
+          h('div', { class: 'text-xs text-base-content/50' },
+            `${f.feed_item_count ?? 0} article${(f.feed_item_count ?? 0) === 1 ? '' : 's'}`)),
+        h('button', {
+          class: 'btn btn-primary btn-xs flex-shrink-0',
+          onclick: (e) => handleAddFeedSource(f, e.currentTarget),
+        }, 'Add'))));
+  } catch (err) {
+    render(list, h('div', { class: 'p-4 text-center text-sm text-base-content/50' },
+      'Failed to load feeds'));
+    toast(err.message, 'alert-error');
+  }
+}
+
+async function handleAddFeedSource(feed, btn) {
+  if (!currentFeed) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  try {
+    await sdk.sourceCreateFeed({
+      feed_name_hash: currentFeed.feed_name_hash,
+      source_feed_name_hash: feed.feed_name_hash,
+    });
+    closeModal('addSourceModal');
+    toast(`Added feed "${feed.feed_name}" as a source`);
+    loadSources();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Add'; }
+    toast(err.message, 'alert-error');
+  }
 }
 
 async function handleCreateManualSource(e) {

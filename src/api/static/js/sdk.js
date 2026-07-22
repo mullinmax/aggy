@@ -180,6 +180,11 @@ class AggySDK {
     return this._request("POST", "/source/create", { query: { feed_name_hash, source_name, source_url } });
   }
 
+  /** Add another feed as a source (shares its items and votes) */
+  async sourceCreateFeed({ feed_name_hash, source_feed_name_hash }) {
+    return this._request("POST", "/source/create_feed", { query: { feed_name_hash, source_feed_name_hash } });
+  }
+
   /** Delete a source */
   async sourceDelete({ feed_name_hash, source_name_hash }) {
     return this._request("DELETE", "/source/delete", { query: { feed_name_hash, source_name_hash } });

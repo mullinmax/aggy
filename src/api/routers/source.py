@@ -49,6 +49,32 @@ def create_source(
 
 
 @source_router.post(
+    "/create_feed",
+    summary="Add another feed as a source (shares its items and votes)",
+    response_model=SourceRouteModel,
+)
+def create_feed_source(
+    feed_name_hash: str,
+    source_feed_name_hash: str,
+    user: User = Depends(authenticate),
+) -> SourceRouteModel:
+    feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
+    if feed is None:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    origin_feed = Feed.read(user_hash=user.name_hash, name_hash=source_feed_name_hash)
+    if origin_feed is None:
+        raise HTTPException(status_code=404, detail="Source feed not found")
+
+    try:
+        source = feed.add_feed_source(origin_feed)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return SourceRouteModel.from_db_model(source)
+
+
+@source_router.post(
     "/update",
     summary="Update a source's name, URL, or template parameters",
     response_model=SourceRouteModel,

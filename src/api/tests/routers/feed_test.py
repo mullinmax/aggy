@@ -228,6 +228,8 @@ def test_sources(client, existing_user, existing_feed, existing_source, token):
             "source_template_parameters": None,
             "source_ingest_interval_minutes": None,
             "source_color": response.json()[0]["source_color"],
+            "source_feed_hash": None,
+            "source_feed_name": None,
         }
     ]
     # a palette color was assigned at creation
