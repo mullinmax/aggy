@@ -116,12 +116,13 @@ def ingest_source(source: Source) -> None:
             except Exception as e:
                 logging.error(f"Error adding embedding to item: {e}")
 
-        # and an image embedding, when a vision model is configured and the item
-        # has a preview image
-        image_embedding_model = config.get("OLLAMA_IMAGE_EMBEDDING_MODEL", None)
-        if image_embedding_model is not None:
+        # and an image embedding, when the CLIP service is configured and the
+        # item has a preview image
+        if config.get("IMAGE_EMBED_HOST", None) is not None:
             try:
-                final_item.add_image_embedding(model_name=image_embedding_model)
+                final_item.add_image_embedding(
+                    model_name=config.get("IMAGE_EMBED_MODEL")
+                )
             except Exception as e:
                 logging.error(f"Error adding image embedding to item: {e}")
 

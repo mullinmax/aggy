@@ -244,22 +244,27 @@ class ItemBase(AggyBaseModel):
         self.embeddings[ollama_embedding_model] = embedding
 
     @staticmethod
-    def _fetch_image_base64(image_url: str) -> Optional[str]:
-        """Download the preview image and return it base64-encoded, or None if
-        it can't be fetched (dead link, timeout, non-image response)."""
-        timeout = config.get_int("OLLAMA_IMAGE_EMBEDDING_TIMEOUT_SECONDS")
+    def _fetch_image_base64(image_url: str) -> str:
+        """Download the preview image and return it base64-encoded."""
+        timeout = config.get_int("IMAGE_EMBED_TIMEOUT_SECONDS")
         response = httpx.get(image_url, timeout=timeout, follow_redirects=True)
         response.raise_for_status()
         return base64.b64encode(response.content).decode("ascii")
 
     def add_image_embedding(self, model_name: str, force_refresh=False) -> None:
-        """Embed the item's preview image with a vision model so the recommender
-        can score the picture itself rather than only whether one exists.
+        """Embed the item's preview image via the CLIP image-embedding service
+        (src/image_embed) so the recommender can score the picture itself rather
+        than only whether one exists.
 
-        No-op when the item has no image. Stored in ``image_embeddings`` (keyed
-        by model name), kept separate from the text ``embeddings`` so the two
-        pieces are never blended into one signal."""
+        No-op when the item has no image or the service isn't configured. Stored
+        in ``image_embeddings`` (keyed by model name), kept separate from the
+        text ``embeddings`` so the two pieces are never blended into one signal.
+        """
         if not self.image_url:
+            return
+
+        host = config.get("IMAGE_EMBED_HOST", None)
+        if host is None:
             return
 
         if self.image_embeddings is None:
@@ -274,15 +279,17 @@ class ItemBase(AggyBaseModel):
             logging.error(f"Error fetching image {self.image_url}: {e}")
             return
 
-        ollama = get_ollama_connection()
-        # The Ollama embed endpoint returns {"embeddings": [[...]]} for a single
-        # input; the vision model must accept an image passed as base64 input.
-        response = ollama.embed(model=model_name, input=image_base64)
-        vectors = response["embeddings"]
-        if not vectors:
-            return
-
-        self.image_embeddings[model_name] = list(vectors[0])
+        port = config.get_int("IMAGE_EMBED_PORT")
+        timeout = config.get_int("IMAGE_EMBED_TIMEOUT_SECONDS")
+        response = httpx.post(
+            f"http://{host}:{port}/embed",
+            json={"image_base64": image_base64},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        embedding = response.json().get("embedding")
+        if embedding:
+            self.image_embeddings[model_name] = embedding
 
 
 class ItemStrict(ItemBase):

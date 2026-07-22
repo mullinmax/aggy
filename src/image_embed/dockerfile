@@ -1,0 +1,28 @@
+FROM python:3.11-slim AS aggy-image-embed
+WORKDIR /app
+
+ENV TZ=America/New_York
+
+# Keep BLAS/torch from oversubscribing the CPU inside the container.
+ENV OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# Install the CPU build of torch first (from the CPU wheel index) so pulling in
+# sentence-transformers doesn't drag in the multi-gigabyte CUDA build.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+
+# Bake the CLIP weights into the image so the container needs no network at
+# startup and the first request is fast. Must match the runtime default.
+ARG IMAGE_EMBED_MODEL=clip-ViT-B-32
+ENV IMAGE_EMBED_MODEL=${IMAGE_EMBED_MODEL}
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${IMAGE_EMBED_MODEL}')"
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

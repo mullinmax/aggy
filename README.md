@@ -24,7 +24,7 @@ When Aggy finds new content, it analyzes metadata and determines how relevant it
 
 ### Understanding your preferences
 
-Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide feedback, Aggy fine-tunes your feed so you get more of what you love without relying on generic algorithms or trends.
+Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide feedback, Aggy fine-tunes your feed so you get more of what you love without relying on generic algorithms or trends. Both the article **text** (via Ollama) and its **preview image** (via a bundled CLIP service, `aggy-image-embed`) are embedded and scored as separate signals.
 
 ## Features
 

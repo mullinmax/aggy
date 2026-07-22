@@ -129,7 +129,8 @@ def rescrape_source(source: Source) -> None:
     from ranking.engine import rank_feed  # local import avoids an import cycle
 
     embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
-    image_embedding_model = config.get("OLLAMA_IMAGE_EMBEDDING_MODEL", None)
+    image_embed_host = config.get("IMAGE_EMBED_HOST", None)
+    image_embed_model = config.get("IMAGE_EMBED_MODEL")
     feeds_to_rerank: set = set()
 
     for item in source.query_items():
@@ -165,10 +166,10 @@ def rescrape_source(source: Source) -> None:
                 except Exception as e:
                     logging.error(f"Error re-embedding item {item.url}: {e}")
 
-            if image_changed and image_embedding_model is not None:
+            if image_changed and image_embed_host is not None:
                 try:
                     merged.add_image_embedding(
-                        model_name=image_embedding_model, force_refresh=True
+                        model_name=image_embed_model, force_refresh=True
                     )
                     embedding_changed = (
                         embedding_changed
@@ -204,17 +205,52 @@ def rescrape_source(source: Source) -> None:
 
 
 def download_embedding_model_job() -> None:
-    wanted = [
-        config.get("OLLAMA_EMBEDDING_MODEL", None),
-        config.get("OLLAMA_IMAGE_EMBEDDING_MODEL", None),
-    ]
-    wanted = [m for m in wanted if m is not None]
-    if not wanted:
+    embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
+
+    if embedding_model is None:
         return
 
     ollama = get_ollama_connection()
 
     models = ollama.list()
-    for model_name in wanted:
-        if model_name not in models:
-            ollama.pull(model_name)
+    if embedding_model not in models:
+        ollama.pull(embedding_model)
+
+
+def backfill_image_embeddings_job() -> None:
+    """One-shot at startup: embed the preview image of every stored item that's
+    missing an embedding for the current CLIP model. New items are embedded at
+    ingest time, but this catches everything scraped before the service existed
+    (or before the model changed). No-op when the service isn't configured."""
+    image_embed_host = config.get("IMAGE_EMBED_HOST", None)
+    if image_embed_host is None:
+        return
+    model_name = config.get("IMAGE_EMBED_MODEL")
+
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT url_hash FROM items WHERE image_url IS NOT NULL "
+            "AND (image_embeddings IS NULL "
+            "OR NOT jsonb_exists(image_embeddings, %s))",
+            (model_name,),
+        )
+        url_hashes = [row["url_hash"] for row in cur.fetchall()]
+
+    if not url_hashes:
+        return
+
+    logging.info(f"Backfilling image embeddings for {len(url_hashes)} item(s)...")
+    done = 0
+    for url_hash in url_hashes:
+        item = ItemLoose.read(url_hash)
+        if item is None:
+            continue
+        try:
+            item.add_image_embedding(model_name=model_name)
+            if item.image_embeddings and model_name in item.image_embeddings:
+                item.update()
+                done += 1
+        except Exception as e:
+            logging.error(f"Error backfilling image embedding for {item.url}: {e}")
+
+    logging.info(f"Image embedding backfill complete: {done}/{len(url_hashes)} embedded.")

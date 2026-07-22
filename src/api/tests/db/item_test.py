@@ -216,47 +216,86 @@ def test_add_embedding_skips_when_already_present(unique_item_strict, monkeypatc
     fake_client.embeddings.assert_not_called()
 
 
-def test_add_image_embedding_fetches_and_embeds(unique_item_strict, monkeypatch):
-    """The preview image is downloaded, embedded by the vision model, and stored
-    in image_embeddings (kept separate from the text embeddings)."""
+@pytest.fixture
+def image_embed_configured():
+    """Point the image embedder at a (fake) service for the duration of a test."""
+    config.set("IMAGE_EMBED_HOST", "image-embed")
+    config.set("IMAGE_EMBED_PORT", 8000)
+    config.set("IMAGE_EMBED_MODEL", "clip-model")
+    config.set("IMAGE_EMBED_TIMEOUT_SECONDS", 30)
+    yield
+    for key in (
+        "IMAGE_EMBED_HOST",
+        "IMAGE_EMBED_PORT",
+        "IMAGE_EMBED_MODEL",
+        "IMAGE_EMBED_TIMEOUT_SECONDS",
+    ):
+        config.config.pop(key, None)
+
+
+def _fake_post(embedding):
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"model": "clip-model", "embedding": embedding}
+    return MagicMock(return_value=resp)
+
+
+def test_add_image_embedding_fetches_and_embeds(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """The preview image is downloaded, sent to the CLIP service, and stored in
+    image_embeddings (kept separate from the text embeddings)."""
     monkeypatch.setattr(
         "db.item.ItemBase._fetch_image_base64", staticmethod(lambda url: "aGVsbG8=")
     )
-    fake_client = MagicMock()
-    fake_client.embed.return_value = {"embeddings": [[0.4, 0.5, 0.6]]}
-    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+    post = _fake_post([0.4, 0.5, 0.6])
+    monkeypatch.setattr("db.item.httpx.post", post)
 
     unique_item_strict.add_image_embedding("clip-model")
 
-    fake_client.embed.assert_called_once()
-    kwargs = fake_client.embed.call_args.kwargs
-    assert kwargs["model"] == "clip-model"
-    assert kwargs["input"] == "aGVsbG8="
+    post.assert_called_once()
+    args, kwargs = post.call_args
+    assert args[0] == "http://image-embed:8000/embed"
+    assert kwargs["json"] == {"image_base64": "aGVsbG8="}
     assert unique_item_strict.image_embeddings["clip-model"] == [0.4, 0.5, 0.6]
     # text embeddings are untouched by the image embedder
     assert not unique_item_strict.embeddings
 
 
-def test_add_image_embedding_noop_without_image(unique_item_strict, monkeypatch):
+def test_add_image_embedding_noop_without_service(unique_item_strict, monkeypatch):
+    """With no service configured, nothing is fetched or embedded."""
+    config.config.pop("IMAGE_EMBED_HOST", None)
+    post = MagicMock()
+    monkeypatch.setattr("db.item.httpx.post", post)
+
+    unique_item_strict.add_image_embedding("clip-model")
+
+    post.assert_not_called()
+    assert unique_item_strict.image_embeddings is None
+
+
+def test_add_image_embedding_noop_without_image(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
     """No image URL means nothing is fetched or embedded."""
-    fake_client = MagicMock()
-    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+    post = MagicMock()
+    monkeypatch.setattr("db.item.httpx.post", post)
 
     unique_item_strict.image_url = None
     unique_item_strict.add_image_embedding("clip-model")
 
-    fake_client.embed.assert_not_called()
+    post.assert_not_called()
     assert unique_item_strict.image_embeddings is None
 
 
 def test_add_image_embedding_skips_when_already_present(
-    unique_item_strict, monkeypatch
+    unique_item_strict, image_embed_configured, monkeypatch
 ):
     """An existing image embedding for the model is not recomputed unless forced."""
-    fake_client = MagicMock()
-    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+    post = MagicMock()
+    monkeypatch.setattr("db.item.httpx.post", post)
 
     unique_item_strict.image_embeddings = {"clip-model": [0.0]}
     unique_item_strict.add_image_embedding("clip-model")
 
-    fake_client.embed.assert_not_called()
+    post.assert_not_called()

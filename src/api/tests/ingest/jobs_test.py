@@ -1,3 +1,4 @@
+from config import config
 from db.item import ItemLoose, ItemStrict
 from ingest import jobs
 
@@ -53,3 +54,41 @@ def test_rescrape_source_skips_unchanged_item(
     jobs.rescrape_source(existing_source)
 
     assert ranked == []
+
+
+def test_backfill_image_embeddings_embeds_missing(
+    monkeypatch, existing_item_strict
+):
+    """The backfill embeds stored items whose preview image has no embedding for
+    the current model, and persists the result."""
+    config.set("IMAGE_EMBED_HOST", "image-embed")
+    config.set("IMAGE_EMBED_MODEL", "clip-model")
+
+    def fake_embed(self, model_name, force_refresh=False):
+        self.image_embeddings = {model_name: [0.1, 0.2, 0.3]}
+
+    monkeypatch.setattr("db.item.ItemBase.add_image_embedding", fake_embed)
+    try:
+        jobs.backfill_image_embeddings_job()
+    finally:
+        config.config.pop("IMAGE_EMBED_HOST", None)
+        config.config.pop("IMAGE_EMBED_MODEL", None)
+
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_embeddings == {"clip-model": [0.1, 0.2, 0.3]}
+
+
+def test_backfill_image_embeddings_noop_without_service(
+    monkeypatch, existing_item_strict
+):
+    """With no service configured the backfill does nothing."""
+    config.config.pop("IMAGE_EMBED_HOST", None)
+    called = []
+    monkeypatch.setattr(
+        "db.item.ItemBase.add_image_embedding",
+        lambda self, model_name, force_refresh=False: called.append(model_name),
+    )
+
+    jobs.backfill_image_embeddings_job()
+
+    assert called == []

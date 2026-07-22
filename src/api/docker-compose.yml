@@ -65,6 +65,14 @@ services:
     volumes:
       - "dev-aggy-ollama-data:/root/.ollama"
 
+  dev-aggy-image-embed:
+    build:
+      context: ../image_embed
+      dockerfile: dockerfile
+    restart: unless-stopped
+    ports:
+      - 8000
+
   dev-aggy-api:
     build:
       context: .
@@ -87,6 +95,9 @@ services:
       # articles; mxbai-embed-large caps at 512 tokens and truncates most items.
       - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
       - OLLAMA_EMBEDDING_NUM_CTX=8192
+      - IMAGE_EMBED_HOST=dev-aggy-image-embed
+      - IMAGE_EMBED_PORT=8000
+      - IMAGE_EMBED_MODEL=clip-ViT-B-32
       - JWT_ALGORITHM=HS256
       - JWT_SECRET=429bceb2ab20f5785a4b609a725b0164be73a95d8ce04706ed8366cfe6ade896 # openssl rand -hex 32
     labels:
