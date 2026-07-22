@@ -1190,52 +1190,41 @@ function contributionMarks(sign, level) {
   return h('span', { class: `font-bold ${cls}` }, symbol.repeat(level));
 }
 
-// Render ONLY the single piece a field's probe swapped in — a thumbnail for
-// Image, a line of text for Text, a chip for Source/Author/Recency/Media —
-// never the whole article, so each alternative reads as "just this one thing
-// changed".
-function examplePiece(ex, field) {
+// Render ONLY the one piece this field evaluates for the article — a thumbnail
+// for Image, the text for Text, a chip for Source/Author/Recency/Media — so you
+// can see exactly what was scored, never the whole article.
+function fieldPreview(p, field) {
   if (field === 'image') {
-    return ex.image_url
+    return p.image_url
       ? h('img', {
-          src: ex.image_url, alt: '', loading: 'lazy',
+          src: p.image_url, alt: '', loading: 'lazy',
           class: 'w-24 h-16 object-cover rounded bg-base-300 shrink-0',
         })
-      : h('div', { class: 'w-24 h-16 rounded bg-base-300 flex items-center justify-center text-[10px] text-base-content/40 shrink-0' }, 'no image');
+      : h('div', { class: 'w-24 h-16 rounded bg-base-300 flex items-center justify-center text-[10px] text-base-content/40 shrink-0' },
+          p.has_image ? 'image' : 'no image');
   }
   if (field === 'text') {
-    const txt = ex.title || ex.excerpt || '(no text)';
-    return h('div', { class: 'w-40 shrink-0 rounded bg-base-200 border border-base-300 p-2' },
-      h('p', { class: 'text-[11px] leading-snug line-clamp-3 text-base-content/80' }, txt));
+    return h('div', { class: 'w-full rounded bg-base-200 border border-base-300 p-2' },
+      h('p', { class: 'text-[11px] leading-snug line-clamp-4 text-base-content/80' }, p.text || '(no text)'));
   }
   let txt = '';
-  if (field === 'source') txt = ex.source || '(no source)';
-  else if (field === 'author') txt = ex.author ? `@${ex.author}` : '(no author)';
-  else if (field === 'recency') txt = ex.date_published ? timeAgo(ex.date_published) : '(no date)';
-  else if (field === 'media') txt = ex.has_media ? 'video / audio' : 'no media';
+  if (field === 'source') txt = p.source || '(no source)';
+  else if (field === 'author') txt = p.author ? `@${p.author}` : '(no author)';
+  else if (field === 'recency') txt = p.date_published ? timeAgo(p.date_published) : '(no date)';
+  else if (field === 'media') txt = p.has_media ? 'video / audio' : 'no media';
   return h('span', { class: 'shrink-0 badge badge-outline whitespace-nowrap' }, txt);
 }
 
-// A titled, horizontally-scrolling strip of the swapped pieces (better/worse).
-function exampleStrip(heading, cls, examples, field) {
-  if (!examples || !examples.length) return null;
-  return h('div', { class: 'mt-2' },
-    h('p', { class: `text-[11px] font-semibold ${cls} mb-1` }, heading),
-    h('div', { class: 'flex gap-2 overflow-x-auto pb-1 items-start' },
-      examples.map((ex) => examplePiece(ex, field))));
-}
-
 // The panel revealed when a field is tapped: what the field feeds the model,
-// plus the alternatives (for this field alone) it scored higher/lower.
+// and a preview of exactly what this article contributed to it.
 function fieldDetail(f) {
-  const hasExamples = (f.better && f.better.length) || (f.worse && f.worse.length);
   return h('div', { class: 'pl-6 pr-1 pb-3 -mt-0.5' },
     f.description ? h('p', { class: 'text-xs text-base-content/60' }, f.description) : null,
-    exampleStrip('Scored higher', 'text-success', f.better, f.field),
-    exampleStrip('Scored lower', 'text-error', f.worse, f.field),
-    hasExamples ? null
-      : h('p', { class: 'text-[11px] text-base-content/40 mt-2' },
-          'No alternatives changed the score for this field.'));
+    f.preview
+      ? h('div', { class: 'mt-2' },
+          h('p', { class: 'text-[11px] font-semibold text-base-content/50 mb-1' }, 'Evaluated here'),
+          fieldPreview(f.preview, f.field))
+      : null);
 }
 
 // A tappable field row: the label + marks, expanding to show fieldDetail().

@@ -231,24 +231,14 @@ def test_item_explanation(
     assert fields["text"]["level"] >= 1
     assert fields["text"]["sign"] == 1
 
-    # every field carries a plain-language description of what it scores
+    # every field carries a plain-language description and a preview of exactly
+    # what was evaluated for this article
     assert all(f["description"] for f in body["fields"])
-
-    # examples are single-field swaps the model scored higher (better) or lower
-    # (worse), sorted by how far from this article's own value
-    for f in body["fields"]:
-        for ex in f["better"]:
-            assert ex["delta"] > 0
-            assert ex["url_hash"] != items[4].url_hash
-        for ex in f["worse"]:
-            assert ex["delta"] < 0
-            assert ex["url_hash"] != items[4].url_hash
-    # swapping the disliked (odd) cluster's text scores lower; the swap examples
-    # carry the changed piece's display fields
-    text = fields["text"]
-    assert text["better"] or text["worse"]
-    disliked = {items[1].url_hash, items[3].url_hash}
-    assert any(ex["url_hash"] in disliked for ex in text["worse"])
+    assert all(f["preview"] is not None for f in body["fields"])
+    # the preview is this article's own data (same across fields, one per piece)
+    text_preview = fields["text"]["preview"]
+    assert text_preview["text"]  # the item's title/excerpt
+    assert fields["image"]["preview"]["has_image"] is True  # item[4] is even/imaged
 
 
 def test_item_explanation_needs_votes(

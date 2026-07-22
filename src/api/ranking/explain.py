@@ -1,122 +1,95 @@
 """Explain why the recommendation model scored a single article the way it did.
 
 The prediction models are opaque (a kNN vote, a ridge regression, a small net),
-so instead of reading their internals we probe them: hold the article fixed and,
-one field at a time, swap that field for many random/average values drawn from
-the rest of the feed. If the article's real value scores higher than those
-substitutes, that field is *pushing the recommendation up*; if lower, it's
-*dragging it down*. The size of the gap becomes 0, 1, or 2 marks.
+so instead of reading their internals we ablate them: hold the article fixed
+and, one field at a time, blank that field out (null the embedding, drop the
+source, forget the date …) and re-score. If removing a field lowers the score,
+that field was *pushing the recommendation up*; if the score rises without it,
+the field was *dragging it down*. The size of the change becomes 0, 1, or 2
+marks.
 
-The same swap also yields concrete evidence: substituting *one real article's*
-value at a time tells us which of the other posts' images/text/sources the model
-would have scored higher or lower than this one's. Those become the "scored
-better / scored worse" examples the UI shows when a field is tapped, so the
-opaque marks are backed by articles the user can actually look at.
+That's one evaluation per field against the article's own real data — cheap,
+and it measures each field's actual contribution rather than how it compares to
+random substitutes. Tapping a field also shows a preview of exactly what was
+being evaluated for it (this article's text, its thumbnail, its source, …).
 
-This is a per-instance permutation importance, computed on demand (it retrains
-the winning model on the feed's votes), because users look at it rarely.
+Computed on demand (it retrains the winning model on the feed's votes), because
+users look at it rarely.
 """
 
-import random
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Dict, List, Optional
-
-import numpy as np
+from typing import List, Optional
 
 from db.base import get_db_con
 from db.feed import Feed
 from .engine import MIN_LABELS_TO_RANK, load_feed_features
 from .models import ItemFeatures, all_models, evaluate_models
 
-# How many substitute values to try per field. Enough to average out the
-# noise of random draws without making the on-demand call slow.
-_SAMPLES = 40
-
 # |Δ score| thresholds for 0 / 1 / 2 marks. Predicted scores live in [-1, 1].
 _LEVEL1 = 0.04
 _LEVEL2 = 0.12
 
-# How many "scored better" / "scored worse" example articles to surface per
-# field, and the smallest score gap that counts as a real difference.
-_EXAMPLES_PER_SIDE = 3
-_EXAMPLE_EPS = 1e-3
-
-# Fields the model consumes, in display order. Each is scored *in isolation* —
-# one piece of a fictional article is swapped and everything else held fixed —
-# so text and image never blur together. Entries are:
-#   (field id, label, ItemFeatures attr perturbed, blurb, dedup strategy)
-# dedup "item": every article is a distinct alternative (embeddings, dates, and
-# thumbnails, which we want to show individually even when a flag ties them).
-# dedup "value": the swap value repeats across articles (source/author/media),
-# so alternatives are collapsed to one per distinct value.
+# Fields the model consumes, in display order. Each is scored by blanking it out
+# and re-evaluating, so text and image are measured independently. Entries are:
+#   (field id, label, {attr: null-value to blank}, what-is-scored blurb)
+# The image field blanks both its embedding and the has-image flag, so the whole
+# picture is removed rather than half of it.
 _FIELDS = [
     (
         "text",
         "Text",
-        "embedding",
-        "Just the article's title and body text, embedded and compared against "
-        "the posts you've voted on — the image is scored separately.",
-        "item",
+        {"embedding": None},
+        "The article's title and body text, embedded and compared against the "
+        "posts you've voted on — the image is scored separately.",
     ),
     (
         "image",
         "Image",
-        "has_image",
-        "Just the preview image. Swapping other posts' thumbnails in shows "
-        "which images the model treats as a plus or a minus.",
-        "item",
+        {"image_embedding": None, "has_image": False},
+        "The preview image — its embedding when a vision model is configured, "
+        "otherwise just whether one is present.",
     ),
     (
         "source",
         "Source",
-        "source",
-        "Just the source or subreddit the article came from.",
-        "value",
+        {"source": None},
+        "The source or subreddit the article came from.",
     ),
     (
         "author",
         "Author",
-        "author",
-        "Just who wrote or posted the article.",
-        "value",
+        {"author": None},
+        "Who wrote or posted the article.",
     ),
     (
         "recency",
         "Recency",
-        "date_published",
-        "Just how recently the article was published.",
-        "item",
+        {"date_published": None},
+        "How recently the article was published.",
     ),
     (
         "media",
         "Media",
-        "has_media",
-        "Just whether the article has playable video or audio attached.",
-        "value",
+        {"has_media": False},
+        "Whether the article has playable video or audio attached.",
     ),
 ]
 
 
 @dataclass
-class FieldExample:
-    """One alternative value the probe swapped in, scored against the target's.
+class FieldPreview:
+    """A preview of exactly what this article contributed to the field being
+    scored — the real data the ablation blanked out. The UI shows only the one
+    piece relevant to the field (its text, its thumbnail, its source, …)."""
 
-    Every display field is carried, but the UI shows only the *one* piece this
-    field changed (a thumbnail for image, text for text, a source chip for
-    source, …), never the whole article."""
-
-    url_hash: str
-    title: Optional[str]
+    text: Optional[str]
     image_url: Optional[str]
     source: Optional[str]
-    excerpt: Optional[str]
     author: Optional[str]
     date_published: Optional[datetime]
+    has_image: bool
     has_media: bool
-    # substitute score minus baseline: >0 the model likes this value more than
-    # the article's own, <0 less.
-    delta: float
 
 
 @dataclass
@@ -130,9 +103,8 @@ class FieldContribution:
     delta: float
     # what this field feeds the model, in one sentence
     description: str
-    # other articles whose value the model scored higher / lower than this one's
-    better: List[FieldExample]
-    worse: List[FieldExample]
+    # this article's own value for the field, so you can see what was evaluated
+    preview: FieldPreview
 
 
 @dataclass
@@ -175,10 +147,10 @@ def _marks(delta: float):
     return sign, level
 
 
-# Display metadata for the example cards; the ML features don't carry titles or
-# image URLs, so we pull them separately keyed by url_hash.
-_DISPLAY_META_SQL = (
-    "SELECT i.url_hash, i.title, i.image_url, i.excerpt, ("
+# Display data for the field previews; the ML features don't carry the title,
+# image URL or excerpt, so we pull them for the one item being explained.
+_ITEM_DISPLAY_SQL = (
+    "SELECT i.title, i.image_url, i.excerpt, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
@@ -186,74 +158,24 @@ _DISPLAY_META_SQL = (
     "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
     "FROM feed_items c "
     "JOIN items i ON i.url_hash = c.item_url_hash "
-    "WHERE c.user_hash = %s AND c.feed_hash = %s"
+    "WHERE c.user_hash = %s AND c.feed_hash = %s AND c.item_url_hash = %s"
 )
 
 
-def _load_display_meta(feed: Feed) -> Dict[str, dict]:
+def _load_item_display(feed: Feed, url_hash: str) -> dict:
     with get_db_con() as cur:
-        cur.execute(_DISPLAY_META_SQL, (feed.user_hash, feed.name_hash))
-        return {row["url_hash"]: row for row in cur.fetchall()}
-
-
-def _field_examples(
-    model,
-    target: ItemFeatures,
-    features: List[ItemFeatures],
-    attr: str,
-    baseline: float,
-    meta: Dict[str, dict],
-    dedup: str,
-) -> tuple:
-    """Score fictional copies of the target with a single field swapped in from
-    each other article, then return the swaps that scored best and worst versus
-    the baseline.
-
-    Only that one field is altered per copy, so the resulting delta isolates
-    that field's effect. Each alternative keeps a reference to the article it
-    came from so the UI can show exactly the swapped piece (a thumbnail, a line
-    of text, a source name), never the whole article. `dedup` is "item" to keep
-    every article distinct or "value" to collapse repeated swap values."""
-    others = [f for f in features if f.url_hash != target.url_hash]
-    if not others:
-        return [], []
-    variations = [replace(target, **{attr: getattr(f, attr)}) for f in others]
-    scores, _ = model.predict(variations)
-
-    seen = set()
-    entries = []
-    for f, score in zip(others, scores):
-        key = f.url_hash if dedup == "item" else getattr(f, attr)
-        if key in seen:
-            continue
-        seen.add(key)
-        row = meta.get(f.url_hash, {})
-        entries.append(
-            FieldExample(
-                url_hash=f.url_hash,
-                title=row.get("title"),
-                image_url=row.get("image_url"),
-                source=row.get("source_name"),
-                excerpt=row.get("excerpt"),
-                author=f.author,
-                date_published=f.date_published,
-                has_media=f.has_media,
-                delta=float(score) - baseline,
-            )
-        )
-
-    entries.sort(key=lambda e: e.delta, reverse=True)
-    better = [e for e in entries if e.delta > _EXAMPLE_EPS][:_EXAMPLES_PER_SIDE]
-    worse = [e for e in entries if e.delta < -_EXAMPLE_EPS][-_EXAMPLES_PER_SIDE:]
-    worse.reverse()  # most-negative first, mirroring `better`
-    return better, worse
+        cur.execute(_ITEM_DISPLAY_SQL, (feed.user_hash, feed.name_hash, url_hash))
+        return cur.fetchone() or {}
 
 
 def explain_item(
-    feed: Feed, item_url_hash: str, samples: int = _SAMPLES, seed: int = 0
+    feed: Feed, item_url_hash: str
 ) -> Optional[ItemExplanation]:
     """Return a per-field breakdown of what drives this item's predicted score,
-    or None when the feed has too few votes / the item isn't in the feed."""
+    or None when the feed has too few votes / the item isn't in the feed.
+
+    Each field is scored by blanking it out on the article and re-evaluating:
+    the drop (or rise) versus the full-article baseline is its contribution."""
     features = load_feed_features(feed)
     labeled = [f for f in features if f.label is not None]
     if len(labeled) < MIN_LABELS_TO_RANK:
@@ -268,35 +190,28 @@ def explain_item(
         return None
     model.fit(labeled)
 
-    # score the article and its substitutes as-of now (not vote time)
+    # score the article as-of now (not vote time)
     target = replace(target, label_date=None)
     baseline = float(model.predict([target])[0][0])
-    meta = _load_display_meta(feed)
 
-    # When the feed carries real image embeddings, score the Image field on the
-    # picture itself; otherwise fall back to the has-image presence flag.
-    has_image_embeddings = any(f.image_embedding is not None for f in features)
+    row = _load_item_display(feed, item_url_hash)
+    preview = FieldPreview(
+        text=row.get("title") or row.get("excerpt"),
+        image_url=row.get("image_url"),
+        source=row.get("source_name") or target.source,
+        author=target.author,
+        date_published=target.date_published,
+        has_image=target.has_image,
+        has_media=target.has_media,
+    )
 
-    rng = random.Random(seed)
     contributions: List[FieldContribution] = []
-    for field, label, attr, description, dedup in _FIELDS:
-        if field == "image" and has_image_embeddings:
-            attr = "image_embedding"
-            description = (
-                "Just the preview image, embedded by the vision model. Swapping "
-                "other posts' images in shows which pictures the model treats as "
-                "a plus or a minus."
-            )
-        population = [getattr(f, attr) for f in features]
-        variations = [
-            replace(target, **{attr: rng.choice(population)}) for _ in range(samples)
-        ]
-        substitute_scores, _ = model.predict(variations)
-        delta = baseline - float(np.mean(substitute_scores))
+    for field, label, null_map, description in _FIELDS:
+        ablated = replace(target, **null_map)
+        score = float(model.predict([ablated])[0][0])
+        # removing a helpful field lowers the score, so baseline - score > 0
+        delta = baseline - score
         sign, level = _marks(delta)
-        better, worse = _field_examples(
-            model, target, features, attr, baseline, meta, dedup
-        )
         contributions.append(
             FieldContribution(
                 field=field,
@@ -305,8 +220,7 @@ def explain_item(
                 level=level,
                 delta=delta,
                 description=description,
-                better=better,
-                worse=worse,
+                preview=preview,
             )
         )
 
