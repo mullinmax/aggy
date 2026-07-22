@@ -14,6 +14,13 @@ class AnalyzeRequest(BaseRouteModel):
     }
 
 
+class DetectFeedResponse(BaseRouteModel):
+    # whether the URL is already a valid RSS/Atom feed (so it can be added
+    # directly, without the CSS-selector analysis pass)
+    is_feed: bool
+    feed_title: Optional[str] = None
+
+
 class SelectorCandidate(BaseRouteModel):
     selector: str
     # how many elements the selector matched on the page (entry selector) or

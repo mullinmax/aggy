@@ -205,6 +205,11 @@ class AggySDK {
     return this._request("POST", "/source/update", { body });
   }
 
+  /** Check whether a URL is already a valid RSS/Atom feed */
+  async sourceAnalyzeDetectFeed({ body }) {
+    return this._request("POST", "/source_analyze/detect_feed", { body });
+  }
+
   /** Preview the feed produced by a set of CSS selectors */
   async sourceAnalyzePreview({ body }) {
     return this._request("POST", "/source_analyze/preview", { body });

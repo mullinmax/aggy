@@ -254,3 +254,57 @@ def test_preview_rejects_missing_required_parameters(
     response = client.post(**args)
 
     assert response.status_code == 422
+
+
+# --- detect_feed: recognise a URL that is already a feed --------------------
+
+NOT_A_FEED_HTML = "<html><head><title>Blog</title></head><body>hi</body></html>"
+
+
+def test_detect_feed_recognises_a_real_feed(client, token, monkeypatch):
+    monkeypatch.setattr(
+        "routers.source_analyze.requests.get",
+        lambda url, timeout=None, headers=None: FakeResponse(ATOM_FEED),
+    )
+    args = build_api_request_args(
+        path="/source_analyze/detect_feed",
+        token=token,
+        data={"url": "https://example.com/feed.xml"},
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_feed"] is True
+    assert body["feed_title"] == "Example Blog"
+
+
+def test_detect_feed_rejects_a_plain_page(client, token, monkeypatch):
+    monkeypatch.setattr(
+        "routers.source_analyze.requests.get",
+        lambda url, timeout=None, headers=None: FakeResponse(NOT_A_FEED_HTML),
+    )
+    args = build_api_request_args(
+        path="/source_analyze/detect_feed",
+        token=token,
+        data={"url": "https://example.com/blog/"},
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    assert response.json()["is_feed"] is False
+
+
+def test_detect_feed_handles_unreachable_url(client, token, monkeypatch):
+    import requests as _requests
+
+    def boom(url, timeout=None, headers=None):
+        raise _requests.RequestException("nope")
+
+    monkeypatch.setattr("routers.source_analyze.requests.get", boom)
+    args = build_api_request_args(
+        path="/source_analyze/detect_feed",
+        token=token,
+        data={"url": "https://example.com/missing"},
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    assert response.json()["is_feed"] is False

@@ -77,7 +77,6 @@ function bindControls() {
 
   $('addSourceBtn').onclick = openAddSourceModal;
   $('srcTabTemplate').onclick = () => switchSourceTab('template');
-  $('srcTabManual').onclick = () => switchSourceTab('manual');
   $('srcTabAnalyze').onclick = () => switchSourceTab('analyze');
   $('srcTabFeed').onclick = () => switchSourceTab('feed');
   $('analyzeForm').onsubmit = handleAnalyzeWebsite;
@@ -86,7 +85,6 @@ function bindControls() {
   $('templateSearch').oninput = debounce(searchTemplates, 300);
   $('templateBackBtn').onclick = clearTemplateSelection;
   $('templateAddBtn').onclick = handleCreateSourceFromTemplate;
-  $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
   $('createListForm').onsubmit = handleCreateList;
@@ -1670,11 +1668,9 @@ function confirmDeleteSource(source) {
 
 function switchSourceTab(tab) {
   $('srcTabTemplate').classList.toggle('tab-active', tab === 'template');
-  $('srcTabManual').classList.toggle('tab-active', tab === 'manual');
   $('srcTabAnalyze').classList.toggle('tab-active', tab === 'analyze');
   $('srcTabFeed').classList.toggle('tab-active', tab === 'feed');
   $('sourceTabTemplate').classList.toggle('hidden', tab !== 'template');
-  $('sourceTabManual').classList.toggle('hidden', tab !== 'manual');
   $('sourceTabAnalyze').classList.toggle('hidden', tab !== 'analyze');
   $('sourceTabFeed').classList.toggle('hidden', tab !== 'feed');
   if (tab === 'feed') loadFeedSourceOptions();
@@ -1734,26 +1730,7 @@ async function handleAddFeedSource(feed, btn) {
   }
 }
 
-async function handleCreateManualSource(e) {
-  e.preventDefault();
-  if (!currentFeed) return;
-  const name = $('manualSourceName').value.trim();
-  const url = $('manualSourceUrl').value.trim();
-  try {
-    await sdk.sourceCreate({ feed_name_hash: currentFeed.feed_name_hash, source_name: name, source_url: url });
-    closeModal('addSourceModal');
-    toast(`Source "${name}" added`);
-    $('manualSourceName').value = '';
-    $('manualSourceUrl').value = '';
-    loadSources();
-    // the first ingest runs in the background; refresh to pick up its result
-    setTimeout(loadSources, 5000);
-  } catch (err) {
-    toast(err.message, 'alert-error');
-  }
-}
-
-// ---------- analyze a website into selectors (✨ From Website tab) ----------
+// ---------- analyze a website into selectors (✨ Website tab) ----------
 
 // The backend asks Ollama for candidate CSS selectors per rss-bridge
 // parameter; the user can switch between candidates and watch the preview
@@ -1799,6 +1776,11 @@ async function pollAnalyzeJob(jobId) {
   }
 }
 
+// Derive a readable source name from a URL when the feed gives no title.
+function hostnameFromUrl(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
 async function handleAnalyzeWebsite(e) {
   e.preventDefault();
   const url = $('analyzeUrl').value.trim();
@@ -1806,10 +1788,30 @@ async function handleAnalyzeWebsite(e) {
 
   $('analyzeBtn').disabled = true;
   $('analyzeProgress').classList.remove('hidden');
-  $('analyzeProgressText').textContent =
-    'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
+  $('analyzeProgressText').textContent = 'Checking whether the URL is already a feed…';
   try {
     const cookie = $('analyzeCookie').value.trim() || null;
+
+    // If the URL is already a valid RSS/Atom feed, add it directly — no need
+    // to scrape the page or run the model.
+    const detected = await sdk.sourceAnalyzeDetectFeed({ body: { url, cookie } });
+    if (detected.is_feed) {
+      const name = detected.feed_title || hostnameFromUrl(url);
+      await sdk.sourceCreate({
+        feed_name_hash: currentFeed.feed_name_hash,
+        source_name: name,
+        source_url: url,
+      });
+      closeModal('addSourceModal');
+      toast(`Source "${name}" added`);
+      loadSources();
+      // the first ingest runs in the background; refresh to pick up its result
+      setTimeout(loadSources, 5000);
+      return;
+    }
+
+    $('analyzeProgressText').textContent =
+      'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
     const job = await sdk.sourceAnalyzeSuggest({ body: { url, cookie } });
     const suggestion = await pollAnalyzeJob(job.job_id);
     // custom: fields where the user typed a selector instead of picking one

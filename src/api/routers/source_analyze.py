@@ -18,6 +18,7 @@ from bridge.analyze import (
     suggest_source_name,
     validate_suggestions,
 )
+from config import config
 from db.source_template import SourceTemplate
 from db.user import User
 from route_models.source_analyze import (
@@ -25,6 +26,7 @@ from route_models.source_analyze import (
     AnalyzeJobStatus,
     AnalyzeRequest,
     AnalyzeResponse,
+    DetectFeedResponse,
     PreviewItem,
     PreviewRequest,
     PreviewResponse,
@@ -34,6 +36,50 @@ from routers.auth import authenticate
 source_analyze_router = APIRouter()
 
 PREVIEW_EXCERPT_MAX_CHARS = 300
+DETECT_FEED_TIMEOUT_SECONDS = 15
+
+
+@source_analyze_router.post(
+    "/detect_feed",
+    summary="Check whether a URL is already a valid RSS/Atom feed",
+    response_model=DetectFeedResponse,
+)
+def detect_feed(
+    request: AnalyzeRequest, user: User = Depends(authenticate)
+) -> DetectFeedResponse:
+    """Fetch a URL and report whether it parses as an RSS/Atom feed.
+
+    Lets the "From Website" flow add a feed URL directly instead of running the
+    (slow) CSS-selector analysis when the user already pasted a real feed.
+    """
+    headers = {
+        "User-Agent": (
+            f"aggy/{config.get('BUILD_VERSION')} "
+            "(self-hosted feed aggregator; +https://github.com/mullinmax/aggy)"
+        )
+    }
+    if request.cookie:
+        headers["Cookie"] = request.cookie
+    try:
+        response = requests.get(
+            request.url, timeout=DETECT_FEED_TIMEOUT_SECONDS, headers=headers
+        )
+    except requests.RequestException:
+        # Unreachable/invalid URL: treat as "not a feed" and let the caller
+        # fall back to page analysis, which surfaces its own errors.
+        return DetectFeedResponse(is_feed=False)
+
+    if not response.ok:
+        return DetectFeedResponse(is_feed=False)
+
+    parsed = feedparser.parse(response.content)
+    # feedparser sets a non-empty version (e.g. "rss20", "atom10") only for real
+    # feeds; require at least one entry so an empty template page isn't accepted.
+    is_feed = bool(parsed.version) and len(parsed.entries) > 0
+    return DetectFeedResponse(
+        is_feed=is_feed,
+        feed_title=(parsed.feed.get("title") if is_feed else None),
+    )
 
 
 def _css_selector_template() -> SourceTemplate:
