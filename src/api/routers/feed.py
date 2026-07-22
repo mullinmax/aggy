@@ -10,6 +10,7 @@ from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.ranking import (
     FieldContributionResponse,
+    FieldExampleResponse,
     ItemExplanationResponse,
     ModelStatsResponse,
     RankingStatsResponse,
@@ -241,12 +242,28 @@ def get_item_explanation(
             status_code=409,
             detail="Not enough votes yet to explain this recommendation.",
         )
+    def _example(e) -> FieldExampleResponse:
+        return FieldExampleResponse(
+            url_hash=e.url_hash,
+            title=e.title,
+            image_url=e.image_url,
+            source=e.source,
+            excerpt=e.excerpt,
+            delta=e.delta,
+        )
+
     return ItemExplanationResponse(
         model_name=explanation.model_name,
         baseline_score=explanation.baseline_score,
         fields=[
             FieldContributionResponse(
-                field=f.field, label=f.label, sign=f.sign, level=f.level
+                field=f.field,
+                label=f.label,
+                sign=f.sign,
+                level=f.level,
+                description=f.description,
+                better=[_example(e) for e in f.better],
+                worse=[_example(e) for e in f.worse],
             )
             for f in explanation.fields
         ],

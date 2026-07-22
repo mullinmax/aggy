@@ -229,6 +229,25 @@ def test_item_explanation(
     assert fields["content"]["level"] >= 1
     assert fields["content"]["sign"] == 1
 
+    # every field carries a plain-language description of what it scores
+    assert all(f["description"] for f in body["fields"])
+
+    # examples are real feed articles the model scored higher (better) or lower
+    # (worse) on that field, sorted by how far from this article's own value
+    for f in body["fields"]:
+        for ex in f["better"]:
+            assert ex["delta"] > 0
+            assert ex["url_hash"] != items[4].url_hash
+        for ex in f["worse"]:
+            assert ex["delta"] < 0
+            assert ex["url_hash"] != items[4].url_hash
+    # the disliked (odd) cluster gives content the model scored lower; the
+    # liked (even) cluster gives content it scored higher
+    content = fields["content"]
+    assert content["better"] or content["worse"]
+    disliked = {items[1].url_hash, items[3].url_hash}
+    assert any(ex["url_hash"] in disliked for ex in content["worse"])
+
 
 def test_item_explanation_needs_votes(
     client, existing_user, existing_feed, existing_source, existing_item_strict, token

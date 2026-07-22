@@ -26,6 +26,17 @@ class RankingStatsResponse(BaseRouteModel):
     predicted_items: int
 
 
+class FieldExampleResponse(BaseRouteModel):
+    url_hash: str
+    title: Optional[str] = None
+    image_url: Optional[str] = None
+    source: Optional[str] = None
+    excerpt: Optional[str] = None
+    # substitute score minus baseline: >0 the model scores this value higher
+    # than the article's own, <0 lower
+    delta: float
+
+
 class FieldContributionResponse(BaseRouteModel):
     field: str
     label: str
@@ -33,6 +44,11 @@ class FieldContributionResponse(BaseRouteModel):
     sign: int
     # number of marks to show: 0, 1, or 2
     level: int
+    # one-sentence description of what this field feeds the model
+    description: str = ""
+    # other articles the model scored higher / lower on this field
+    better: List[FieldExampleResponse] = []
+    worse: List[FieldExampleResponse] = []
 
 
 class ItemExplanationResponse(BaseRouteModel):

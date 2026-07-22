@@ -1189,15 +1189,65 @@ function contributionMarks(sign, level) {
   return h('span', { class: `font-bold ${cls}` }, symbol.repeat(level));
 }
 
-function renderExplanation(data) {
-  const rows = data.fields.map((f) =>
-    h('div', { class: 'flex items-center justify-between py-1.5 border-b border-base-300 last:border-b-0' },
-      h('span', { class: 'text-sm' }, f.label),
-      h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level))));
+// One example article behind a field: its preview image (or a placeholder when
+// the field being explained is exactly "has an image") plus a title/source, so
+// the user can see the actual image/text the model weighed.
+function exampleCard(ex) {
+  const thumb = ex.image_url
+    ? h('img', {
+        src: ex.image_url, alt: '', loading: 'lazy',
+        class: 'w-full h-14 object-cover rounded bg-base-300',
+      })
+    : h('div', { class: 'w-full h-14 rounded bg-base-300 flex items-center justify-center text-[10px] text-base-content/40' }, 'no image');
+  const caption = ex.title || ex.excerpt || ex.source || 'Untitled';
+  return h('div', { class: 'w-24 shrink-0' },
+    thumb,
+    h('p', { class: 'text-[11px] leading-tight mt-1 line-clamp-2 text-base-content/70' }, caption),
+    ex.source ? h('p', { class: 'text-[10px] text-base-content/40 truncate' }, ex.source) : null);
+}
 
+// A titled, horizontally-scrolling strip of example cards (better or worse).
+function exampleStrip(heading, cls, examples) {
+  if (!examples || !examples.length) return null;
+  return h('div', { class: 'mt-2' },
+    h('p', { class: `text-[11px] font-semibold ${cls} mb-1` }, heading),
+    h('div', { class: 'flex gap-2 overflow-x-auto pb-1' }, examples.map(exampleCard)));
+}
+
+// The panel revealed when a field is tapped: what the field feeds the model,
+// plus the articles it scored higher/lower on that field.
+function fieldDetail(f) {
+  const hasExamples = (f.better && f.better.length) || (f.worse && f.worse.length);
+  return h('div', { class: 'pl-6 pr-1 pb-3 -mt-0.5' },
+    f.description ? h('p', { class: 'text-xs text-base-content/60' }, f.description) : null,
+    exampleStrip('Articles it scored higher', 'text-success', f.better),
+    exampleStrip('Articles it scored lower', 'text-error', f.worse),
+    hasExamples ? null
+      : h('p', { class: 'text-[11px] text-base-content/40 mt-2' },
+          'No comparable articles in this feed yet.'));
+}
+
+// A tappable field row: the label + marks, expanding to show fieldDetail().
+function fieldRow(f) {
+  const detail = fieldDetail(f);
+  detail.classList.add('hidden');
+  const chevron = h('span', { class: 'text-base-content/30 text-xs w-3' }, '▸');
+  const header = h('button', {
+    type: 'button', class: 'w-full flex items-center justify-between py-1.5 text-left',
+    onclick: () => {
+      const nowHidden = detail.classList.toggle('hidden');
+      chevron.textContent = nowHidden ? '▸' : '▾';
+    },
+  },
+    h('span', { class: 'flex items-center gap-2' }, chevron, h('span', { class: 'text-sm' }, f.label)),
+    h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level)));
+  return h('div', { class: 'border-b border-base-300 last:border-b-0' }, header, detail);
+}
+
+function renderExplanation(data) {
   const pct = Math.round(data.baseline_score * 100);
   render($('explainBody'),
-    h('div', { class: 'flex flex-col' }, rows),
+    h('div', { class: 'flex flex-col' }, data.fields.map(fieldRow)),
     h('p', { class: 'text-xs text-base-content/50 mt-4' },
       `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: ${MODEL_LABELS[data.model_name] || data.model_name}`));
 }
