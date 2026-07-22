@@ -386,6 +386,7 @@ function formatMetric(v, digits = 3) {
 
 // Human labels for the backend model names.
 const MODEL_LABELS = {
+  random: 'Random guessing (baseline)',
   global_mean: 'Global mean (baseline)',
   source_mean: 'Source average',
   knn_embedding: 'Similar posts (kNN)',
