@@ -238,9 +238,7 @@ function listCard(list) {
     onclick: () => router.go(`list/${list.list_name_hash}`),
   },
     h('div', { class: 'card-body p-3 gap-1' },
-      h('div', { class: 'flex items-center gap-1.5 min-w-0' },
-        h('span', { class: 'text-secondary flex-none' }, '\u{1F516}'),
-        h('h2', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, list.list_name)),
+      h('h2', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, list.list_name),
       h('div', { class: 'text-xs text-base-content/50 truncate' },
         `${count} item${count === 1 ? '' : 's'}`)));
 }
