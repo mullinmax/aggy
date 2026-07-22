@@ -145,6 +145,36 @@ class AggySDK {
     return this._request("POST", "/item/set_state", { query: { feed_hash, item_url_hash, score, is_read } });
   }
 
+  /** Create a list */
+  async listCreate({ list_name }) {
+    return this._request("POST", "/list/create", { query: { list_name } });
+  }
+
+  /** Delete a list */
+  async listDelete({ list_name_hash }) {
+    return this._request("DELETE", "/list/delete", { query: { list_name_hash } });
+  }
+
+  /** Get a list */
+  async listGet({ list_name_hash }) {
+    return this._request("GET", "/list/get", { query: { list_name_hash } });
+  }
+
+  /** List the items in a list */
+  async listItems({ list_name_hash }) {
+    return this._request("GET", "/list/items", { query: { list_name_hash } });
+  }
+
+  /** List a user's lists */
+  async listList({ item_url_hash }) {
+    return this._request("GET", "/list/list", { query: { item_url_hash } });
+  }
+
+  /** Set which of the user's lists an item belongs to */
+  async listSetItemLists({ item_url_hash, list_hashes }) {
+    return this._request("POST", "/list/set_item_lists", { query: { item_url_hash, list_hashes } });
+  }
+
   /** Create a source (within a feed) */
   async sourceCreate({ feed_name_hash, source_name, source_url }) {
     return this._request("POST", "/source/create", { query: { feed_name_hash, source_name, source_url } });

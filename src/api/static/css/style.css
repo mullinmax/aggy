@@ -1,5 +1,43 @@
 /* Custom overrides; base utilities/components are compiled into tailwind.css. */
 
+/* ---- Landscape card media ---- */
+
+/* On a phone held in landscape the viewport is short and wide, so a
+   full-width 16:9 video (or a tall image) can push the title and vote row off
+   the bottom of the screen. Cap the media height and let it shrink so an
+   image + title + voting buttons generally fit without scrolling. Scoped to
+   short landscape viewports (phones) so tablets/desktops are untouched. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .aggy-card-media {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: transparent;
+    max-height: 48vh;
+  }
+  /* single image / video: shrink to the height cap, keep the aspect ratio */
+  .aggy-card-media > img,
+  .aggy-card-media > video {
+    max-height: 48vh;
+    width: auto;
+    max-width: 100%;
+    object-fit: contain;
+  }
+  /* the YouTube/Plyr player keeps 16:9; drive it by height so a wide screen
+     doesn't make it tall. */
+  .aggy-card-media .aggy-player {
+    width: auto;
+    height: 48vh;
+    max-width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+  /* galleries and any nested media: cap the height, letterboxing as needed */
+  .aggy-card-media img,
+  .aggy-card-media video {
+    max-height: 48vh;
+  }
+}
+
 /* ---- YouTube player (Plyr + SponsorBlock) ---- */
 
 /* Match Plyr's accent to the app's primary colour. */

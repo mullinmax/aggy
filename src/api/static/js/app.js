@@ -8,6 +8,7 @@ const sdk = new AggySDK();
 // ---------- state ----------
 const PAGE_SIZE = 20;
 let currentFeed = null;
+let currentList = null; // the list being browsed in the list-detail view
 let itemSkip = 0;
 let lastItemBand = null; // sort-band of the last rendered item, for threshold dividers
 // filter/sort state for the current feed; sources: null means "all sources"
@@ -39,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   router
     .add('', showDashboard)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
+    .add('list/:hash', ({ hash }) => showList(hash))
     .start();
 });
 
@@ -86,6 +88,10 @@ function bindControls() {
   $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
+  $('createListForm').onsubmit = handleCreateList;
+  $('listSaveBtn').onclick = handleListSave;
+  $('deleteListBtn').onclick = confirmDeleteList;
+
   // stop gifs/videos/embeds when the reader closes: destroy the youtube
   // player first (halts audio, clears its timers), then empty the media host
   // to unload any <video>/iframe
@@ -131,6 +137,7 @@ function setupAutoHideNav() {
 function setView(name) {
   $('viewDashboard').classList.toggle('hidden', name !== 'dashboard');
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
+  $('viewList').classList.toggle('hidden', name !== 'list');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -139,7 +146,24 @@ function setView(name) {
 function showDashboard() {
   setView('dashboard');
   currentFeed = null;
+  currentList = null;
   loadFeeds();
+  loadLists();
+}
+
+// The lists section only appears once the user has at least one list; lists
+// are created by bookmarking articles from a feed.
+async function loadLists() {
+  const section = $('listsSection');
+  const grid = $('listGrid');
+  try {
+    const lists = await sdk.listList({});
+    if (!lists.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    render(grid, lists.map(listCard));
+  } catch {
+    section.classList.add('hidden');
+  }
 }
 
 async function loadFeeds() {
@@ -189,22 +213,34 @@ function onboardingWelcome() {
 }
 
 function feedCard(feed) {
-  // summary line: total posts, unread, average posts/day (last 30 days)
+  // summary line: unread count (or total when nothing's unread) + posts/day
   const stats = [];
   if (feed.feed_item_count != null) {
-    stats.push(`${feed.feed_item_count} post${feed.feed_item_count === 1 ? '' : 's'}`);
-    if (feed.feed_unread_count != null) stats.push(`${feed.feed_unread_count} unread`);
+    if (feed.feed_unread_count) stats.push(`${feed.feed_unread_count} unread`);
+    else stats.push(`${feed.feed_item_count} post${feed.feed_item_count === 1 ? '' : 's'}`);
     if (feed.feed_posts_per_day != null) stats.push(`~${feed.feed_posts_per_day}/day`);
   }
   return h('div', {
-    class: 'card bg-base-200 shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-base-300 hover:border-primary',
+    class: 'card bg-base-200 border border-base-300 hover:border-primary transition-colors cursor-pointer',
     onclick: () => router.go(`feed/${feed.feed_name_hash}`),
   },
-    h('div', { class: 'card-body p-5' },
-      h('div', { class: 'badge badge-primary badge-outline font-bold text-lg p-3' },
-        feed.feed_name.charAt(0).toUpperCase()),
-      h('h2', { class: 'card-title text-base mt-2' }, feed.feed_name),
-      stats.length ? h('div', { class: 'text-xs text-base-content/50' }, stats.join(' · ')) : null));
+    h('div', { class: 'card-body p-3 gap-1' },
+      h('h2', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, feed.feed_name),
+      stats.length ? h('div', { class: 'text-xs text-base-content/50 truncate' }, stats.join(' · ')) : null));
+}
+
+// Compact card for a saved list, mirroring the feed cards but visually
+// distinct (a bookmark glyph + secondary hover accent).
+function listCard(list) {
+  const count = list.list_item_count ?? 0;
+  return h('div', {
+    class: 'card bg-base-200 border border-base-300 hover:border-secondary transition-colors cursor-pointer',
+    onclick: () => router.go(`list/${list.list_name_hash}`),
+  },
+    h('div', { class: 'card-body p-3 gap-1' },
+      h('h2', { class: 'font-semibold text-sm leading-snug line-clamp-2' }, list.list_name),
+      h('div', { class: 'text-xs text-base-content/50 truncate' },
+        `${count} item${count === 1 ? '' : 's'}`)));
 }
 
 async function handleCreateFeed(e) {
@@ -265,6 +301,7 @@ async function handleRenameFeed(e) {
 // ---------- feed view ----------
 async function showFeed(hash) {
   setView('feed');
+  currentList = null; // leaving any list-detail context
   itemSkip = 0;
   render($('itemList'), spinner());
 
@@ -310,6 +347,63 @@ function switchFeedTab(tab) {
   $('filterBtn').classList.toggle('hidden', tab !== 'items');
   if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
+}
+
+// ---------- list detail view ----------
+// A list browses like a feed's article list, but with no recommendation
+// engine: no sort/filter, model stats, predictions, or vote buttons — just
+// the saved articles, newest-added first.
+async function showList(hash) {
+  setView('list');
+  currentFeed = null; // no feed context: the reader won't record vote state
+  render($('listItemList'), spinner());
+
+  if (!currentList || currentList.list_name_hash !== hash) {
+    try {
+      currentList = await sdk.listGet({ list_name_hash: hash });
+    } catch (err) {
+      toast(err.message, 'alert-error');
+      router.go('');
+      return;
+    }
+  }
+
+  $('listTitle').textContent = currentList.list_name;
+  $('listBreadcrumb').textContent = currentList.list_name;
+  loadListItems();
+}
+
+async function loadListItems() {
+  const list = $('listItemList');
+  render(list, spinner());
+  try {
+    const items = await sdk.listItems({ list_name_hash: currentList.list_name_hash });
+    if (!items.length) {
+      render(list, emptyState('\u{1F516}', 'This list is empty',
+        'Save articles to this list from any feed with the bookmark button.'));
+      return;
+    }
+    render(list);
+    items.forEach((item) => list.append(itemCard(item, { listMode: true })));
+  } catch (err) {
+    render(list, h('div', { class: 'text-center py-16 text-base-content/50' }, 'Failed to load list'));
+    toast(err.message, 'alert-error');
+  }
+}
+
+function confirmDeleteList() {
+  if (!currentList) return;
+  confirmDialog({
+    title: 'Delete List',
+    message: `Delete "${currentList.list_name}"? The articles stay in their feeds; only the list is removed.`,
+    action: 'Delete List',
+    onConfirm: async () => {
+      await sdk.listDelete({ list_name_hash: currentList.list_name_hash });
+      currentList = null;
+      toast('List deleted');
+      router.go('');
+    },
+  });
 }
 
 // ---------- filters ----------
@@ -1018,8 +1112,10 @@ function mediaGallery(mediaList) {
 }
 
 // Reddit-app-style card: meta row and title up top, full-feed-width media
-// below, then the vote row.
-function itemCard(item) {
+// below, then the action row. In `listMode` the recommendation-engine bits
+// (the "why recommended" button, the predicted-match badge, and the vote
+// buttons) are dropped — a list is a plain saved collection.
+function itemCard(item, { listMode = false } = {}) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
   const ytId = youtubeId(item.item_url);
   const media = !ytId && (item.item_media || []).length ? item.item_media : null;
@@ -1027,11 +1123,11 @@ function itemCard(item) {
   const excerpt = cleanExcerpt(item);
 
   const mediaBlock = ytId
-    ? h('figure', { class: 'bg-base-300' }, youtubeEmbed(ytId))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, youtubeEmbed(ytId))
     : media
-    ? h('figure', { class: 'bg-base-300' }, mediaGallery(media))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media))
     : imageUrl
-      ? h('figure', { class: 'bg-base-300' },
+      ? h('figure', { class: 'bg-base-300 aggy-card-media' },
           h('img', {
             src: imageUrl, class: 'w-full max-h-[70vh] object-contain', alt: '', loading: 'lazy',
             onerror: (e) => { e.target.closest('figure').remove(); },
@@ -1063,7 +1159,7 @@ function itemCard(item) {
     h('div', { class: 'px-4 pt-3 pb-2' },
       h('div', { class: 'flex items-start gap-2' },
         h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0 line-clamp-2' }, item.item_title || 'Untitled'),
-        explainButton(item),
+        listMode ? null : explainButton(item),
         openLinkButton(item.item_url)),
       !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
     mediaBlock,
@@ -1072,11 +1168,12 @@ function itemCard(item) {
         sourceBadge(item.item_source_name, item.item_source_color),
         item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
         published && h('span', { class: 'whitespace-nowrap' }, published),
-        predictedBadge),
+        listMode ? null : predictedBadge),
       h('div', { class: 'flex items-center gap-1 ml-auto' },
-        voteButton('▲', 1, 'Upvote'),
-        voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
-        voteButton('▼', -1, 'Downvote'))));
+        listButton(item),
+        listMode ? null : voteButton('▲', 1, 'Upvote'),
+        listMode ? null : voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
+        listMode ? null : voteButton('▼', -1, 'Downvote'))));
 }
 
 // ---------- why recommended ----------
@@ -1146,6 +1243,117 @@ async function voteItem(item, score, btn) {
       const card = btn.closest('.card');
       if (card) collapseCard(card);
     }
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
+// ---------- lists ----------
+// The current item + its list button while the list modal is open, so a save
+// can update the card in place.
+let listModalItem = null;
+let listModalBtn = null;
+
+// Bookmark icon; filled when the article is saved to at least one list.
+function listIconSvg(filled) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', filled ? 'currentColor' : 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('class', 'w-5 h-5');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('d', 'M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 '
+    + '1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 '
+    + '013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z');
+  svg.appendChild(path);
+  return svg;
+}
+
+// The "add to list" button shown in each card's action row.
+function listButton(item) {
+  return h('button', {
+    class: `btn btn-ghost btn-sm btn-square ${item.item_in_list ? 'text-primary' : 'text-base-content/60'}`,
+    title: 'Add to a list',
+    onclick: (e) => { e.stopPropagation(); openListModal(item, e.currentTarget); },
+  }, listIconSvg(!!item.item_in_list));
+}
+
+// One row of the list checklist: a checkbox + name + item count.
+function listChecklistRow(l) {
+  return h('label', {
+    class: 'label cursor-pointer justify-start gap-3 py-1.5 px-2 rounded-lg hover:bg-base-200',
+  },
+    h('input', {
+      type: 'checkbox', class: 'checkbox checkbox-sm checkbox-primary',
+      checked: !!l.list_contains_item, 'data-list-hash': l.list_name_hash,
+    }),
+    h('span', { class: 'label-text flex-1 min-w-0 truncate' }, l.list_name),
+    h('span', { class: 'text-xs text-base-content/40' }, String(l.list_item_count ?? 0)));
+}
+
+async function openListModal(item, btn) {
+  listModalItem = item;
+  listModalBtn = btn || null;
+  $('newListName').value = '';
+  showModal('listModal');
+  render($('listChecklist'), spinner());
+  try {
+    const lists = await sdk.listList({ item_url_hash: item.item_hash });
+    renderListChecklist(lists);
+  } catch (err) {
+    render($('listChecklist'), h('p', { class: 'text-sm text-error py-2' }, err.message));
+  }
+}
+
+function renderListChecklist(lists) {
+  if (!lists.length) {
+    render($('listChecklist'),
+      h('p', { class: 'text-sm text-base-content/50 py-2' }, 'No lists yet — create one below.'));
+    return;
+  }
+  render($('listChecklist'), lists.map(listChecklistRow));
+}
+
+// Create a new list from the inline field and add its (pre-checked) row without
+// reloading, so any boxes the user already ticked stay ticked.
+async function handleCreateList(e) {
+  e.preventDefault();
+  const name = $('newListName').value.trim();
+  if (!name) return;
+  try {
+    const created = await sdk.listCreate({ list_name: name });
+    $('newListName').value = '';
+    const box = $('listChecklist');
+    if (!box.querySelector('input')) render(box); // clear the "no lists yet" note
+    box.append(listChecklistRow({ ...created, list_contains_item: true }));
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
+async function handleListSave() {
+  if (!listModalItem) return;
+  const hashes = Array.from($('listChecklist').querySelectorAll('input:checked'))
+    .map((i) => i.getAttribute('data-list-hash'));
+  try {
+    await sdk.listSetItemLists({
+      item_url_hash: listModalItem.item_hash,
+      list_hashes: hashes.join(','),
+    });
+    const inList = hashes.length > 0;
+    listModalItem.item_in_list = inList;
+    if (listModalBtn) {
+      listModalBtn.classList.toggle('text-primary', inList);
+      listModalBtn.classList.toggle('text-base-content/60', !inList);
+      render(listModalBtn, listIconSvg(inList));
+    }
+    closeModal('listModal');
+    toast(inList ? 'Saved to lists' : 'Removed from all lists');
+    // while browsing a list, membership changes can add/remove the card
+    if (currentList) loadListItems();
   } catch (err) {
     toast(err.message, 'alert-error');
   }

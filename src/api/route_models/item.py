@@ -22,6 +22,7 @@ class ItemResponse(BaseRouteModel):
     item_source_color: Optional[str] = None
     item_user_score: Optional[float] = None
     item_is_read: Optional[bool] = None
+    item_in_list: Optional[bool] = None
     item_predicted_score: Optional[float] = None
     item_predicted_confidence: Optional[float] = None
 
@@ -48,6 +49,7 @@ class ItemResponse(BaseRouteModel):
         source_color: str = None,
         user_score: float = None,
         is_read: bool = None,
+        in_list: bool = None,
         predicted_score: float = None,
         predicted_confidence: float = None,
     ):
@@ -56,6 +58,7 @@ class ItemResponse(BaseRouteModel):
             item_source_color=source_color,
             item_user_score=user_score,
             item_is_read=is_read,
+            item_in_list=in_list,
             item_predicted_score=predicted_score,
             item_predicted_confidence=predicted_confidence,
             item_hash=db_model.url_hash,
