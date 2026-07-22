@@ -175,6 +175,54 @@ def test_suggest_requires_auth(client):
     assert response.status_code == 401
 
 
+def test_detect_returns_feed_kind(client, token, monkeypatch):
+    monkeypatch.setattr(
+        "routers.source_analyze.detect_source_type",
+        lambda url, cookie: {
+            "kind": "feed",
+            "feed_url": url,
+            "suggested_source_name": "Example Blog",
+        },
+    )
+
+    args = build_api_request_args(
+        path="/source_analyze/detect",
+        token=token,
+        data={"url": "https://example.com/feed.xml"},
+    )
+    response = client.post(**args)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["kind"] == "feed"
+    assert data["feed_url"] == "https://example.com/feed.xml"
+    assert data["suggested_source_name"] == "Example Blog"
+
+
+def test_detect_surfaces_fetch_errors(client, token, monkeypatch):
+    def failing_detect(url, cookie):
+        raise AnalyzeError("Couldn't fetch the page", status_code=502)
+
+    monkeypatch.setattr("routers.source_analyze.detect_source_type", failing_detect)
+
+    args = build_api_request_args(
+        path="/source_analyze/detect",
+        token=token,
+        data={"url": "https://example.com/"},
+    )
+    response = client.post(**args)
+
+    assert response.status_code == 502
+    assert "Couldn't fetch" in response.json()["detail"]
+
+
+def test_detect_requires_auth(client):
+    response = client.post(
+        "/source_analyze/detect", json={"url": "https://example.com/"}
+    )
+    assert response.status_code == 401
+
+
 def test_preview_renders_bridge_feed(client, token, css_selector_template, monkeypatch):
     captured = {}
 

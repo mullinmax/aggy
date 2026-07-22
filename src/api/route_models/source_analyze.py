@@ -14,6 +14,16 @@ class AnalyzeRequest(BaseRouteModel):
     }
 
 
+class DetectResponse(BaseRouteModel):
+    # "feed" when the URL is (or advertises) an RSS/Atom feed, else "html"
+    kind: str
+    # the feed to subscribe to when kind == "feed"; may differ from the input
+    # URL when auto-discovered from an HTML page's <link> tags
+    feed_url: Optional[str] = None
+    # friendly default source name from the page/feed title or domain
+    suggested_source_name: str
+
+
 class SelectorCandidate(BaseRouteModel):
     selector: str
     # how many elements the selector matched on the page (entry selector) or

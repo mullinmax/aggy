@@ -13,6 +13,7 @@ import threading
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
+import feedparser
 import requests
 from bs4 import BeautifulSoup, Comment
 
@@ -550,3 +551,62 @@ def suggest_source_name(title: str, url: str) -> str:
         if first:
             return first[:80]
     return urlparse(url).netloc or url
+
+
+# <link rel="alternate"> types that advertise a subscribable feed on an HTML
+# page; JSON Feed is intentionally excluded since ingestion parses RSS/Atom.
+FEED_LINK_TYPES = ("application/rss+xml", "application/atom+xml")
+
+
+def discover_feed_url(html: str, base_url: str):
+    """Return a feed URL advertised in an HTML page's <link> tags, or None."""
+    soup = BeautifulSoup(html, "html.parser")
+    for link in soup.find_all("link"):
+        rels = [r.lower() for r in (link.get("rel") or [])]
+        if "alternate" not in rels:
+            continue
+        link_type = (link.get("type") or "").lower()
+        if link_type in FEED_LINK_TYPES or "rss" in link_type or "atom" in link_type:
+            href = (link.get("href") or "").strip()
+            if href:
+                return urljoin(base_url, href)
+    return None
+
+
+def detect_source_type(url: str, cookie: str = "") -> dict:
+    """Decide whether ``url`` is a subscribable feed or a page to scrape.
+
+    Fetches the URL once and inspects it: if it parses as RSS/Atom the URL is
+    used directly; if it's an HTML page advertising a feed via <link> that
+    feed is used; otherwise it's treated as an HTML page for selector analysis.
+
+    Returns ``{"kind": "feed"|"html", "feed_url": str|None,
+    "suggested_source_name": str}``.
+    """
+    html = fetch_page(url, cookie=cookie)
+
+    # feedparser leaves ``version`` empty for anything it doesn't recognise as
+    # a feed, so a truthy version is a reliable RSS/Atom signal.
+    parsed = feedparser.parse(html)
+    if parsed.version:
+        title = (parsed.feed.get("title") or "").strip()
+        return {
+            "kind": "feed",
+            "feed_url": url,
+            "suggested_source_name": suggest_source_name(title, url),
+        }
+
+    title = page_title(html)
+    discovered = discover_feed_url(html, url)
+    if discovered:
+        return {
+            "kind": "feed",
+            "feed_url": discovered,
+            "suggested_source_name": suggest_source_name(title, url),
+        }
+
+    return {
+        "kind": "html",
+        "feed_url": None,
+        "suggested_source_name": suggest_source_name(title, url),
+    }

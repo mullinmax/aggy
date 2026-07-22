@@ -205,6 +205,11 @@ class AggySDK {
     return this._request("POST", "/source/update", { body });
   }
 
+  /** Detect whether a URL is an RSS/Atom feed or an HTML page to scrape */
+  async sourceAnalyzeDetect({ body }) {
+    return this._request("POST", "/source_analyze/detect", { body });
+  }
+
   /** Preview the feed produced by a set of CSS selectors */
   async sourceAnalyzePreview({ body }) {
     return this._request("POST", "/source_analyze/preview", { body });

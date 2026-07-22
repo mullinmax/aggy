@@ -12,6 +12,7 @@ from bridge.analyze import (
     AnalyzeError,
     BRIDGE_SHORT_NAME,
     PREVIEW_TIMEOUT_SECONDS,
+    detect_source_type,
     fetch_page,
     page_title,
     request_selector_suggestions,
@@ -25,6 +26,7 @@ from route_models.source_analyze import (
     AnalyzeJobStatus,
     AnalyzeRequest,
     AnalyzeResponse,
+    DetectResponse,
     PreviewItem,
     PreviewRequest,
     PreviewResponse,
@@ -111,6 +113,21 @@ def _drop_stale_jobs() -> None:
     with _jobs_lock:
         for job_id in [j for j, job in _jobs.items() if job["created"] < cutoff]:
             del _jobs[job_id]
+
+
+@source_analyze_router.post(
+    "/detect",
+    summary="Detect whether a URL is an RSS/Atom feed or an HTML page to scrape",
+    response_model=DetectResponse,
+)
+def detect_source(
+    request: AnalyzeRequest, user: User = Depends(authenticate)
+) -> DetectResponse:
+    try:
+        result = detect_source_type(request.url, request.cookie or "")
+    except AnalyzeError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    return DetectResponse(**result)
 
 
 @source_analyze_router.post(
