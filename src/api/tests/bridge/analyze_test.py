@@ -3,6 +3,8 @@ import pytest
 from bridge.analyze import (
     AnalyzeError,
     condense_html,
+    detect_source_type,
+    discover_feed_url,
     fetch_page,
     php_time_format_to_strptime,
     suggest_source_name,
@@ -132,3 +134,60 @@ def test_suggest_source_name():
         == "Latest news"
     )
     assert suggest_source_name("", "https://some.site/news") == "some.site"
+
+
+RSS_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Some Blog Feed</title>
+    <item><title>First</title><link>https://some.site/one</link></item>
+  </channel>
+</rss>
+"""
+
+HTML_WITH_FEED_LINK = """
+<html>
+<head>
+  <title>Some Blog | Home</title>
+  <link rel="alternate" type="application/rss+xml" href="/feed.xml">
+</head>
+<body><a href="/one">First</a></body>
+</html>
+"""
+
+
+def test_detect_source_type_recognises_a_feed(monkeypatch):
+    monkeypatch.setattr("bridge.analyze.fetch_page", lambda url, cookie="": RSS_FEED)
+    result = detect_source_type("https://some.site/feed")
+    assert result["kind"] == "feed"
+    assert result["feed_url"] == "https://some.site/feed"
+    assert result["suggested_source_name"] == "Some Blog Feed"
+
+
+def test_detect_source_type_discovers_advertised_feed(monkeypatch):
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_page", lambda url, cookie="": HTML_WITH_FEED_LINK
+    )
+    result = detect_source_type("https://some.site/")
+    assert result["kind"] == "feed"
+    # the relative href is resolved against the page URL
+    assert result["feed_url"] == "https://some.site/feed.xml"
+    assert result["suggested_source_name"] == "Some Blog"
+
+
+def test_detect_source_type_falls_back_to_html(monkeypatch):
+    monkeypatch.setattr("bridge.analyze.fetch_page", lambda url, cookie="": SAMPLE_HTML)
+    result = detect_source_type("https://example.com/blog/")
+    assert result["kind"] == "html"
+    assert result["feed_url"] is None
+    assert result["suggested_source_name"] == "Example Blog"
+
+
+def test_discover_feed_url_ignores_non_feed_links():
+    html = """
+    <html><head>
+      <link rel="stylesheet" href="/style.css">
+      <link rel="alternate" type="application/json" href="/feed.json">
+    </head><body></body></html>
+    """
+    assert discover_feed_url(html, "https://some.site/") is None

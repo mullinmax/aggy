@@ -77,16 +77,16 @@ function bindControls() {
 
   $('addSourceBtn').onclick = openAddSourceModal;
   $('srcTabTemplate').onclick = () => switchSourceTab('template');
-  $('srcTabManual').onclick = () => switchSourceTab('manual');
   $('srcTabAnalyze').onclick = () => switchSourceTab('analyze');
   $('srcTabFeed').onclick = () => switchSourceTab('feed');
-  $('analyzeForm').onsubmit = handleAnalyzeWebsite;
+  $('analyzeForm').onsubmit = handleAddByUrl;
   $('analyzeBackBtn').onclick = resetAnalyzeTab;
   $('analyzeAddBtn').onclick = handleCreateAnalyzedSource;
+  $('analyzeFeedBackBtn').onclick = resetAnalyzeTab;
+  $('analyzeFeedAddBtn').onclick = handleAddDetectedFeed;
   $('templateSearch').oninput = debounce(searchTemplates, 300);
   $('templateBackBtn').onclick = clearTemplateSelection;
   $('templateAddBtn').onclick = handleCreateSourceFromTemplate;
-  $('manualSourceForm').onsubmit = handleCreateManualSource;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
 
   $('createListForm').onsubmit = handleCreateList;
@@ -1670,11 +1670,9 @@ function confirmDeleteSource(source) {
 
 function switchSourceTab(tab) {
   $('srcTabTemplate').classList.toggle('tab-active', tab === 'template');
-  $('srcTabManual').classList.toggle('tab-active', tab === 'manual');
   $('srcTabAnalyze').classList.toggle('tab-active', tab === 'analyze');
   $('srcTabFeed').classList.toggle('tab-active', tab === 'feed');
   $('sourceTabTemplate').classList.toggle('hidden', tab !== 'template');
-  $('sourceTabManual').classList.toggle('hidden', tab !== 'manual');
   $('sourceTabAnalyze').classList.toggle('hidden', tab !== 'analyze');
   $('sourceTabFeed').classList.toggle('hidden', tab !== 'feed');
   if (tab === 'feed') loadFeedSourceOptions();
@@ -1734,26 +1732,11 @@ async function handleAddFeedSource(feed, btn) {
   }
 }
 
-async function handleCreateManualSource(e) {
-  e.preventDefault();
-  if (!currentFeed) return;
-  const name = $('manualSourceName').value.trim();
-  const url = $('manualSourceUrl').value.trim();
-  try {
-    await sdk.sourceCreate({ feed_name_hash: currentFeed.feed_name_hash, source_name: name, source_url: url });
-    closeModal('addSourceModal');
-    toast(`Source "${name}" added`);
-    $('manualSourceName').value = '';
-    $('manualSourceUrl').value = '';
-    loadSources();
-    // the first ingest runs in the background; refresh to pick up its result
-    setTimeout(loadSources, 5000);
-  } catch (err) {
-    toast(err.message, 'alert-error');
-  }
-}
-
-// ---------- analyze a website into selectors (✨ From Website tab) ----------
+// ---------- add a source from a URL (From URL tab) ----------
+//
+// One entry point for both feeds and websites: the backend fetches the URL
+// and reports whether it's an RSS/Atom feed (added directly) or an HTML page
+// that needs the Ollama selector analysis below.
 
 // The backend asks Ollama for candidate CSS selectors per rss-bridge
 // parameter; the user can switch between candidates and watch the preview
@@ -1768,11 +1751,14 @@ const ANALYZE_FIELDS = [
 
 let analyzeState = null; // { suggestion, params } while the result step is open
 let analyzePreviewSeq = 0; // ignore out-of-order preview responses
+let detectedFeed = null; // { feed_url } while the feed-confirm step is open
 
 function resetAnalyzeTab() {
   analyzeState = null;
+  detectedFeed = null;
   analyzePreviewSeq += 1;
   $('analyzeInputStep').classList.remove('hidden');
+  $('analyzeFeedStep').classList.add('hidden');
   $('analyzeResultStep').classList.add('hidden');
   $('analyzeProgress').classList.add('hidden');
   $('analyzeBtn').disabled = false;
@@ -1799,17 +1785,30 @@ async function pollAnalyzeJob(jobId) {
   }
 }
 
-async function handleAnalyzeWebsite(e) {
+async function handleAddByUrl(e) {
   e.preventDefault();
   const url = $('analyzeUrl').value.trim();
   if (!url) return;
+  const cookie = $('analyzeCookie').value.trim() || null;
 
   $('analyzeBtn').disabled = true;
   $('analyzeProgress').classList.remove('hidden');
-  $('analyzeProgressText').textContent =
-    'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
+  $('analyzeProgressText').textContent = 'Checking the URL…';
   try {
-    const cookie = $('analyzeCookie').value.trim() || null;
+    // First find out what we're dealing with: an RSS/Atom feed we can add
+    // straight away, or a website that needs the selector analysis.
+    const detected = await sdk.sourceAnalyzeDetect({ body: { url, cookie } });
+    if (detected.kind === 'feed') {
+      detectedFeed = { feed_url: detected.feed_url || url };
+      $('analyzeFeedName').value = detected.suggested_source_name || '';
+      $('analyzeFeedUrl').textContent = detectedFeed.feed_url;
+      $('analyzeInputStep').classList.add('hidden');
+      $('analyzeFeedStep').classList.remove('hidden');
+      return;
+    }
+
+    $('analyzeProgressText').textContent =
+      'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
     const job = await sdk.sourceAnalyzeSuggest({ body: { url, cookie } });
     const suggestion = await pollAnalyzeJob(job.job_id);
     // custom: fields where the user typed a selector instead of picking one
@@ -1824,6 +1823,34 @@ async function handleAnalyzeWebsite(e) {
   } finally {
     $('analyzeBtn').disabled = false;
     $('analyzeProgress').classList.add('hidden');
+  }
+}
+
+// Add a source straight from a detected RSS/Atom feed URL (no scraping).
+async function handleAddDetectedFeed() {
+  if (!detectedFeed || !currentFeed) return;
+  const name = $('analyzeFeedName').value.trim();
+  if (!name) { toast('Please enter a source name', 'alert-error'); return; }
+
+  const btn = $('analyzeFeedAddBtn');
+  btn.disabled = true;
+  try {
+    await sdk.sourceCreate({
+      feed_name_hash: currentFeed.feed_name_hash,
+      source_name: name,
+      source_url: detectedFeed.feed_url,
+    });
+    closeModal('addSourceModal');
+    toast(`Source "${name}" added`);
+    resetAnalyzeTab();
+    $('analyzeUrl').value = '';
+    loadSources();
+    // the first ingest runs in the background; refresh to pick up its result
+    setTimeout(loadSources, 5000);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
   }
 }
 
