@@ -27,9 +27,17 @@ from db.feed import Feed
 from .engine import MIN_LABELS_TO_RANK, load_feed_features
 from .models import ItemFeatures, all_models, evaluate_models
 
-# |Δ score| thresholds for 0 / 1 / 2 marks. Predicted scores live in [-1, 1].
-_LEVEL1 = 0.04
-_LEVEL2 = 0.12
+# Marks rank the fields against each other rather than against a fixed Δ scale,
+# so one field can't run away with a huge number while the rest read as nothing.
+# A field counts as "used" once blanking it moves the predicted score (in
+# [-1, 1]) by at least this much; below it the model effectively ignored the
+# field and it reads as no-effect (·).
+_USED_FLOOR = 0.01
+# Among the used fields, one whose effect is this many times the median used
+# field's stands out and earns two marks; the rest get one. So a field that
+# genuinely mattered almost always shows at least one mark, and two marks are
+# reserved for a real standout.
+_STRONG_MULTIPLE = 1.3
 
 # Fields the model consumes, in display order. Each is scored by blanking it out
 # and re-evaluating, so text and image are measured independently. Entries are:
@@ -139,16 +147,42 @@ def _winner_model(feed: Feed, labeled: List[ItemFeatures]):
     return next((m for m in all_models() if m.name == chosen), None)
 
 
-def _marks(delta: float):
-    magnitude = abs(delta)
-    if magnitude >= _LEVEL2:
-        level = 2
-    elif magnitude >= _LEVEL1:
-        level = 1
+def _assign_marks(deltas: List[float]) -> List[tuple]:
+    """Turn the fields' raw Δs into (sign, level) marks, normalized across the
+    fields so the display always reads sensibly:
+
+    - a field's *level* (0/1/2) is judged relative to the other fields, not on
+      an absolute Δ. Every field the model actually used (Δ over the floor) gets
+      at least one mark, and a mark of two is reserved for a field whose effect
+      clearly stands out from the median — so it's unusual for a used field to
+      read as nothing, and unusual for one field to hog a huge number;
+    - a field's *sign* is the direction of its own Δ (removing it lowered the
+      score → it was helping → +; removing it raised the score → −).
+
+    Because a positive article's helpful fields carry the signal, its marks skew
+    +; a neutral article's signal is split, so its marks come out roughly
+    balanced."""
+    magnitudes = [abs(d) for d in deltas]
+    used = sorted(m for m in magnitudes if m >= _USED_FLOOR)
+    if used:
+        mid = len(used) // 2
+        median = (
+            used[mid] if len(used) % 2 else (used[mid - 1] + used[mid]) / 2.0
+        )
     else:
-        level = 0
-    sign = 0 if level == 0 else (1 if delta > 0 else -1)
-    return sign, level
+        median = 0.0
+
+    marks = []
+    for delta, magnitude in zip(deltas, magnitudes):
+        if magnitude < _USED_FLOOR:
+            level = 0
+        elif magnitude >= _STRONG_MULTIPLE * median:
+            level = 2
+        else:
+            level = 1
+        sign = 0 if level == 0 else (1 if delta > 0 else -1)
+        marks.append((sign, level))
+    return marks
 
 
 # Display data for the field previews; the ML features don't carry the title,
@@ -225,24 +259,30 @@ def explain_item(
         image_embedded=target.image_embedding is not None,
     )
 
-    contributions: List[FieldContribution] = []
-    for field, label, null_map, description in _FIELDS:
+    # Score every single-field ablation first, then assign marks from the whole
+    # set so they're normalized against each other (see _assign_marks).
+    deltas = []
+    for _field, _label, null_map, _description in _FIELDS:
         ablated = replace(target, **null_map)
         score = float(model.predict([ablated])[0][0])
         # removing a helpful field lowers the score, so baseline - score > 0
-        delta = baseline - score
-        sign, level = _marks(delta)
-        contributions.append(
-            FieldContribution(
-                field=field,
-                label=label,
-                sign=sign,
-                level=level,
-                delta=delta,
-                description=description,
-                preview=preview,
-            )
+        deltas.append(baseline - score)
+
+    marks = _assign_marks(deltas)
+    contributions = [
+        FieldContribution(
+            field=field,
+            label=label,
+            sign=sign,
+            level=level,
+            delta=delta,
+            description=description,
+            preview=preview,
         )
+        for (field, label, _null_map, description), delta, (sign, level) in zip(
+            _FIELDS, deltas, marks
+        )
+    ]
 
     return ItemExplanation(
         model_name=model.name, baseline_score=baseline, fields=contributions
