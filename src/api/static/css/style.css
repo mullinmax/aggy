@@ -38,6 +38,17 @@
   }
 }
 
+/* ---- Source name badge ---- */
+
+/* A long source name would wrap inside the outlined pill and spill past its
+   rounded border (see the two-line overflow it used to cause). Cap the badge
+   width; the inner label (a `truncate min-w-0` flex child) then collapses with
+   an ellipsis so the badge always stays a single tidy line, regardless of how
+   long the source name is. max-width keeps room for the author/date beside it. */
+.aggy-source-badge {
+  max-width: 12rem;
+}
+
 /* ---- YouTube player (Plyr + SponsorBlock) ---- */
 
 /* Match Plyr's accent to the app's primary colour. */
