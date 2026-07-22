@@ -5,6 +5,7 @@ from config import config
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
+from db.propagation import propagate_items
 from ingest.item.rss import ingest_rss_item
 from ingest.item.reddit import ingest_reddit_item, is_reddit_post
 from ingest.reddit_rate_limit import is_reddit_url, reddit_get
@@ -59,6 +60,9 @@ def ingest_source(source: Source) -> None:
         raise Exception(f"rss-bridge failed: {bridge_errors[0].get('title')}")
 
     logging.info(f"Source '{source.name}': feed has {len(entries)} entries")
+
+    feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
+    ingested_url_hashes: list[str] = []
 
     for entry in entries:
         # if the item already exists in the database, skip scraping
@@ -120,5 +124,10 @@ def ingest_source(source: Source) -> None:
             continue
 
         source.add_items(final_item)
-        feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
         feed.add_items(final_item)
+        ingested_url_hashes.append(final_item.url_hash)
+
+    # Mirror everything this source produced into any feed that uses this feed
+    # as a source (and on down the chain). Cheap no-op for items already there.
+    if ingested_url_hashes:
+        propagate_items(source.user_hash, source.feed_hash, ingested_url_hashes)

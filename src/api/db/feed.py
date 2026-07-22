@@ -73,11 +73,14 @@ class Feed(ItemCollection):
         # Local import to avoid a circular dependency at module load time.
         from .source import Source
 
+        # Feed sources (source_feed_hash set) are mirrored by the ingest
+        # fan-out, never fetched, so the ingest scheduler skips them here.
         with self.db_con() as cur:
             cur.execute(
                 "SELECT user_hash, feed_hash, name_hash, name, url, color "
                 "FROM sources "
-                "WHERE user_hash = %s AND feed_hash = %s",
+                "WHERE user_hash = %s AND feed_hash = %s "
+                "AND source_feed_hash IS NULL",
                 (self.user_hash, self.name_hash),
             )
             rows = cur.fetchall()
@@ -94,16 +97,24 @@ class Feed(ItemCollection):
         ]
 
     def sources_with_stats(self) -> List[dict]:
-        """Sources in this feed plus item count and last ingest time."""
+        """Sources in this feed plus item count and last ingest time.
+
+        Includes feed sources; for those, ``source_feed_name`` carries the
+        referenced feed's display name so the UI can label them.
+        """
         with self.db_con() as cur:
             cur.execute(
                 "SELECT s.name, s.url, s.name_hash, s.feed_hash, s.last_ingested_at, "
                 "s.last_ingest_error, s.template_name_hash, s.template_parameters, "
-                "s.ingest_interval_minutes, s.color, "
+                "s.ingest_interval_minutes, s.color, s.source_feed_hash, "
+                "sf.name AS source_feed_name, "
                 "(SELECT COUNT(*) FROM source_items si "
                 " WHERE si.user_hash = s.user_hash AND si.feed_hash = s.feed_hash "
                 " AND si.source_hash = s.name_hash) AS item_count "
-                "FROM sources s WHERE s.user_hash = %s AND s.feed_hash = %s "
+                "FROM sources s "
+                "LEFT JOIN feeds sf ON sf.user_hash = s.user_hash "
+                " AND sf.name_hash = s.source_feed_hash "
+                "WHERE s.user_hash = %s AND s.feed_hash = %s "
                 "ORDER BY s.name",
                 (self.user_hash, self.name_hash),
             )
@@ -142,10 +153,13 @@ class Feed(ItemCollection):
         # interleave query where every column is already flattened
         outer_order = order_by.replace("c.", "").replace("i.", "")
 
+        # Votes are shared across feeds: user_score comes from the user's latest
+        # vote on the item in any feed (user_item_votes), so a vote cast in one
+        # feed shows here too. is_read stays per-feed (from item_states).
         sql = (
             "SELECT i.*, c.score, c.added_at, "
             "c.predicted_score, c.predicted_confidence, "
-            "st.score AS user_score, st.is_read AS is_read, "
+            "uv.score AS user_score, st.is_read AS is_read, "
             "EXISTS (SELECT 1 FROM list_items li"
             " WHERE li.user_hash = c.user_hash"
             "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
@@ -157,6 +171,8 @@ class Feed(ItemCollection):
             "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
             " AND st.feed_hash = c.feed_hash"
             " AND st.item_url_hash = c.item_url_hash "
+            "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
+            " AND uv.item_url_hash = c.item_url_hash "
             "LEFT JOIN LATERAL ("
             " SELECT s.name, s.name_hash, s.color FROM source_items si"
             " JOIN sources s ON s.user_hash = si.user_hash"
@@ -168,7 +184,8 @@ class Feed(ItemCollection):
         params: tuple = (self.user_hash, self.name_hash)
 
         if not include_read:
-            sql += " AND st.score IS NULL"
+            # "hide read" hides items voted on in any feed (shared votes)
+            sql += " AND uv.score IS NULL"
         if source_hashes is not None:
             sql += (
                 " AND EXISTS (SELECT 1 FROM source_items sf"
@@ -342,3 +359,76 @@ class Feed(ItemCollection):
 
     def delete_source(self, source):
         source.delete()
+
+    def item_url_hashes(self) -> List[str]:
+        """Every item URL hash currently in this feed."""
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT item_url_hash FROM feed_items "
+                "WHERE user_hash = %s AND feed_hash = %s",
+                (self.user_hash, self.name_hash),
+            )
+            return [row["item_url_hash"] for row in cur.fetchall()]
+
+    def _downstream_feed_hashes(self) -> set:
+        """Feed hashes that (transitively) source this feed — i.e. every feed
+        this feed's items already flow into. Used to reject cycles."""
+        seen: set = set()
+        frontier = [self.name_hash]
+        with self.db_con() as cur:
+            while frontier:
+                origin = frontier.pop()
+                cur.execute(
+                    "SELECT feed_hash FROM sources "
+                    "WHERE user_hash = %s AND source_feed_hash = %s",
+                    (self.user_hash, origin),
+                )
+                for row in cur.fetchall():
+                    fh = row["feed_hash"]
+                    if fh not in seen:
+                        seen.add(fh)
+                        frontier.append(fh)
+        return seen
+
+    def add_feed_source(self, origin_feed: "Feed", name: Optional[str] = None):
+        """Add another of the user's feeds as a source of this feed.
+
+        Every item already in ``origin_feed`` is mirrored into this feed right
+        away, and future items are mirrored by the ingest fan-out. Raises
+        ValueError if the two feeds are the same or if the link would create a
+        cycle (the origin already receives this feed's items).
+        """
+        from .source import Source, feed_source_url
+        from .propagation import propagate_items
+
+        if origin_feed.name_hash == self.name_hash:
+            raise ValueError("A feed cannot be a source of itself")
+        if not origin_feed.exists():
+            raise ValueError("Source feed not found")
+        # A cycle forms when the origin already flows into this feed.
+        if origin_feed.name_hash in self._downstream_feed_hashes():
+            raise ValueError(
+                "That feed already receives this feed's items; adding it would "
+                "create a loop"
+            )
+
+        source = Source(
+            user_hash=self.user_hash,
+            feed_hash=self.name_hash,
+            name=name.strip() if name and name.strip() else origin_feed.name,
+            url=feed_source_url(origin_feed.name_hash),
+            source_feed_hash=origin_feed.name_hash,
+        )
+        if source.exists():
+            raise ValueError(
+                f'A source named "{source.name}" already exists in this feed'
+            )
+        source.create()
+
+        # Backfill: mirror the origin feed's current items into this feed (and
+        # anything downstream of it). propagate_items finds this feed via the
+        # source row just created.
+        propagate_items(
+            self.user_hash, origin_feed.name_hash, origin_feed.item_url_hashes()
+        )
+        return source

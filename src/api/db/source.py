@@ -16,6 +16,15 @@ from .item_collection import ItemCollection
 # None ("reset to the server default").
 _UNSET = object()
 
+# Feed sources have no real URL to fetch; they carry a synthetic marker URL so
+# the NOT NULL ``sources.url`` column and the HttpUrl route model are satisfied.
+# The referenced feed lives in ``source_feed_hash``; this URL is never fetched.
+FEED_SOURCE_URL_PREFIX = "https://feed.aggy.local/"
+
+
+def feed_source_url(feed_hash: str) -> str:
+    return f"{FEED_SOURCE_URL_PREFIX}{feed_hash}"
+
 # Default palette for per-source colors: distinct mid-tone hues that read
 # well as badge accents on both light and dark surfaces.
 SOURCE_COLORS = [
@@ -50,10 +59,17 @@ class Source(ItemCollection):
     ingest_interval_minutes: Optional[int] = None
     # Display color (hex). Assigned randomly at creation, editable later.
     color: Optional[str] = None
+    # When set, this source mirrors another of the user's feeds instead of an
+    # RSS URL (see propagation.py). Ordinary RSS sources leave it None.
+    source_feed_hash: Optional[str] = None
 
     @property
     def name_hash(self):
         return self.__insecure_hash__(self.name)
+
+    @property
+    def is_feed_source(self) -> bool:
+        return self.source_feed_hash is not None
 
     @property
     def key(self):
@@ -100,12 +116,16 @@ class Source(ItemCollection):
         if self.ingest_interval_minutes is None and is_reddit_url(self.url):
             self.ingest_interval_minutes = REDDIT_SOURCE_READ_INTERVAL_MINUTES
 
+        # Feed sources are mirrored by the fan-out, never fetched over HTTP, so
+        # park their next_ingest_at far out to keep them off the ingest queue.
+        next_ingest_sql = "'infinity'" if self.is_feed_source else "NOW()"
+
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO sources (user_hash, feed_hash, name_hash, name, url, "
                 "template_name_hash, template_parameters, ingest_interval_minutes, "
-                "color, next_ingest_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                "color, source_feed_hash, next_ingest_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, {next_ingest_sql})",
                 (
                     self.user_hash,
                     self.feed_hash,
@@ -118,6 +138,7 @@ class Source(ItemCollection):
                     else None,
                     self.ingest_interval_minutes,
                     self.color,
+                    self.source_feed_hash,
                 ),
             )
 
@@ -241,7 +262,7 @@ class Source(ItemCollection):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, url, template_name_hash, template_parameters, "
-                "ingest_interval_minutes, color "
+                "ingest_interval_minutes, color, source_feed_hash "
                 "FROM sources "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (user_hash, feed_hash, source_hash),
@@ -258,6 +279,7 @@ class Source(ItemCollection):
                 template_parameters=row["template_parameters"],
                 ingest_interval_minutes=row["ingest_interval_minutes"],
                 color=row["color"],
+                source_feed_hash=row["source_feed_hash"],
             )
         raise ValueError("Source not found")
 

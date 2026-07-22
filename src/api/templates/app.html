@@ -291,6 +291,7 @@
       <a role="tab" class="tab tab-active" id="srcTabTemplate">From Template</a>
       <a role="tab" class="tab" id="srcTabManual">Manual URL</a>
       <a role="tab" class="tab" id="srcTabAnalyze">✨ From Website</a>
+      <a role="tab" class="tab" id="srcTabFeed">Another Feed</a>
     </div>
 
     <!-- Template Tab -->
@@ -326,6 +327,16 @@
           <button type="submit" class="btn btn-primary">Add Source</button>
         </div>
       </form>
+    </div>
+
+    <!-- Another Feed Tab -->
+    <div id="sourceTabFeed" class="hidden">
+      <p class="text-sm text-base-content/60 mb-3">
+        Pull another of your feeds into this one as a source. Its articles
+        appear here, and votes are shared — an up- or down-vote on an article in
+        either feed trains the ranking models for every feed it appears in.
+      </p>
+      <div class="max-h-[60vh] overflow-y-auto border border-base-300 rounded-lg" id="feedSourceList"></div>
     </div>
 
     <!-- Analyze (AI) Tab -->
