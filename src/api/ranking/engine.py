@@ -14,6 +14,7 @@ import numpy as np
 
 from db.base import get_db_con
 from db.feed import Feed
+from utils import is_playable_media_url
 from .models import (
     ItemFeatures,
     ModelStats,
@@ -62,14 +63,18 @@ def _row_to_features(row) -> ItemFeatures:
         except (TypeError, ValueError):
             media = None
     list_added_at = row.get("list_added_at")
+    # YouTube links and direct video files play inline in the UI without a
+    # stored media entry, so count them as media for scoring too.
+    has_media = bool(media) or is_playable_media_url(row.get("url"))
     return ItemFeatures(
         url_hash=row["url_hash"],
         embedding=_parse_embedding(row.get("embeddings")),
+        image_embedding=_parse_embedding(row.get("image_embeddings")),
         source=row.get("source_name"),
         author=row.get("author"),
         date_published=row.get("date_published"),
         has_image=bool(row.get("image_url")),
-        has_media=bool(media),
+        has_media=has_media,
         label=_effective_label(row.get("vote"), list_added_at),
         # an unvoted-but-listed item is labelled as of when it was listed
         label_date=row.get("vote_date") or list_added_at,
@@ -80,8 +85,8 @@ def _row_to_features(row) -> ItemFeatures:
 # latest vote on it in *any* feed (the user_item_votes view), not just this
 # feed. So an upvote cast in one feed trains every feed the item appears in.
 _FEED_ITEMS_SQL = (
-    "SELECT i.url_hash, i.author, i.date_published, i.image_url, i.media, "
-    "i.embeddings, v.score AS vote, v.score_date AS vote_date, ("
+    "SELECT i.url_hash, i.url, i.author, i.date_published, i.image_url, i.media, "
+    "i.embeddings, i.image_embeddings, v.score AS vote, v.score_date AS vote_date, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"

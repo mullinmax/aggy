@@ -27,6 +27,8 @@ jobs:
             context: ./src/bridge
           - service: migrations
             context: ./src/api/db/migrations
+          - service: image-embed
+            context: ./src/image_embed
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

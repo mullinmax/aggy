@@ -38,6 +38,7 @@ from ingest.jobs import (
     source_ingestion_scheduling_job,
     source_ingestion_job,
     download_embedding_model_job,
+    backfill_image_embeddings_job,
 )
 from ranking.engine import feed_ranking_job
 
@@ -102,6 +103,16 @@ async def app_lifespan(app: FastAPI):
         trigger="date",
         run_date=datetime.now(),
         id="download_embedding_model_job",
+        replace_existing=False,
+    )
+
+    # embed any preview images scraped before the image service existed, once at
+    # start up (no-op when the service isn't configured)
+    scheduler.add_job(
+        func=backfill_image_embeddings_job,
+        trigger="date",
+        run_date=datetime.now(),
+        id="backfill_image_embeddings_job",
         replace_existing=False,
     )
 

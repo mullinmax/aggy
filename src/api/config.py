@@ -19,6 +19,12 @@ KNOWN_CONFIG_VALUES = [
     "OLLAMA_PASSWORD",
     "OLLAMA_EMBEDDING_MODEL",
     "OLLAMA_EMBEDDING_NUM_CTX",
+    # Image (thumbnail) embeddings are produced by a dedicated CLIP service
+    # (src/image_embed), since Ollama can't embed images.
+    "IMAGE_EMBED_HOST",
+    "IMAGE_EMBED_PORT",
+    "IMAGE_EMBED_MODEL",
+    "IMAGE_EMBED_TIMEOUT_SECONDS",
     "OLLAMA_ANALYSIS_MODEL",
     "OLLAMA_ANALYSIS_NUM_CTX",
     "RSS_BRIDGE_HOST",
@@ -46,6 +52,15 @@ DEFAULT_CONFIG = {
     # large to process" and end up with no embedding. nomic-embed-text
     # supports up to 8192 tokens, so we raise the default to match.
     "OLLAMA_EMBEDDING_NUM_CTX": 8192,
+    # The CLIP image-embedding service (src/image_embed). IMAGE_EMBED_HOST is
+    # unset by default so a deployment without the service simply skips image
+    # embeddings and falls back to the has-image presence flag; the bundled
+    # docker-compose sets the host, enabling it out of the box. IMAGE_EMBED_MODEL
+    # is the label the vectors are stored under and must match the model the
+    # service actually runs.
+    "IMAGE_EMBED_PORT": 8000,
+    "IMAGE_EMBED_MODEL": "clip-ViT-B-32",
+    "IMAGE_EMBED_TIMEOUT_SECONDS": 30,
     # Text-generation model used to propose CSS selectors when creating a
     # source from a bare website URL. Any Ollama chat model that supports
     # structured (JSON schema) output works; qwen3:4b is small and reliable.

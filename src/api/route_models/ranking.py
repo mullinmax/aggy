@@ -26,6 +26,20 @@ class RankingStatsResponse(BaseRouteModel):
     predicted_items: int
 
 
+class FieldPreviewResponse(BaseRouteModel):
+    # this article's own value for the field, so the UI can show exactly what
+    # was evaluated (only the piece relevant to the field is displayed)
+    text: Optional[str] = None
+    image_url: Optional[str] = None
+    source: Optional[str] = None
+    author: Optional[str] = None
+    date_published: Optional[datetime] = None
+    has_image: bool = False
+    has_media: bool = False
+    # whether the image is scored by a real vision embedding vs presence only
+    image_embedded: bool = False
+
+
 class FieldContributionResponse(BaseRouteModel):
     field: str
     label: str
@@ -33,6 +47,10 @@ class FieldContributionResponse(BaseRouteModel):
     sign: int
     # number of marks to show: 0, 1, or 2
     level: int
+    # one-sentence description of what this field feeds the model
+    description: str = ""
+    # this article's own value for the field (what was evaluated)
+    preview: Optional[FieldPreviewResponse] = None
 
 
 class ItemExplanationResponse(BaseRouteModel):

@@ -219,15 +219,29 @@ def test_item_explanation(
     body = response.json()
     assert body["model_name"]
     fields = {f["field"]: f for f in body["fields"]}
-    assert {"content", "source", "author", "recency", "image", "media"} <= set(fields)
+    # text and image are scored as separate pieces, never lumped as "content"
+    assert {"text", "image", "source", "author", "recency", "media"} <= set(fields)
+    assert "content" not in fields
     # every field reports a valid mark count and direction
     for f in body["fields"]:
         assert f["level"] in (0, 1, 2)
         assert f["sign"] in (-1, 0, 1)
         assert (f["level"] == 0) == (f["sign"] == 0)
-    # content (the embedding) drives this recommendation and pushes it up
-    assert fields["content"]["level"] >= 1
-    assert fields["content"]["sign"] == 1
+    # text (the embedding) drives this recommendation and pushes it up
+    assert fields["text"]["level"] >= 1
+    assert fields["text"]["sign"] == 1
+
+    # every field carries a plain-language description and a preview of exactly
+    # what was evaluated for this article
+    assert all(f["description"] for f in body["fields"])
+    assert all(f["preview"] is not None for f in body["fields"])
+    # the preview is this article's own data (same across fields, one per piece)
+    text_preview = fields["text"]["preview"]
+    assert text_preview["text"]  # the item's title/excerpt
+    image_preview = fields["image"]["preview"]
+    assert image_preview["has_image"] is True  # item[4] is even/imaged
+    # no vision model in the test, so the image is scored by presence only
+    assert image_preview["image_embedded"] is False
 
 
 def test_item_explanation_needs_votes(

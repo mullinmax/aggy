@@ -112,6 +112,47 @@ def test_ridge_learns_direction():
     assert (np.abs(scores) <= 1).all()
 
 
+def test_image_embedding_is_a_distinct_feature():
+    """With identical text, the image embedding alone must move the score, so
+    the picture is genuinely weighed apart from the words and the has-image
+    flag."""
+    items = []
+    for i in range(40):
+        liked = i % 2 == 0
+        items.append(
+            ItemFeatures(
+                url_hash=f"img{i}",
+                embedding=np.array([0.3, 0.3]),  # constant text for everyone
+                image_embedding=np.array([1.0, 0.0] if liked else [-1.0, 0.0]),
+                has_image=True,
+                label=1.0 if liked else -1.0,
+            )
+        )
+    model = RidgeModel()
+    model.fit(items)
+    same_text = np.array([0.3, 0.3])
+    liked = ItemFeatures(
+        url_hash="cl", embedding=same_text, image_embedding=np.array([1.0, 0.0]),
+        has_image=True,
+    )
+    disliked = ItemFeatures(
+        url_hash="cd", embedding=same_text, image_embedding=np.array([-1.0, 0.0]),
+        has_image=True,
+    )
+    scores, _ = model.predict([liked, disliked])
+    assert scores[0] > scores[1]
+
+
+def test_missing_image_embedding_is_backward_compatible():
+    """A feed with no image embeddings still trains and predicts (the image
+    block is simply zero-width)."""
+    items = two_cluster_data(n=20)  # none carry an image embedding
+    model = RidgeModel()
+    model.fit(items)
+    scores, _ = model.predict(_up_down_probes())
+    assert scores[0] > 0 > scores[1]
+
+
 def _up_down_probes():
     return [
         make_item(100, [5, 0, 0, 0, 0, 0, 0, 0]),

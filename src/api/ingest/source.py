@@ -116,6 +116,16 @@ def ingest_source(source: Source) -> None:
             except Exception as e:
                 logging.error(f"Error adding embedding to item: {e}")
 
+        # and an image embedding, when the CLIP service is configured and the
+        # item has a preview image
+        if config.get("IMAGE_EMBED_HOST", None) is not None:
+            try:
+                final_item.add_image_embedding(
+                    model_name=config.get("IMAGE_EMBED_MODEL")
+                )
+            except Exception as e:
+                logging.error(f"Error adding image embedding to item: {e}")
+
         # write item to db
         try:
             final_item.create()

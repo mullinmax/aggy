@@ -1190,15 +1190,74 @@ function contributionMarks(sign, level) {
   return h('span', { class: `font-bold ${cls}` }, symbol.repeat(level));
 }
 
-function renderExplanation(data) {
-  const rows = data.fields.map((f) =>
-    h('div', { class: 'flex items-center justify-between py-1.5 border-b border-base-300 last:border-b-0' },
-      h('span', { class: 'text-sm' }, f.label),
-      h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level))));
+// Render ONLY the one piece this field evaluates for the article — a thumbnail
+// for Image, the text for Text, a chip for Source/Author/Recency/Media — so you
+// can see exactly what was scored, never the whole article.
+function fieldPreview(p, field) {
+  if (field === 'image') {
+    const thumb = p.image_url
+      ? h('img', {
+          src: p.image_url, alt: '', loading: 'lazy',
+          class: 'w-24 h-16 object-cover rounded bg-base-300',
+        })
+      : h('div', { class: 'w-24 h-16 rounded bg-base-300 flex items-center justify-center text-[10px] text-base-content/40' },
+          p.has_image ? 'image' : 'no image');
+    // spell out whether the picture is scored by a vision embedding or only by
+    // its presence, so it's clear what the model actually sees.
+    const note = !p.has_image
+      ? { txt: 'no image to score', cls: 'text-base-content/40' }
+      : p.image_embedded
+        ? { txt: '✓ scored by image embedding', cls: 'text-success' }
+        : { txt: 'presence only — no image embedding', cls: 'text-base-content/50' };
+    return h('div', { class: 'shrink-0' },
+      thumb,
+      h('p', { class: `text-[10px] mt-1 ${note.cls}` }, note.txt));
+  }
+  if (field === 'text') {
+    return h('div', { class: 'w-full rounded bg-base-200 border border-base-300 p-2' },
+      h('p', { class: 'text-[11px] leading-snug line-clamp-4 text-base-content/80' }, p.text || '(no text)'));
+  }
+  let txt = '';
+  if (field === 'source') txt = p.source || '(no source)';
+  else if (field === 'author') txt = p.author ? `@${p.author}` : '(no author)';
+  else if (field === 'recency') txt = p.date_published ? timeAgo(p.date_published) : '(no date)';
+  else if (field === 'media') txt = p.has_media ? 'video / audio' : 'no media';
+  return h('span', { class: 'shrink-0 badge badge-outline whitespace-nowrap' }, txt);
+}
 
+// The panel revealed when a field is tapped: what the field feeds the model,
+// and a preview of exactly what this article contributed to it.
+function fieldDetail(f) {
+  return h('div', { class: 'pl-6 pr-1 pb-3 -mt-0.5' },
+    f.description ? h('p', { class: 'text-xs text-base-content/60' }, f.description) : null,
+    f.preview
+      ? h('div', { class: 'mt-2' },
+          h('p', { class: 'text-[11px] font-semibold text-base-content/50 mb-1' }, 'Evaluated here'),
+          fieldPreview(f.preview, f.field))
+      : null);
+}
+
+// A tappable field row: the label + marks, expanding to show fieldDetail().
+function fieldRow(f) {
+  const detail = fieldDetail(f);
+  detail.classList.add('hidden');
+  const chevron = h('span', { class: 'text-base-content/30 text-xs w-3' }, '▸');
+  const header = h('button', {
+    type: 'button', class: 'w-full flex items-center justify-between py-1.5 text-left',
+    onclick: () => {
+      const nowHidden = detail.classList.toggle('hidden');
+      chevron.textContent = nowHidden ? '▸' : '▾';
+    },
+  },
+    h('span', { class: 'flex items-center gap-2' }, chevron, h('span', { class: 'text-sm' }, f.label)),
+    h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level)));
+  return h('div', { class: 'border-b border-base-300 last:border-b-0' }, header, detail);
+}
+
+function renderExplanation(data) {
   const pct = Math.round(data.baseline_score * 100);
   render($('explainBody'),
-    h('div', { class: 'flex flex-col' }, rows),
+    h('div', { class: 'flex flex-col' }, data.fields.map(fieldRow)),
     h('p', { class: 'text-xs text-base-content/50 mt-4' },
       `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: ${MODEL_LABELS[data.model_name] || data.model_name}`));
 }
