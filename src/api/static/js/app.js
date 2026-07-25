@@ -83,6 +83,7 @@ function bindControls() {
   $('analyzeBackBtn').onclick = resetAnalyzeTab;
   $('analyzeAddBtn').onclick = handleCreateAnalyzedSource;
   $('analyzeFeedBackBtn').onclick = resetAnalyzeTab;
+  $('analyzeFeedScrapeBtn').onclick = handleScrapeInsteadOfFeed;
   $('analyzeFeedAddBtn').onclick = handleAddDetectedFeed;
   $('templateSearch').oninput = debounce(searchTemplates, 300);
   $('templateBackBtn').onclick = clearTemplateSelection;
@@ -1813,10 +1814,12 @@ const ANALYZE_FIELDS = [
 let analyzeState = null; // { suggestion, params } while the result step is open
 let analyzePreviewSeq = 0; // ignore out-of-order preview responses
 let detectedFeed = null; // { feed_url } while the feed-confirm step is open
+let analyzeInput = null; // { url, cookie } of the URL currently being added
 
 function resetAnalyzeTab() {
   analyzeState = null;
   detectedFeed = null;
+  analyzeInput = null;
   analyzePreviewSeq += 1;
   $('analyzeInputStep').classList.remove('hidden');
   $('analyzeFeedStep').classList.add('hidden');
@@ -1846,11 +1849,44 @@ async function pollAnalyzeJob(jobId) {
   }
 }
 
+// Show the feed-confirm step. `mismatched` marks a feed the page advertises
+// but that doesn't list the page's own articles, which is offered alongside
+// scraping rather than presented as the obvious answer.
+function showDetectedFeedStep(feedUrl, sourceName, mismatched) {
+  detectedFeed = { feed_url: feedUrl };
+  $('analyzeFeedName').value = sourceName || '';
+  $('analyzeFeedUrl').textContent = feedUrl;
+  $('analyzeFeedNote').classList.toggle('hidden', mismatched);
+  $('analyzeFeedMismatchNote').classList.toggle('hidden', !mismatched);
+  $('analyzeFeedScrapeBtn').classList.toggle('hidden', !mismatched);
+  $('analyzeInputStep').classList.add('hidden');
+  $('analyzeFeedStep').classList.remove('hidden');
+}
+
+// Run the Ollama selector analysis for a page and open the result step.
+async function runSelectorAnalysis(url, cookie) {
+  detectedFeed = null;
+  $('analyzeProgress').classList.remove('hidden');
+  $('analyzeProgressText').textContent =
+    'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
+  const job = await sdk.sourceAnalyzeSuggest({ body: { url, cookie } });
+  const suggestion = await pollAnalyzeJob(job.job_id);
+  // custom: fields where the user typed a selector instead of picking one
+  analyzeState = { suggestion, params: { ...suggestion.defaults }, custom: {} };
+  $('analyzeSourceName').value = suggestion.suggested_source_name || '';
+  renderAnalyzeFields();
+  $('analyzeInputStep').classList.add('hidden');
+  $('analyzeFeedStep').classList.add('hidden');
+  $('analyzeResultStep').classList.remove('hidden');
+  loadAnalyzePreview();
+}
+
 async function handleAddByUrl(e) {
   e.preventDefault();
   const url = $('analyzeUrl').value.trim();
   if (!url) return;
   const cookie = $('analyzeCookie').value.trim() || null;
+  analyzeInput = { url, cookie };
 
   $('analyzeBtn').disabled = true;
   $('analyzeProgress').classList.remove('hidden');
@@ -1860,29 +1896,36 @@ async function handleAddByUrl(e) {
     // straight away, or a website that needs the selector analysis.
     const detected = await sdk.sourceAnalyzeDetect({ body: { url, cookie } });
     if (detected.kind === 'feed') {
-      detectedFeed = { feed_url: detected.feed_url || url };
-      $('analyzeFeedName').value = detected.suggested_source_name || '';
-      $('analyzeFeedUrl').textContent = detectedFeed.feed_url;
-      $('analyzeInputStep').classList.add('hidden');
-      $('analyzeFeedStep').classList.remove('hidden');
+      showDetectedFeedStep(detected.feed_url || url, detected.suggested_source_name, false);
+      return;
+    }
+    // The page advertises a feed that covers something other than the page.
+    // Let the user choose rather than quietly subscribing to the wrong thing.
+    if (detected.site_feed_url) {
+      showDetectedFeedStep(detected.site_feed_url, detected.suggested_source_name, true);
       return;
     }
 
-    $('analyzeProgressText').textContent =
-      'Scraping the page and asking Ollama for selectors — this can take a minute or two…';
-    const job = await sdk.sourceAnalyzeSuggest({ body: { url, cookie } });
-    const suggestion = await pollAnalyzeJob(job.job_id);
-    // custom: fields where the user typed a selector instead of picking one
-    analyzeState = { suggestion, params: { ...suggestion.defaults }, custom: {} };
-    $('analyzeSourceName').value = suggestion.suggested_source_name || '';
-    renderAnalyzeFields();
-    $('analyzeInputStep').classList.add('hidden');
-    $('analyzeResultStep').classList.remove('hidden');
-    loadAnalyzePreview();
+    await runSelectorAnalysis(url, cookie);
   } catch (err) {
     toast(err.message, 'alert-error');
   } finally {
     $('analyzeBtn').disabled = false;
+    $('analyzeProgress').classList.add('hidden');
+  }
+}
+
+// "Scrape the page instead" on the mismatched-feed step.
+async function handleScrapeInsteadOfFeed() {
+  if (!analyzeInput) return;
+  const btn = $('analyzeFeedScrapeBtn');
+  btn.disabled = true;
+  try {
+    await runSelectorAnalysis(analyzeInput.url, analyzeInput.cookie);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    btn.disabled = false;
     $('analyzeProgress').classList.add('hidden');
   }
 }

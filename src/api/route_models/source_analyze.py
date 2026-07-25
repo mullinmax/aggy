@@ -20,6 +20,10 @@ class DetectResponse(BaseRouteModel):
     # the feed to subscribe to when kind == "feed"; may differ from the input
     # URL when auto-discovered from an HTML page's <link> tags
     feed_url: Optional[str] = None
+    # a feed the page advertises that doesn't list what the page lists (a
+    # site-wide feed linked from a section page, say); offered as an
+    # alternative to scraping rather than used automatically
+    site_feed_url: Optional[str] = None
     # friendly default source name from the page/feed title or domain
     suggested_source_name: str
 

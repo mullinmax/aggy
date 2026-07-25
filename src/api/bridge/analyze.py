@@ -25,6 +25,8 @@ BRIDGE_SHORT_NAME = "CssSelectorComplexBridge"
 
 PAGE_FETCH_TIMEOUT_SECONDS = 20
 PAGE_MAX_BYTES = 3 * 1024 * 1024
+# a feed fetched only to check what it covers gets a shorter leash
+FEED_FETCH_TIMEOUT_SECONDS = 15
 # rss-bridge may fetch the page plus one page per article, so previews get a
 # much longer budget than the initial page fetch
 PREVIEW_TIMEOUT_SECONDS = 90
@@ -573,40 +575,134 @@ def discover_feed_url(html: str, base_url: str):
     return None
 
 
+# Share of a discovered feed's entries that must also be linked on the page
+# before the feed is accepted as "this page, in feed form".
+FEED_OVERLAP_MIN_RATIO = 0.3
+
+
+def _normalized_link(url: str) -> tuple:
+    """A link reduced to the parts that decide whether two URLs are the same."""
+    parsed = urlparse(url)
+    return (parsed.netloc.lower(), parsed.path.rstrip("/"), parsed.query)
+
+
+def _page_links(html: str, base_url: str) -> set:
+    soup = BeautifulSoup(html, "html.parser")
+    return {
+        _normalized_link(urljoin(base_url, a["href"]))
+        for a in soup.find_all("a", href=True)
+    }
+
+
+def _feed_path_matches_page(feed_url: str, page_url: str) -> bool:
+    """Whether a feed's URL alone shows it belongs to the requested page."""
+    page_path = urlparse(page_url).path.rstrip("/")
+    if not page_path:
+        # the site root's articles are the site's articles, so whatever feed
+        # the front page advertises is the one being asked for
+        return True
+
+    feed = urlparse(feed_url)
+    if feed.path.rstrip("/").startswith(page_path):
+        return True
+
+    # a feed really scoped to /section/name usually carries that name
+    # somewhere in its own path or query
+    section = page_path.rsplit("/", 1)[-1].lower()
+    feed_reference = f"{feed.path}?{feed.query}".lower()
+    return bool(section) and section in feed_reference
+
+
+def fetch_feed_entry_links(feed_url: str, cookie: str = "") -> list:
+    """Entry links of a feed, or an empty list when it can't be read."""
+    headers = dict(PAGE_FETCH_HEADERS)
+    headers["Accept"] = "application/rss+xml, application/atom+xml, application/xml"
+    if cookie:
+        headers["Cookie"] = cookie
+
+    try:
+        response = requests.get(
+            feed_url,
+            headers=headers,
+            timeout=FEED_FETCH_TIMEOUT_SECONDS,
+            stream=True,
+        )
+        response.raise_for_status()
+        content = response.raw.read(PAGE_MAX_BYTES, decode_content=True)
+    except requests.RequestException:
+        return []
+
+    parsed = feedparser.parse(content)
+    return [entry.get("link") for entry in parsed.entries if entry.get("link")]
+
+
+def feed_covers_page(
+    feed_url: str, page_url: str, page_html: str, cookie: str = ""
+) -> bool:
+    """Whether an advertised feed lists the articles the page itself lists.
+
+    A page's <link rel="alternate"> is only a promise that the site has a feed
+    somewhere, not that the feed covers this page. Sites commonly put one
+    site-wide feed in the header of every page, so a section, channel, tag or
+    category page advertises the whole site's output. Subscribing to that
+    silently produces articles the page never showed, so the feed's contents
+    are checked against the page's own links before it's accepted.
+    """
+    if _feed_path_matches_page(feed_url, page_url):
+        return True
+
+    entry_links = fetch_feed_entry_links(feed_url, cookie=cookie)
+    if not entry_links:
+        return False
+
+    links = _page_links(page_html, page_url)
+    shared = sum(
+        1 for link in entry_links if _normalized_link(urljoin(page_url, link)) in links
+    )
+    return shared / len(entry_links) >= FEED_OVERLAP_MIN_RATIO
+
+
 def detect_source_type(url: str, cookie: str = "") -> dict:
     """Decide whether ``url`` is a subscribable feed or a page to scrape.
 
     Fetches the URL once and inspects it: if it parses as RSS/Atom the URL is
-    used directly; if it's an HTML page advertising a feed via <link> that
-    feed is used; otherwise it's treated as an HTML page for selector analysis.
+    used directly; if it's an HTML page advertising a feed that covers the
+    page, that feed is used; otherwise it's treated as an HTML page for
+    selector analysis.
 
     Returns ``{"kind": "feed"|"html", "feed_url": str|None,
-    "suggested_source_name": str}``.
+    "site_feed_url": str|None, "suggested_source_name": str}``, where
+    ``site_feed_url`` carries a feed that was advertised but doesn't match the
+    page, so the caller can still offer it.
     """
     html = fetch_page(url, cookie=cookie)
 
     # feedparser leaves ``version`` empty for anything it doesn't recognise as
-    # a feed, so a truthy version is a reliable RSS/Atom signal.
+    # a feed, but it also picks a version up from a stray XML namespace on an
+    # ordinary HTML page, so a real feed has to carry entries as well.
     parsed = feedparser.parse(html)
-    if parsed.version:
+    if parsed.get("version") and parsed.get("entries"):
         title = (parsed.feed.get("title") or "").strip()
         return {
             "kind": "feed",
             "feed_url": url,
+            "site_feed_url": None,
             "suggested_source_name": suggest_source_name(title, url),
         }
 
     title = page_title(html)
     discovered = discover_feed_url(html, url)
-    if discovered:
+    if discovered and feed_covers_page(discovered, url, html, cookie=cookie):
         return {
             "kind": "feed",
             "feed_url": discovered,
+            "site_feed_url": None,
             "suggested_source_name": suggest_source_name(title, url),
         }
 
     return {
         "kind": "html",
         "feed_url": None,
+        "site_feed_url": discovered,
         "suggested_source_name": suggest_source_name(title, url),
     }

@@ -199,6 +199,32 @@ def test_detect_returns_feed_kind(client, token, monkeypatch):
     assert data["suggested_source_name"] == "Example Blog"
 
 
+def test_detect_offers_a_site_feed_that_misses_the_page(client, token, monkeypatch):
+    """An advertised feed the page doesn't match is returned, not chosen."""
+    monkeypatch.setattr(
+        "routers.source_analyze.detect_source_type",
+        lambda url, cookie: {
+            "kind": "html",
+            "feed_url": None,
+            "site_feed_url": "https://example.com/rss",
+            "suggested_source_name": "Some Section",
+        },
+    )
+
+    args = build_api_request_args(
+        path="/source_analyze/detect",
+        token=token,
+        data={"url": "https://example.com/sections/some-section"},
+    )
+    response = client.post(**args)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["kind"] == "html"
+    assert data["feed_url"] is None
+    assert data["site_feed_url"] == "https://example.com/rss"
+
+
 def test_detect_surfaces_fetch_errors(client, token, monkeypatch):
     def failing_detect(url, cookie):
         raise AnalyzeError("Couldn't fetch the page", status_code=502)

@@ -5,6 +5,7 @@ from bridge.analyze import (
     condense_html,
     detect_source_type,
     discover_feed_url,
+    feed_covers_page,
     fetch_page,
     php_time_format_to_strptime,
     suggest_source_name,
@@ -181,6 +182,153 @@ def test_detect_source_type_falls_back_to_html(monkeypatch):
     assert result["kind"] == "html"
     assert result["feed_url"] is None
     assert result["suggested_source_name"] == "Example Blog"
+
+
+# A section page that advertises the site's own catch-all feed: the feed
+# exists, but it lists articles from everywhere on the site rather than the
+# ones this page shows.
+SECTION_PAGE_WITH_SITE_FEED = """
+<html>
+<head>
+  <title>Some Section | Some Site</title>
+  <link rel="alternate" type="application/rss+xml" href="/rss" title="Site feed">
+</head>
+<body>
+  <a href="/watch?v=in-section-1">One</a>
+  <a href="/watch?v=in-section-2">Two</a>
+  <a href="/watch?v=in-section-3">Three</a>
+</body>
+</html>
+"""
+
+SITE_WIDE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Some Site</title>
+    <item><link>https://some.site/watch?v=elsewhere-1</link></item>
+    <item><link>https://some.site/watch?v=elsewhere-2</link></item>
+    <item><link>https://some.site/watch?v=elsewhere-3</link></item>
+  </channel>
+</rss>
+"""
+
+# the same page's articles, as a feed
+MATCHING_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Some Section</title>
+    <item><link>https://some.site/watch?v=in-section-1</link></item>
+    <item><link>https://some.site/watch?v=in-section-2</link></item>
+    <item><link>https://some.site/watch?v=in-section-3</link></item>
+  </channel>
+</rss>
+"""
+
+
+def test_detect_source_type_rejects_a_feed_that_misses_the_page(monkeypatch):
+    """A site-wide feed linked from a section page isn't that page's feed."""
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_page", lambda url, cookie="": SECTION_PAGE_WITH_SITE_FEED
+    )
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_feed_entry_links",
+        lambda feed_url, cookie="": [
+            "https://some.site/watch?v=elsewhere-1",
+            "https://some.site/watch?v=elsewhere-2",
+            "https://some.site/watch?v=elsewhere-3",
+        ],
+    )
+
+    result = detect_source_type("https://some.site/sections/some-section")
+
+    # scraping the page is the only way to get the articles it actually shows
+    assert result["kind"] == "html"
+    assert result["feed_url"] is None
+    # ...but the feed we found is still offered to the user
+    assert result["site_feed_url"] == "https://some.site/rss"
+
+
+def test_detect_source_type_keeps_a_feed_that_matches_the_page(monkeypatch):
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_page", lambda url, cookie="": SECTION_PAGE_WITH_SITE_FEED
+    )
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_feed_entry_links",
+        lambda feed_url, cookie="": [
+            "https://some.site/watch?v=in-section-1",
+            "https://some.site/watch?v=in-section-2",
+            "https://some.site/watch?v=in-section-3",
+        ],
+    )
+
+    result = detect_source_type("https://some.site/sections/some-section")
+
+    assert result["kind"] == "feed"
+    assert result["feed_url"] == "https://some.site/rss"
+
+
+def test_feed_covers_page_trusts_the_url_when_it_matches_the_section():
+    """A feed under (or named after) the page's path needs no content check."""
+    # would raise if it tried to fetch, since no fetch is stubbed here
+    assert feed_covers_page(
+        "https://some.site/sections/some-section/rss",
+        "https://some.site/sections/some-section",
+        SECTION_PAGE_WITH_SITE_FEED,
+    )
+    assert feed_covers_page(
+        "https://some.site/rss?section=some-section",
+        "https://some.site/sections/some-section",
+        SECTION_PAGE_WITH_SITE_FEED,
+    )
+
+
+def test_feed_covers_page_accepts_any_feed_advertised_by_the_site_root():
+    """A front page's feed is the site's feed, so it needs no content check."""
+    assert feed_covers_page(
+        "https://some.site/rss", "https://some.site/", SECTION_PAGE_WITH_SITE_FEED
+    )
+
+
+def test_feed_covers_page_falls_back_to_scraping_when_the_feed_is_unreadable(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_feed_entry_links", lambda feed_url, cookie="": []
+    )
+    assert not feed_covers_page(
+        "https://some.site/rss",
+        "https://some.site/sections/some-section",
+        SECTION_PAGE_WITH_SITE_FEED,
+    )
+
+
+# feedparser reports a version for an ordinary HTML page that happens to
+# declare the Atom namespace, so entries are what actually prove it's a feed
+HTML_DECLARING_A_FEED_NAMESPACE = """
+<html xmlns:atom="http://www.w3.org/2005/Atom">
+<head><title>Some Blog | Home</title></head>
+<body>
+  <div class="post"><a href="/one">First</a></div>
+  <div class="post"><a href="/two">Second</a></div>
+</body>
+</html>
+"""
+
+
+def test_detect_source_type_ignores_a_feed_namespace_without_entries(monkeypatch):
+    monkeypatch.setattr(
+        "bridge.analyze.fetch_page",
+        lambda url, cookie="": HTML_DECLARING_A_FEED_NAMESPACE,
+    )
+    result = detect_source_type("https://some.site/blog/")
+    assert result["kind"] == "html"
+    assert result["feed_url"] is None
+
+
+def test_detect_source_type_handles_an_empty_response(monkeypatch):
+    monkeypatch.setattr("bridge.analyze.fetch_page", lambda url, cookie="": "")
+    result = detect_source_type("https://some.site/blog/")
+    assert result["kind"] == "html"
 
 
 def test_discover_feed_url_ignores_non_feed_links():

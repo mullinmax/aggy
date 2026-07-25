@@ -358,10 +358,15 @@
         </div>
       </div>
 
-      <!-- Shown when the URL is detected to be an RSS/Atom feed -->
+      <!-- Shown when the URL is (or advertises) an RSS/Atom feed -->
       <div id="analyzeFeedStep" class="hidden">
-        <p class="text-sm text-success mb-3">
+        <p class="text-sm text-success mb-3" id="analyzeFeedNote">
           ✓ Detected an RSS/Atom feed — no scraping needed.
+        </p>
+        <p class="text-sm text-warning mb-3 hidden" id="analyzeFeedMismatchNote">
+          This site publishes a feed, but it doesn't list the articles shown on
+          that page — it looks like a feed for the whole site. Scrape the page
+          to get only the articles you see on it, or add the site-wide feed anyway.
         </p>
         <div class="form-control mb-3">
           <label class="label" for="analyzeFeedName"><span class="label-text">Source Name</span></label>
@@ -373,6 +378,7 @@
         </div>
         <div class="flex gap-2 justify-end mt-4">
           <button class="btn btn-ghost btn-sm" id="analyzeFeedBackBtn">Back</button>
+          <button class="btn btn-outline btn-sm hidden" id="analyzeFeedScrapeBtn">Scrape the page instead</button>
           <button class="btn btn-primary btn-sm" id="analyzeFeedAddBtn">Add Source</button>
         </div>
       </div>
