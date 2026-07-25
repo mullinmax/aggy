@@ -1,0 +1,17 @@
+FROM python:3.12-slim AS aggy-ytdlp
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+# One worker: extraction is network-bound and FastAPI runs the sync handlers
+# in a threadpool, so a single process handles aggy's ingest volume fine.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

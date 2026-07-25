@@ -40,6 +40,27 @@ services:
     image: ghcr.io/mullinmax/aggy/aggy-bridge:latest
     restart: unless-stopped
 
+  # Metadata-only extraction for video sites: enumerates channel, user,
+  # playlist, and search pages, and resolves a playable URL per playback.
+  # Nothing is ever downloaded or stored.
+  aggy-ytdlp:
+    image: ghcr.io/mullinmax/aggy/aggy-ytdlp:latest
+    restart: unless-stopped
+
+  # Headless Chromium, for pages that only show their articles after their
+  # JavaScript has run.
+  aggy-render:
+    image: ghcr.io/mullinmax/aggy/aggy-render:latest
+    restart: unless-stopped
+
+  # A second bridge alongside rss-bridge, covering a different (and much
+  # larger) set of sites. Its route catalog is imported as source templates.
+  aggy-rsshub:
+    image: diygod/rsshub:latest
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+
   aggy-ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -60,6 +81,12 @@ services:
       - DB_NAME=aggy
       - RSS_BRIDGE_HOST=aggy-bridge
       - RSS_BRIDGE_PORT=80
+      - RSSHUB_HOST=aggy-rsshub
+      - RSSHUB_PORT=1200
+      - YTDLP_HOST=aggy-ytdlp
+      - YTDLP_PORT=8000
+      - RENDER_HOST=aggy-render
+      - RENDER_PORT=8000
       - EXTRACT_HOST=aggy-extract
       - EXTRACT_PORT=3000
       - OLLAMA_HOST=aggy-ollama
@@ -83,6 +110,12 @@ services:
       aggy-bridge:
         condition: service_started
       aggy-image-embed:
+        condition: service_started
+      aggy-ytdlp:
+        condition: service_started
+      aggy-render:
+        condition: service_started
+      aggy-rsshub:
         condition: service_started
 
   cloudflared:

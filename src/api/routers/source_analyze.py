@@ -19,6 +19,11 @@ from bridge.analyze import (
     suggest_source_name,
     validate_suggestions,
 )
+from bridge.extract import extract_entries
+from bridge.render import is_configured as renderer_configured
+from bridge.render import render_page
+from builtin_templates import ytdlp_template
+from ingest.backends import ytdlp
 from db.source_template import SourceTemplate
 from db.user import User
 from route_models.source_analyze import (
@@ -64,8 +69,22 @@ JOB_TTL_SECONDS = 15 * 60
 
 def _analyze(url: str, template_name_hash: str, cookie: str) -> AnalyzeResponse:
     html = fetch_page(url, cookie=cookie)
-    raw = request_selector_suggestions(url, html)
-    candidates = validate_suggestions(html, url, raw)
+    rendered = False
+
+    try:
+        raw = request_selector_suggestions(url, html)
+        candidates = validate_suggestions(html, url, raw)
+    except AnalyzeError:
+        # Nothing article-shaped in the server's HTML. When the page builds
+        # itself in the browser that's expected, so try again with what the
+        # headless renderer sees before giving up.
+        if not renderer_configured():
+            raise
+        logging.info(f"no entries in the raw HTML of {url}; retrying rendered")
+        html = render_page(url, cookie=cookie)
+        rendered = True
+        raw = request_selector_suggestions(url, html)
+        candidates = validate_suggestions(html, url, raw)
 
     def best(field: str) -> str:
         return candidates[field][0].selector if candidates[field] else ""
@@ -75,6 +94,7 @@ def _analyze(url: str, template_name_hash: str, cookie: str) -> AnalyzeResponse:
         page_title=title or None,
         suggested_source_name=suggest_source_name(title, url),
         template_name_hash=template_name_hash,
+        rendered=rendered,
         candidates=candidates,
         # author/time start disabled even when candidates exist: they're
         # nice-to-haves, and a bad time selector can break the whole feed
@@ -123,10 +143,36 @@ def _drop_stale_jobs() -> None:
 def detect_source(
     request: AnalyzeRequest, user: User = Depends(authenticate)
 ) -> DetectResponse:
+    fetch_error = None
     try:
         result = detect_source_type(request.url, request.cookie or "")
     except AnalyzeError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        # A site that refuses anonymous fetches is exactly the case the video
+        # extractor handles, so a failure here isn't the end of the road.
+        result = None
+        fetch_error = e
+
+    # A real feed beats extraction: it's lighter on the site and needs no
+    # extra service. Only when there isn't one is the video path considered.
+    if result is None or result["kind"] != "feed":
+        supported = ytdlp.is_supported(request.url)
+        if supported.get("supported"):
+            name = (
+                result["suggested_source_name"]
+                if result
+                else suggest_source_name("", request.url)
+            )
+            return DetectResponse(
+                kind="video",
+                suggested_source_name=name,
+                template_name_hash=ytdlp_template().name_hash,
+                extractor=supported.get("extractor"),
+            )
+
+    if result is None:
+        raise HTTPException(
+            status_code=fetch_error.status_code, detail=str(fetch_error)
+        )
     return DetectResponse(**result)
 
 
@@ -196,6 +242,46 @@ def _entry_excerpt(content_html: str):
     return text or None
 
 
+def _preview_rendered(parameters: dict) -> PreviewResponse:
+    """Preview a scraped source the way its ingest will actually run it.
+
+    Same renderer, same extractor: what the user approves here is what the
+    source produces, rather than an rss-bridge rendition of it.
+    """
+    url = parameters.get("home_page") or ""
+    if not url:
+        raise HTTPException(status_code=422, detail="A page URL is required")
+
+    try:
+        html = render_page(url, cookie=parameters.get("cookie") or "")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't render the page: {e}")
+
+    try:
+        entries = extract_entries(html, url, parameters)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return PreviewResponse(
+        feed_title=page_title(html) or None,
+        items=[
+            PreviewItem(
+                title=entry["title"],
+                url=entry["url"],
+                author=entry["author"],
+                date_published=(
+                    entry["date_published"].isoformat()
+                    if entry["date_published"]
+                    else None
+                ),
+                excerpt=entry["text"],
+                image=entry["image"],
+            )
+            for entry in entries
+        ],
+    )
+
+
 @source_analyze_router.post(
     "/preview",
     summary="Preview the feed produced by a set of CSS selectors",
@@ -204,6 +290,9 @@ def _entry_excerpt(content_html: str):
 def preview_selectors(
     request: PreviewRequest, user: User = Depends(authenticate)
 ) -> PreviewResponse:
+    if request.rendered:
+        return _preview_rendered(request.parameters)
+
     template = _css_selector_template()
 
     try:

@@ -360,7 +360,7 @@
 
       <!-- Shown when the URL is detected to be an RSS/Atom feed -->
       <div id="analyzeFeedStep" class="hidden">
-        <p class="text-sm text-success mb-3">
+        <p class="text-sm text-success mb-3" id="analyzeFeedNotice">
           ✓ Detected an RSS/Atom feed — no scraping needed.
         </p>
         <div class="form-control mb-3">
@@ -368,7 +368,7 @@
           <input type="text" class="input input-bordered w-full" id="analyzeFeedName" placeholder="e.g. Hacker News" required>
         </div>
         <div class="form-control mb-3">
-          <label class="label"><span class="label-text">Feed URL</span></label>
+          <label class="label"><span class="label-text" id="analyzeFeedUrlLabel">Feed URL</span></label>
           <div class="text-xs text-base-content/50 break-all font-mono border border-base-300 rounded-lg p-2" id="analyzeFeedUrl"></div>
         </div>
         <div class="flex gap-2 justify-end mt-4">

@@ -29,6 +29,18 @@ KNOWN_CONFIG_VALUES = [
     "OLLAMA_ANALYSIS_NUM_CTX",
     "RSS_BRIDGE_HOST",
     "RSS_BRIDGE_PORT",
+    # Second bridge: RSSHub covers a different (much larger) set of sites than
+    # rss-bridge. Optional; unset means its templates simply aren't offered.
+    "RSSHUB_HOST",
+    "RSSHUB_PORT",
+    # Metadata-only video-site extraction (src/ytdlp). Optional; unset means
+    # "ytdlp" sources can't be created or ingested.
+    "YTDLP_HOST",
+    "YTDLP_PORT",
+    # Headless browser used to render pages before scraping them (src/render).
+    # Optional; unset falls back to a plain HTTP fetch everywhere.
+    "RENDER_HOST",
+    "RENDER_PORT",
     "BUILD_VERSION",
     "JWT_EXPIRATION_DAYS",
     "SIGNUP_ENABLED",
@@ -70,6 +82,9 @@ DEFAULT_CONFIG = {
     # the thinking trace on reasoning models.
     "OLLAMA_ANALYSIS_NUM_CTX": 32768,
     "RSS_BRIDGE_PORT": 80,
+    "RSSHUB_PORT": 1200,
+    "YTDLP_PORT": 8000,
+    "RENDER_PORT": 8000,
     "BUILD_VERSION": "0.0.0-beta",
     "DB_PORT": 5432,
     "DB_USER": "aggy",

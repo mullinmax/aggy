@@ -77,8 +77,8 @@ class Feed(ItemCollection):
         # fan-out, never fetched, so the ingest scheduler skips them here.
         with self.db_con() as cur:
             cur.execute(
-                "SELECT user_hash, feed_hash, name_hash, name, url, color "
-                "FROM sources "
+                "SELECT user_hash, feed_hash, name_hash, name, url, color, "
+                "kind, config FROM sources "
                 "WHERE user_hash = %s AND feed_hash = %s "
                 "AND source_feed_hash IS NULL",
                 (self.user_hash, self.name_hash),
@@ -92,6 +92,8 @@ class Feed(ItemCollection):
                 name=row["name"],
                 url=row["url"],
                 color=row["color"],
+                kind=row["kind"],
+                config=row["config"],
             )
             for row in rows
         ]
@@ -106,7 +108,7 @@ class Feed(ItemCollection):
             cur.execute(
                 "SELECT s.name, s.url, s.name_hash, s.feed_hash, s.last_ingested_at, "
                 "s.last_ingest_error, s.template_name_hash, s.template_parameters, "
-                "s.ingest_interval_minutes, s.color, s.source_feed_hash, "
+                "s.ingest_interval_minutes, s.color, s.source_feed_hash, s.kind, "
                 "sf.name AS source_feed_name, "
                 "(SELECT COUNT(*) FROM source_items si "
                 " WHERE si.user_hash = s.user_hash AND si.feed_hash = s.feed_hash "
@@ -210,9 +212,7 @@ class Feed(ItemCollection):
         # Prediction-ranked sorts stay strictly monotonic (see MONOTONIC_SORTS);
         # the browse sorts interleave sources by round-robin rank first.
         outer_sort = (
-            outer_order
-            if sort in MONOTONIC_SORTS
-            else f"q.source_rank, {outer_order}"
+            outer_order if sort in MONOTONIC_SORTS else f"q.source_rank, {outer_order}"
         )
         sql = f"SELECT * FROM ({sql}) q ORDER BY {outer_sort}"
         if limit is not None and limit >= 0:

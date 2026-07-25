@@ -33,6 +33,7 @@ from routers.item import item_router
 from routers.list import list_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
+from bridge.rsshub import rsshub_get_templates_job
 from builtin_templates import create_builtin_source_templates
 from ingest.jobs import (
     source_ingestion_scheduling_job,
@@ -83,6 +84,16 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * 60 * 12,
         id="rss_bridge_get_templates_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+    )
+
+    # and the same for the RSSHub route catalog, when that service is running
+    scheduler.add_job(
+        func=rsshub_get_templates_job,
+        trigger="interval",
+        seconds=60 * 60 * 12,
+        id="rsshub_get_templates_job",
         replace_existing=False,
         next_run_time=datetime.now(),
     )

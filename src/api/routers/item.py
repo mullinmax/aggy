@@ -3,9 +3,12 @@ from pydantic import confloat
 from typing import Optional
 
 from routers.auth import authenticate
+from db.item import ItemLoose
 from db.item_state import ItemState
 from db.feed import Feed
 from db.user import User
+from ingest.backends import ytdlp
+from route_models.stream import StreamUrlResponse
 
 item_router = APIRouter()
 
@@ -63,3 +66,37 @@ def get_state(
 # Outdated: 🕰️
 # Offensive: 🤡
 # Promotional: 📢
+
+
+@item_router.get(
+    "/stream_url",
+    summary="Resolve a currently-playable media URL for a video item",
+    response_model=StreamUrlResponse,
+)
+def stream_url(
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> StreamUrlResponse:
+    """Ask the extraction service for a URL the browser can play right now.
+
+    Video items store no playable URL: the ones sites hand out are signed and
+    expire within hours, so a stored one would be broken by the time anyone
+    pressed play. Instead the item keeps its page URL and this resolves a
+    fresh stream per playback. Nothing is downloaded or proxied — the browser
+    streams from the origin.
+    """
+    item = ItemLoose.read(url_hash=item_url_hash)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if not any((entry or {}).get("type") == "stream" for entry in item.media or []):
+        raise HTTPException(
+            status_code=422, detail="This item has no resolvable stream"
+        )
+
+    try:
+        resolved = ytdlp.resolve_stream(str(item.url))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return StreamUrlResponse(**resolved)
