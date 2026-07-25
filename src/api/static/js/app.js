@@ -306,6 +306,10 @@ async function showFeed(hash) {
   currentList = null; // leaving any list-detail context
   itemSkip = 0;
   render($('itemList'), spinner());
+  // A prior feed may have left the load-more button visible; hide it now so the
+  // infinite-scroll observer can't auto-click it (and load items with no feed
+  // context) while we await feedGet below.
+  $('loadMoreBtn').classList.add('hidden');
 
   if (!currentFeed || currentFeed.feed_name_hash !== hash) {
     feedFilters = defaultFilters();
@@ -640,6 +644,13 @@ function appendItemWithDivider(list, item) {
 }
 
 async function loadFeedItems() {
+  // The infinite-scroll observer watches the load-more button for the whole
+  // session, so it can fire while we're still awaiting feedGet in showFeed (or
+  // after navigating away) — before currentFeed is set. Bail rather than throw
+  // a "Cannot read properties of null (reading 'feed_name_hash')" the catch
+  // below would surface as an error toast.
+  if (!currentFeed) { $('loadMoreBtn').classList.add('hidden'); return; }
+
   const seq = ++itemsRequestSeq;
   const list = $('itemList');
   if (itemSkip === 0) { render(list, spinner()); lastItemBand = null; }
