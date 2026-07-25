@@ -22,6 +22,8 @@ class SourceRouteModel(BaseRouteModel):
     # Set when this source mirrors another feed instead of an RSS URL.
     source_feed_hash: Optional[str] = None
     source_feed_name: Optional[str] = None
+    # Which ingest backend reads this source: "rss", "ytdlp", or "html".
+    source_kind: str = "rss"
 
     @classmethod
     def from_db_model(cls, db_model: Source):
@@ -35,6 +37,7 @@ class SourceRouteModel(BaseRouteModel):
             source_ingest_interval_minutes=db_model.ingest_interval_minutes,
             source_color=db_model.color,
             source_feed_hash=db_model.source_feed_hash,
+            source_kind=db_model.kind,
         )
 
     @classmethod
@@ -53,4 +56,5 @@ class SourceRouteModel(BaseRouteModel):
             source_color=row.get("color"),
             source_feed_hash=row.get("source_feed_hash"),
             source_feed_name=row.get("source_feed_name"),
+            source_kind=row.get("kind") or "rss",
         )

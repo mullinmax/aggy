@@ -10,6 +10,12 @@ from config import config
 from utils import skip_limit_to_start_end
 
 
+def _escape(value: str, policy: str) -> str:
+    if policy == "none":
+        return value
+    return urllib.parse.quote(value, safe="/" if policy == "path" else "")
+
+
 class SourceTemplateParameterType(Enum):
     text = "text"
     select = "select"
@@ -25,6 +31,14 @@ class SourceTemplateParameter(AggyBaseModel):
     example: Optional[str] = None
     title: Optional[str] = None
     options: Optional[Dict[str, str]] = None
+    # How the value is escaped into a template's url_template:
+    #   "strict" - a single value; everything but unreserved characters is
+    #              encoded, so it can't escape its position in the URL
+    #   "path"   - a path fragment ("github/issues/owner/repo"), so slashes
+    #              survive encoding
+    #   "none"   - the value IS a complete URL and is used verbatim (it is
+    #              checked to be http(s) instead)
+    quote: str = "strict"
 
 
 class SourceTemplate(AggyBaseModel):
@@ -37,6 +51,10 @@ class SourceTemplate(AggyBaseModel):
     # Built-in (non-rss-bridge) templates: a python format string with
     # {parameter} placeholders, e.g. "https://www.reddit.com/r/{subreddit}/{sort}.rss"
     url_template: Optional[str] = None
+    # Ingest backend the sources built from this template should use. "rss"
+    # (the default) means the URL is fetched and parsed as a feed; see
+    # ingest/backends for the rest.
+    kind: str = "rss"
 
     @property
     def key(self):
@@ -87,11 +105,23 @@ class SourceTemplate(AggyBaseModel):
                 validation_issues.append(
                     f"Parameter {name} is not defined in the template"
                 )
+            # unescaped parameters go into the URL verbatim, so they have to
+            # be a URL themselves rather than arbitrary text
+            elif self.parameters[name].quote == "none" and value:
+                if not str(value).lower().startswith(("http://", "https://")):
+                    validation_issues.append(
+                        f"Parameter {name} must be a http:// or https:// URL"
+                    )
 
         if validation_issues:
             raise Exception(f"Validation issues: {', '.join(validation_issues)}")
 
-    def create_rss_url(self, **kwargs) -> str:
+    def create_source_url(self, **kwargs) -> str:
+        """The URL a source built from this template should point at.
+
+        For ``kind == "rss"`` that's a feed URL (rss-bridge's, or a site's own);
+        for the other backends it's the page the backend goes on to work with.
+        """
         if kwargs is None:
             kwargs = {}
 
@@ -106,7 +136,9 @@ class SourceTemplate(AggyBaseModel):
                     values[name] = kwargs[name]
                 elif parameter.default is not None:
                     values[name] = parameter.default
-            quoted = {k: urllib.parse.quote(str(v), safe="") for k, v in values.items()}
+            quoted = {
+                k: _escape(str(v), self.parameters[k].quote) for k, v in values.items()
+            }
             return self.url_template.format(**quoted)
 
         url_params = {
@@ -130,6 +162,10 @@ class SourceTemplate(AggyBaseModel):
             query=urllib.parse.urlencode(url_params),
         )
 
+    # Templates produced feed URLs exclusively before the other ingest
+    # backends existed; keep the old name working for existing callers.
+    create_rss_url = create_source_url
+
     def exists(self) -> bool:
         with self.db_con() as cur:
             cur.execute(
@@ -145,14 +181,14 @@ class SourceTemplate(AggyBaseModel):
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO source_templates (name_hash, name, bridge_short_name, "
-                "url, description, context, parameters, url_template) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "url, description, context, parameters, url_template, kind) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (name_hash) DO UPDATE SET "
                 "name = EXCLUDED.name, "
                 "bridge_short_name = EXCLUDED.bridge_short_name, "
                 "url = EXCLUDED.url, description = EXCLUDED.description, "
                 "context = EXCLUDED.context, parameters = EXCLUDED.parameters, "
-                "url_template = EXCLUDED.url_template",
+                "url_template = EXCLUDED.url_template, kind = EXCLUDED.kind",
                 (
                     self.name_hash,
                     self.name,
@@ -162,6 +198,7 @@ class SourceTemplate(AggyBaseModel):
                     self.context,
                     params_json,
                     self.url_template,
+                    self.kind,
                 ),
             )
 
@@ -188,6 +225,7 @@ class SourceTemplate(AggyBaseModel):
             context=row["context"],
             parameters=parameters,
             url_template=row.get("url_template"),
+            kind=row.get("kind") or "rss",
         )
 
     @classmethod
@@ -195,7 +233,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters, url_template FROM source_templates WHERE name_hash = %s",
+                "parameters, url_template, kind FROM source_templates WHERE name_hash = %s",
                 (name_hash,),
             )
             row = cur.fetchone()
@@ -211,7 +249,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters, url_template FROM source_templates "
+                "parameters, url_template, kind FROM source_templates "
                 "WHERE bridge_short_name = %s LIMIT 1",
                 (bridge_short_name,),
             )
@@ -226,7 +264,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters, url_template FROM source_templates"
+                "parameters, url_template, kind FROM source_templates"
             )
             rows = cur.fetchall()
 

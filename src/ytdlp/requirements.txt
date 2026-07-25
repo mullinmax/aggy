@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+# Extractors break whenever a site changes; this image is meant to be pulled
+# and rebuilt often, so the version is deliberately left unpinned.
+yt-dlp

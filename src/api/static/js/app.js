@@ -1082,12 +1082,57 @@ function linkCard(m) {
       h('div', { class: 'text-sm text-primary break-all line-clamp-2' }, m.url)));
 }
 
+// Video-site items keep no playable URL: the ones sites hand out are signed
+// and expire within hours, so one stored at ingest time would already be dead.
+// The thumbnail stands in until the viewer presses play, and only then does
+// the API resolve a stream that plays straight from the origin.
+function streamPlayer(m, itemHash) {
+  const wrap = h('div', { class: 'relative aspect-video w-full bg-base-300 cursor-pointer' });
+
+  const poster = () => [
+    m.poster && h('img', {
+      class: 'absolute inset-0 w-full h-full object-cover',
+      src: m.poster, alt: '', loading: 'lazy',
+      onerror: (e) => e.target.remove(),
+    }),
+    h('div', { class: 'absolute inset-0 grid place-items-center pointer-events-none' },
+      h('div', { class: 'aggy-play-badge' })),
+  ];
+
+  render(wrap, poster());
+  wrap.onclick = async (e) => {
+    e.stopPropagation(); // don't open the reader behind the player
+    if (wrap._loading || wrap._playing) return;
+    wrap._loading = true;
+    render(wrap, h('div', { class: 'absolute inset-0 grid place-items-center' }, spinner()));
+    try {
+      const stream = await sdk.itemStreamUrl({ item_url_hash: itemHash });
+      wrap._playing = true;
+      wrap.classList.remove('cursor-pointer');
+      render(wrap, h('video', {
+        class: 'absolute inset-0 w-full h-full', src: stream.url,
+        poster: stream.poster || m.poster || null,
+        controls: true, autoplay: true, playsinline: true,
+        onclick: (ev) => ev.stopPropagation(),
+      }));
+    } catch (err) {
+      render(wrap, poster());
+      toast(err.message, 'alert-error');
+    } finally {
+      wrap._loading = false;
+    }
+  };
+  return wrap;
+}
+
 // One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
 // and loop like the reddit app; videos get controls, so their clicks must
 // reach the player instead of opening the reader.
-function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
+function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain', itemHash = null) {
   // reddit link posts point off-site: show a preview card, not a media frame
   if (m.type === 'link') return linkCard(m);
+  // a video site's item: resolved to a playable URL on demand
+  if (m.type === 'stream') return streamPlayer(m, itemHash);
   // third-party players (e.g. redgifs) embed as an iframe; their clicks
   // never bubble, so they don't open the reader
   if (m.type === 'embed') {
@@ -1116,15 +1161,15 @@ function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
 
 // A media list -> single element or a swipeable snap-scrolling gallery
 // strip with an index badge.
-function mediaGallery(mediaList) {
-  if (mediaList.length === 1) return mediaElement(mediaList[0]);
+function mediaGallery(mediaList, itemHash = null) {
+  if (mediaList.length === 1) return mediaElement(mediaList[0], undefined, itemHash);
   const counter = h('div', {
     class: 'badge badge-neutral badge-sm absolute top-2 right-2 pointer-events-none',
   }, `1/${mediaList.length}`);
   const strip = h('div', { class: 'flex overflow-x-auto snap-x snap-mandatory' },
     mediaList.map((m) =>
       h('div', { class: 'w-full flex-none snap-center flex items-center justify-center bg-base-300' },
-        mediaElement(m))));
+        mediaElement(m, undefined, itemHash))));
   strip.addEventListener('scroll', () => {
     const index = Math.min(Math.round(strip.scrollLeft / strip.clientWidth) + 1, mediaList.length);
     counter.textContent = `${index}/${mediaList.length}`;
@@ -1146,7 +1191,7 @@ function itemCard(item, { listMode = false } = {}) {
   const mediaBlock = ytId
     ? h('figure', { class: 'bg-base-300 aggy-card-media' }, youtubeEmbed(ytId))
     : media
-    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media, item.item_hash))
     : imageUrl
       ? h('figure', { class: 'bg-base-300 aggy-card-media' },
           h('img', {
@@ -1489,7 +1534,7 @@ function openReader(item) {
     // the content's thumbnails would just duplicate the player
     parsed.root.querySelectorAll('img').forEach((img) => (img.closest('a') || img).remove());
   } else if (media.length) {
-    render(mediaHost, mediaGallery(media));
+    render(mediaHost, mediaGallery(media, item.item_hash));
   } else if (heroUrl) {
     render(mediaHost, h('img', {
       src: heroUrl, class: 'rounded-lg max-w-full max-h-[60vh] object-contain mx-auto',
@@ -1830,7 +1875,7 @@ const ANALYZE_FIELDS = [
 
 let analyzeState = null; // { suggestion, params } while the result step is open
 let analyzePreviewSeq = 0; // ignore out-of-order preview responses
-let detectedFeed = null; // { feed_url } while the feed-confirm step is open
+let detectedFeed = null; // { kind, url, template_name_hash } while the confirm step is open
 
 function resetAnalyzeTab() {
   analyzeState = null;
@@ -1877,10 +1922,21 @@ async function handleAddByUrl(e) {
     // First find out what we're dealing with: an RSS/Atom feed we can add
     // straight away, or a website that needs the selector analysis.
     const detected = await sdk.sourceAnalyzeDetect({ body: { url, cookie } });
-    if (detected.kind === 'feed') {
-      detectedFeed = { feed_url: detected.feed_url || url };
+    // Both a real feed and a recognized video listing skip the selector
+    // analysis entirely — they just need a name and a confirmation.
+    if (detected.kind === 'feed' || detected.kind === 'video') {
+      const isVideo = detected.kind === 'video';
+      detectedFeed = {
+        kind: detected.kind,
+        url: isVideo ? url : (detected.feed_url || url),
+        template_name_hash: detected.template_name_hash,
+      };
+      $('analyzeFeedNotice').textContent = isVideo
+        ? '✓ Recognized as a video listing — read as metadata only, nothing is downloaded.'
+        : '✓ Detected an RSS/Atom feed — no scraping needed.';
+      $('analyzeFeedUrlLabel').textContent = isVideo ? 'Listing URL' : 'Feed URL';
       $('analyzeFeedName').value = detected.suggested_source_name || '';
-      $('analyzeFeedUrl').textContent = detectedFeed.feed_url;
+      $('analyzeFeedUrl').textContent = detectedFeed.url;
       $('analyzeInputStep').classList.add('hidden');
       $('analyzeFeedStep').classList.remove('hidden');
       return;
@@ -1914,11 +1970,22 @@ async function handleAddDetectedFeed() {
   const btn = $('analyzeFeedAddBtn');
   btn.disabled = true;
   try {
-    await sdk.sourceCreate({
-      feed_name_hash: currentFeed.feed_name_hash,
-      source_name: name,
-      source_url: detectedFeed.feed_url,
-    });
+    if (detectedFeed.kind === 'video') {
+      await sdk.sourceTemplateCreate({
+        body: {
+          source_template_name_hash: detectedFeed.template_name_hash,
+          feed_hash: currentFeed.feed_name_hash,
+          source_name: name,
+          parameters: { url: detectedFeed.url },
+        },
+      });
+    } else {
+      await sdk.sourceCreate({
+        feed_name_hash: currentFeed.feed_name_hash,
+        source_name: name,
+        source_url: detectedFeed.url,
+      });
+    }
     closeModal('addSourceModal');
     toast(`Source "${name}" added`);
     resetAnalyzeTab();
@@ -2018,11 +2085,14 @@ const scheduleAnalyzePreview = debounce(loadAnalyzePreview, 500);
 async function loadAnalyzePreview() {
   if (!analyzeState) return;
   const seq = ++analyzePreviewSeq;
-  $('analyzePreviewStatus').textContent = 'rendering via rss-bridge…';
+  const rendered = !!analyzeState.suggestion.rendered;
+  $('analyzePreviewStatus').textContent = rendered
+    ? 'rendering in a headless browser…'
+    : 'rendering via rss-bridge…';
   render($('analyzePreview'), h('div', { class: 'p-6' }, spinner()));
   try {
     const preview = await sdk.sourceAnalyzePreview({
-      body: { parameters: analyzeState.params },
+      body: { parameters: analyzeState.params, rendered },
     });
     if (seq !== analyzePreviewSeq || !analyzeState) return;
     $('analyzePreviewStatus').textContent =
@@ -2061,14 +2131,27 @@ async function handleCreateAnalyzedSource() {
   const btn = $('analyzeAddBtn');
   btn.disabled = true;
   try {
-    await sdk.sourceTemplateCreate({
-      body: {
-        source_template_name_hash: analyzeState.suggestion.template_name_hash,
-        feed_hash: currentFeed.feed_name_hash,
-        source_name: name,
-        parameters: analyzeState.params,
-      },
-    });
+    if (analyzeState.suggestion.rendered) {
+      // the articles only exist after the page runs, so the source keeps its
+      // selectors and is scraped by aggy itself rather than by rss-bridge
+      await sdk.sourceCreateScraped({
+        body: {
+          feed_hash: currentFeed.feed_name_hash,
+          source_name: name,
+          parameters: analyzeState.params,
+          rendered: true,
+        },
+      });
+    } else {
+      await sdk.sourceTemplateCreate({
+        body: {
+          source_template_name_hash: analyzeState.suggestion.template_name_hash,
+          feed_hash: currentFeed.feed_name_hash,
+          source_name: name,
+          parameters: analyzeState.params,
+        },
+      });
+    }
     closeModal('addSourceModal');
     toast(`Source "${name}" added`);
     resetAnalyzeTab();

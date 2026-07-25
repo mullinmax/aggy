@@ -29,6 +29,10 @@ jobs:
             context: ./src/api/db/migrations
           - service: image-embed
             context: ./src/image_embed
+          - service: ytdlp
+            context: ./src/ytdlp
+          - service: render
+            context: ./src/render
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

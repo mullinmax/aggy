@@ -15,13 +15,18 @@ class AnalyzeRequest(BaseRouteModel):
 
 
 class DetectResponse(BaseRouteModel):
-    # "feed" when the URL is (or advertises) an RSS/Atom feed, else "html"
+    # "feed" when the URL is (or advertises) an RSS/Atom feed, "video" when a
+    # video-site extractor can enumerate it, else "html" (needs selectors)
     kind: str
     # the feed to subscribe to when kind == "feed"; may differ from the input
     # URL when auto-discovered from an HTML page's <link> tags
     feed_url: Optional[str] = None
     # friendly default source name from the page/feed title or domain
     suggested_source_name: str
+    # template to create the source from, when kind == "video"
+    template_name_hash: Optional[str] = None
+    # which extractor claimed the URL, for kind == "video"
+    extractor: Optional[str] = None
 
 
 class SelectorCandidate(BaseRouteModel):
@@ -41,6 +46,10 @@ class AnalyzeResponse(BaseRouteModel):
     suggested_source_name: str
     # template used to create the source (CSS Selector Complex bridge)
     template_name_hash: str
+    # True when the selectors were found in headless-rendered HTML rather than
+    # the raw response. Such a source has to keep rendering to see its
+    # articles, so it is saved as a scraped source instead of an rss-bridge one.
+    rendered: bool = False
     # candidates per bridge parameter: entry_element_selector, title_selector,
     # url_selector, time_selector, author_selector
     candidates: Dict[str, List[SelectorCandidate]]
@@ -63,6 +72,9 @@ class AnalyzeJobStatus(BaseRouteModel):
 class PreviewRequest(BaseRouteModel):
     # CssSelectorComplexBridge parameters (home_page, entry_element_selector, ...)
     parameters: Dict[str, str]
+    # Preview the page as the headless renderer sees it, and extract the
+    # entries in-process, exactly as a scraped source would at ingest time.
+    rendered: bool = False
 
     model_config = {
         "json_schema_extra": {

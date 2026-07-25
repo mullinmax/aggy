@@ -1,14 +1,12 @@
 import logging
-import feedparser
-import requests
+
 from config import config
 from db.item import ItemLoose, ItemStrict
 from db.source import Source
 from db.feed import Feed
 from db.propagation import propagate_items
-from ingest.item.rss import ingest_rss_item
+from ingest.backends import get_backend
 from ingest.item.reddit import ingest_reddit_item, is_reddit_post
-from ingest.reddit_rate_limit import is_reddit_url, reddit_get
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
@@ -27,67 +25,32 @@ def _embedded_models(item: ItemStrict) -> tuple:
 
 
 def ingest_source(source: Source) -> None:
-    # Fetch the feed ourselves so failures produce a useful error instead of
-    # feedparser silently returning zero entries (rss-bridge answers bad
-    # parameters with an HTML error page, for example). A descriptive
-    # User-Agent matters: reddit.com and others rate-limit anonymous/default
-    # agents far more aggressively.
-    headers = {
-        "User-Agent": (
-            f"aggy/{config.get('BUILD_VERSION')} "
-            "(self-hosted feed aggregator; +https://github.com/mullinmax/aggy)"
-        )
-    }
-    # reddit.com requests share a global adaptive throttle so all ingest jobs
-    # stay under one budget and back off together on 429s.
-    fetch = reddit_get if is_reddit_url(source.url) else requests.get
-    try:
-        response = fetch(str(source.url), timeout=60, headers=headers)
-    except requests.RequestException as e:
-        raise Exception(f"Could not fetch feed: {e}") from e
+    """Fetch a source through its backend and store what comes back.
 
-    if response.status_code == 429:
-        retry_after = response.headers.get("Retry-After")
-        detail = f", retry after {retry_after}s" if retry_after else ""
-        raise Exception(f"Rate limited by feed server (HTTP 429{detail})")
+    The backend (see ``ingest.backends``) decides *how* a source becomes a
+    list of items — a feed, a video site's listing, a scraped page. Everything
+    after that is common to all of them: skip what's already stored, enrich
+    with the per-item scrapers, embed, and attach to the source and feed.
+    """
+    backend = get_backend(source.kind)
+    candidates = backend.fetch_items(source)
 
-    if response.status_code != 200:
-        raise Exception(f"Feed request returned HTTP {response.status_code}")
-
-    parsed = feedparser.parse(response.content)
-    entries = parsed.entries
-
-    if not entries:
-        detail = ""
-        if parsed.bozo and parsed.get("bozo_exception"):
-            detail = f" ({parsed.bozo_exception})"
-        raise Exception(f"Feed returned no entries{detail}")
-
-    # rss-bridge reports bridge failures as a 200 OK feed containing a single
-    # item titled "Bridge returned error <code>! (<id>)". Treat that as a
-    # failed ingest instead of ingesting the error as an article.
-    bridge_errors = [
-        e for e in entries if str(e.get("title", "")).startswith("Bridge returned error")
-    ]
-    if bridge_errors:
-        raise Exception(f"rss-bridge failed: {bridge_errors[0].get('title')}")
-
-    logging.info(f"Source '{source.name}': feed has {len(entries)} entries")
+    if not candidates:
+        raise Exception("Source returned no entries")
 
     feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
     ingested_url_hashes: list[str] = []
     new_items = 0
     stored_items = 0
 
-    for entry in entries:
+    for candidate in candidates:
         # if the item already exists in the database, skip scraping
-        temp_item = ItemLoose(url=entry.link)
-        already_stored = temp_item.exists()
+        already_stored = candidate.exists()
         if already_stored:
             stored_items += 1
 
             # TODO check how long ago we ingested this item and re-ingest if it's been long enough
-            final_item = ItemStrict.read(url_hash=temp_item.url_hash)
+            final_item = ItemStrict.read(url_hash=candidate.url_hash)
             if final_item is None:
                 continue
 
@@ -104,17 +67,20 @@ def ingest_source(source: Source) -> None:
                     )
         else:
             new_items += 1
-            rss_item = ingest_rss_item(entry)
-            # reddit's post JSON has full-res images, gifs, videos, and
-            # galleries that the RSS feed only thumbnails; merge it in ahead
-            # of open graph so its media wins
-            reddit_item = ingest_reddit_item(rss_item)
-            open_graph_item = ingest_open_graph_item(rss_item)
-            mercury_item = ingest_mercury_item(rss_item)
-
-            best_item = ItemLoose.merge_instances(
-                items=[rss_item, reddit_item, open_graph_item, mercury_item]
-            )
+            if backend.enrich:
+                # reddit's post JSON has full-res images, gifs, videos, and
+                # galleries that the RSS feed only thumbnails; merge it in ahead
+                # of open graph so its media wins
+                best_item = ItemLoose.merge_instances(
+                    items=[
+                        candidate,
+                        ingest_reddit_item(candidate),
+                        ingest_open_graph_item(candidate),
+                        ingest_mercury_item(candidate),
+                    ]
+                )
+            else:
+                best_item = candidate
 
             # Attempt to make strict item from best of all
             try:

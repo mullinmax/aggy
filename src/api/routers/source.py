@@ -10,10 +10,15 @@ from ingest.jobs import ingest_source_now, rescrape_source
 from route_models.item import ItemResponse
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.source import SourceRouteModel
+from route_models.source_scraped import ScrapedSourceCreate
 from route_models.source_update import SourceUpdate
 from routers.auth import authenticate
 
 source_router = APIRouter()
+
+# Distinguishes "leave config alone" from an explicit new value, mirroring
+# Source.update()'s own sentinel.
+_UNSET = object()
 
 
 @source_router.post(
@@ -46,6 +51,55 @@ def create_source(
     # kick off the first ingest right away instead of waiting for the schedule
     background_tasks.add_task(ingest_source_now, source)
     return AcknowledgeResponse()
+
+
+@source_router.post(
+    "/create_scraped",
+    summary="Create a source that scrapes a web page with CSS selectors",
+    response_model=SourceRouteModel,
+)
+def create_scraped_source(
+    request: ScrapedSourceCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(authenticate),
+) -> SourceRouteModel:
+    """Save the selectors a user approved in the analysis preview.
+
+    Unlike a template source, this one carries its own selectors and is
+    extracted in-process, so a page that only exists after JavaScript runs can
+    be ingested the same way it was previewed.
+    """
+    feed = Feed.read(user_hash=user.name_hash, name_hash=request.feed_hash)
+    if feed is None:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    page_url = request.parameters.get("home_page")
+    if not page_url:
+        raise HTTPException(
+            status_code=422, detail="A page URL (home_page) is required"
+        )
+
+    source = Source(
+        user_hash=user.name_hash,
+        feed_hash=request.feed_hash,
+        name=request.source_name,
+        url=page_url,
+        kind="html",
+        config={**request.parameters, "render": request.rendered},
+    )
+    if source.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f'A source named "{request.source_name}" already exists in '
+                "this feed. Pick a different name."
+            ),
+        )
+
+    feed.add_source(source)
+    # kick off the first ingest right away instead of waiting for the schedule
+    background_tasks.add_task(ingest_source_now, source)
+    return SourceRouteModel.from_db_model(source)
 
 
 @source_router.post(
@@ -113,7 +167,13 @@ def update_source(
 
     new_url = str(source.url)
     new_parameters = None
-    if source.template_name_hash and update.parameters is not None:
+    new_config = _UNSET
+    if source.kind == "html" and update.parameters is not None:
+        # Scraped sources keep their selectors in `config`, and the page they
+        # scrape is one of those selectors' values.
+        new_config = dict(update.parameters)
+        new_url = new_config.get("home_page") or new_url
+    elif source.template_name_hash and update.parameters is not None:
         template = SourceTemplate.read(name_hash=source.template_name_hash)
         if not template:
             raise HTTPException(status_code=404, detail="Source template not found")
@@ -133,6 +193,8 @@ def update_source(
         update_kwargs["ingest_interval"] = update.ingest_interval_minutes
     if update.source_color is not None:
         update_kwargs["color"] = update.source_color
+    if new_config is not _UNSET:
+        update_kwargs["config"] = new_config
     source.update(
         name=new_name,
         url=new_url,
