@@ -138,6 +138,8 @@ def bulk_create_sources(
                 url=url,
                 template_name_hash=template.name_hash if template else None,
                 template_parameters=row.template_parameters if template else None,
+                # a template's sources are read the way the template says
+                kind=template.kind if template else "rss",
             )
         except Exception as e:
             result(row, BulkCreateResultStatus.error, str(e))

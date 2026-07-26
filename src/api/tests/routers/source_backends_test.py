@@ -2,6 +2,7 @@ import pytest
 
 from db.item import ItemStrict
 from db.source import Source
+from db.source_template import SourceTemplate, SourceTemplateParameter
 from ingest.backends import ytdlp as ytdlp_backend
 from routers import source_analyze
 from tests.testing_utils import build_api_request_args
@@ -321,3 +322,122 @@ def test_stream_url_surfaces_a_resolution_failure(
 
     assert response.status_code == 502
     assert "playable" in response.json()["detail"]
+
+
+# ---------- a template's kind has to reach the source it creates ----------
+
+
+@pytest.fixture
+def video_template():
+    template = SourceTemplate(
+        name="Video Site Listing",
+        url="https://videos.example.com",
+        kind="ytdlp",
+        url_template="{url}",
+        description="a channel, playlist, or search page",
+        parameters={
+            "url": SourceTemplateParameter(
+                name="Listing URL", required=True, type="text", quote="none"
+            )
+        },
+    )
+    template.create()
+    yield template
+    template.delete()
+
+
+def test_a_video_template_creates_a_video_source(
+    client, existing_user, existing_feed, video_template, token
+):
+    """Without the kind, the listing page goes to the feed parser as if it
+    were RSS and the source fails on its first fetch."""
+    args = build_api_request_args(
+        path="/source_template/create",
+        data={
+            "source_template_name_hash": video_template.name_hash,
+            "feed_hash": existing_feed.name_hash,
+            "source_name": "Example channel",
+            "parameters": {"url": "https://videos.example.com/channel/example"},
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 200
+    assert response.json()["source_kind"] == "ytdlp"
+
+    stored = Source.read(
+        user_hash=existing_user.name_hash,
+        feed_hash=existing_feed.name_hash,
+        source_hash=response.json()["source_name_hash"],
+    )
+    assert stored.kind == "ytdlp"
+    assert str(stored.url) == "https://videos.example.com/channel/example"
+
+
+def test_a_feed_template_still_creates_a_feed_source(
+    client, existing_user, existing_feed, token
+):
+    template = SourceTemplate(
+        name="Example Feed",
+        url="https://example.com",
+        url_template="https://example.com/{path}/rss",
+        description="a plain feed",
+        parameters={
+            "path": SourceTemplateParameter(name="Path", required=True, type="text")
+        },
+    )
+    template.create()
+
+    args = build_api_request_args(
+        path="/source_template/create",
+        data={
+            "source_template_name_hash": template.name_hash,
+            "feed_hash": existing_feed.name_hash,
+            "source_name": "Example feed",
+            "parameters": {"path": "blog"},
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 200
+    assert response.json()["source_kind"] == "rss"
+
+
+def test_bulk_import_carries_a_templates_kind_too(
+    client, existing_user, existing_feed, video_template, token
+):
+    args = build_api_request_args(
+        path="/import/create",
+        data={
+            "sources": [
+                {
+                    "feed_name_hash": existing_feed.name_hash,
+                    "source_name": "Example channel",
+                    "template_name_hash": video_template.name_hash,
+                    "template_parameters": {
+                        "url": "https://videos.example.com/channel/example"
+                    },
+                }
+            ]
+        },
+        token=token,
+    )
+
+    response = client.post(**args)
+
+    assert response.status_code == 200
+    stored = Source.read(
+        user_hash=existing_user.name_hash,
+        feed_hash=existing_feed.name_hash,
+        source_hash=Source(
+            user_hash=existing_user.name_hash,
+            feed_hash=existing_feed.name_hash,
+            name="Example channel",
+            url="https://videos.example.com/channel/example",
+        ).name_hash,
+    )
+    assert stored.kind == "ytdlp"

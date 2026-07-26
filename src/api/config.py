@@ -3,6 +3,10 @@ import os
 KNOWN_CONFIG_VALUES = [
     "SOURCE_READ_INTERVAL_MINUTES",
     "SOURCE_INGESTION_RUN_INTERVAL_SECONDS",
+    # How many sources may be ingested at once. One slow source (a video
+    # listing walking result pages, a headless render) otherwise holds up
+    # every other source's turn.
+    "SOURCE_INGESTION_MAX_CONCURRENCY",
     "PYTEST_RUNTIME_TYPE",
     "JWT_ALGORITHM",
     "JWT_SECRET",
@@ -56,6 +60,9 @@ KNOWN_CONFIG_VALUES = [
 DEFAULT_CONFIG = {
     "SOURCE_READ_INTERVAL_MINUTES": 60,
     "SOURCE_INGESTION_RUN_INTERVAL_SECONDS": 15,
+    # Each run picks one due source with FOR UPDATE SKIP LOCKED, so runs never
+    # collide over the same source; this just lets a few overlap.
+    "SOURCE_INGESTION_MAX_CONCURRENCY": 3,
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
     "OLLAMA_PORT": 11434,
