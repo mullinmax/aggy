@@ -93,13 +93,16 @@ async def app_lifespan(app: FastAPI):
         next_run_time=datetime.now(),
     )
 
-    # add scheduler job for ingesting sources every n seconds
+    # add scheduler job for ingesting sources every n seconds. Several may run
+    # at once: a video listing or a headless render takes far longer than the
+    # interval, and with a single instance one slow source stalls the queue.
     scheduler.add_job(
         func=source_ingestion_job,
         trigger="interval",
         seconds=config.get_int("SOURCE_INGESTION_RUN_INTERVAL_SECONDS"),
         id="source_ingestion_job",
         replace_existing=False,
+        max_instances=config.get_int("SOURCE_INGESTION_MAX_CONCURRENCY"),
         next_run_time=datetime.now(),
     )
 
