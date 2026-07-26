@@ -370,3 +370,56 @@ def test_a_failed_feed_with_an_empty_body_still_reports_its_status(monkeypatch):
                 url="http://bridge.local/some/route",
             )
         )
+
+
+def test_a_bridge_error_page_is_reduced_to_its_error_line(monkeypatch):
+    """Bridges answer with a whole error page — greeting, apology, node
+    version, git hash. Only the labelled line is worth showing."""
+    monkeypatch.setattr(
+        rss_backend.requests,
+        "get",
+        lambda *a, **kw: _ErrorResponse(
+            503,
+            "<html><body>"
+            "<h1>Welcome to the bridge!</h1><p>Looks like something went wrong</p>"
+            "<p>Helpful Information</p>"
+            "<p>Error Message: TypeError: Cannot read properties of undefined</p>"
+            "<p>Route: /example/category/:cat</p>"
+            "<p>Node Version: v24.18.0</p>"
+            "<p>Git Hash: c0825f01</p>"
+            "</body></html>",
+        ),
+    )
+
+    with pytest.raises(Exception) as failure:
+        rss_backend.fetch_items(
+            Source(
+                user_hash="user",
+                feed_hash="feed",
+                name="Example",
+                url="http://bridge.local/example/category/public",
+            )
+        )
+
+    message = str(failure.value)
+    assert "TypeError: Cannot read properties of undefined" in message
+    assert "Welcome to the bridge" not in message
+    assert "Node Version" not in message
+
+
+def test_an_unlabelled_error_body_is_quoted_as_is(monkeypatch):
+    monkeypatch.setattr(
+        rss_backend.requests,
+        "get",
+        lambda *a, **kw: _ErrorResponse(500, "upstream refused the connection"),
+    )
+
+    with pytest.raises(Exception, match="upstream refused the connection"):
+        rss_backend.fetch_items(
+            Source(
+                user_hash="user",
+                feed_hash="feed",
+                name="Example",
+                url="http://bridge.local/some/route",
+            )
+        )

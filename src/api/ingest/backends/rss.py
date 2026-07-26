@@ -1,6 +1,7 @@
 """The original ingest backend: fetch a URL and parse it as RSS/Atom."""
 
 import logging
+import re
 from typing import List
 
 import feedparser
@@ -29,6 +30,15 @@ def feed_headers() -> dict:
 # explanation, not enough to put a stack trace in the sources list.
 ERROR_MESSAGE_MAX_CHARS = 300
 
+# Bridges wrap their failures in a whole error page — a greeting, an apology,
+# then the node version and git hash. The one line worth showing a user is
+# labelled, so pull that out and drop the rest of the furniture.
+_LABELLED_ERROR = re.compile(
+    r"error message:\s*(?P<message>.+?)"
+    r"(?=\s+(?:route|full route|node version|git hash|git date|path):|$)",
+    re.IGNORECASE,
+)
+
 
 def _response_message(response) -> str:
     """The human-readable part of a failed response body, if there is one."""
@@ -44,6 +54,11 @@ def _response_message(response) -> str:
         body = BeautifulSoup(body, "html.parser").get_text(" ", strip=True)
 
     message = " ".join(body.split())
+
+    labelled = _LABELLED_ERROR.search(message)
+    if labelled:
+        message = labelled.group("message").strip()
+
     if len(message) > ERROR_MESSAGE_MAX_CHARS:
         message = message[: ERROR_MESSAGE_MAX_CHARS - 1] + "…"
     return message
