@@ -2512,6 +2512,55 @@ function renderImportResults(response) {
 }
 
 // ---------- source templates ----------
+
+// Which service produces a template's feed. Aggy's own templates fetch the
+// site directly; the other two go through a bridge, and RSSHub's imported
+// catalog is large enough that saying so matters.
+const PROVIDER_BADGE = {
+  'Built-in': 'badge-primary',
+  'RSS-Bridge': 'badge-secondary',
+  'RSSHub': 'badge-accent',
+};
+
+// How the source will be read, when it isn't a plain feed.
+const KIND_BADGE = {
+  ytdlp: { label: 'Video', title: 'Read with yt-dlp: metadata only, nothing is downloaded' },
+  html: { label: 'Scraped', title: 'Read by applying CSS selectors to the page' },
+};
+
+function templateBadges(t) {
+  const badges = [];
+  if (t.provider) {
+    badges.push(h('span', {
+      class: `badge badge-sm ${PROVIDER_BADGE[t.provider] || 'badge-ghost'}`,
+      title: `Feed provided by ${t.provider}`,
+    }, t.provider));
+  }
+  const kind = KIND_BADGE[t.kind];
+  if (kind) {
+    badges.push(h('span', { class: 'badge badge-sm badge-outline', title: kind.title }, kind.label));
+  }
+  return badges;
+}
+
+// The line under a template's name: which site it pulls from, and what it
+// will ask for. Imported route names are often just "User posts", so the
+// domain is what tells two of them apart.
+function templateMeta(t) {
+  const bits = [];
+  if (t.site_domain) bits.push(t.site_domain);
+  const required = t.required_parameters || [];
+  if (required.length) {
+    bits.push(`needs ${required.join(', ')}`);
+  } else {
+    bits.push('no setup needed');
+  }
+  if (t.optional_parameter_count) {
+    bits.push(`${t.optional_parameter_count} optional`);
+  }
+  return h('div', { class: 'text-xs text-base-content/40 mt-0.5' }, bits.join(' · '));
+}
+
 function openAddSourceModal() {
   showModal('addSourceModal');
   clearTemplateSelection();
@@ -2535,7 +2584,10 @@ async function searchTemplates() {
         class: 'p-3 border-b border-base-300 last:border-b-0 cursor-pointer hover:bg-base-300 transition-colors',
         onclick: () => selectTemplate(t.name_hash),
       },
-        h('div', { class: 'font-medium text-sm' }, t.user_friendly_name || t.name),
+        h('div', { class: 'flex items-center gap-2 flex-wrap' },
+          h('span', { class: 'font-medium text-sm' }, t.user_friendly_name || t.name),
+          ...templateBadges(t)),
+        templateMeta(t),
         t.description && h('div', { class: 'text-xs text-base-content/50 line-clamp-2 mt-0.5' }, t.description))));
   } catch (err) {
     toast(err.message, 'alert-error');
@@ -2548,6 +2600,12 @@ async function selectTemplate(hash) {
     selectedTemplate = tmpl;
     // swap the modal from browse mode to a clean configure view
     $('addSourceTitle').textContent = `Configure ${tmpl.user_friendly_name || tmpl.name}`;
+    // keep the provenance visible while configuring: which service will fetch
+    // this, from which site, and how it will be read
+    render($('templateAbout'),
+      h('div', { class: 'flex items-center gap-2 flex-wrap' }, ...templateBadges(tmpl)),
+      tmpl.site_domain && h('div', { class: 'text-xs text-base-content/40 mt-1' }, tmpl.site_domain),
+      tmpl.description && h('div', { class: 'text-xs text-base-content/50 mt-1' }, tmpl.description));
     $('sourceTabs').classList.add('hidden');
     $('templateSearch').classList.add('hidden');
     $('templateList').classList.add('hidden');

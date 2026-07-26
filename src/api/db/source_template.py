@@ -5,6 +5,13 @@ import urllib
 import json
 from rapidfuzz import fuzz
 
+from constants import (
+    PROVIDER_BUILTIN,
+    PROVIDER_RANK,
+    PROVIDER_RSSHUB,
+    PROVIDER_RSS_BRIDGE,
+    RSSHUB_TEMPLATE_PREFIX,
+)
 from db.base import AggyBaseModel
 from config import config
 from utils import skip_limit_to_start_end
@@ -71,6 +78,46 @@ class SourceTemplate(AggyBaseModel):
         if self.context:
             return f"{self.name} ({self.context})"
         return self.name
+
+    @computed_field
+    @property
+    def provider(self) -> str:
+        """Which service produces this template's feed.
+
+        Derived from what the template already carries rather than stored, so
+        a re-import can't leave the label disagreeing with the template.
+        """
+        if not self.bridge_short_name:
+            return PROVIDER_BUILTIN
+        if self.bridge_short_name.startswith(RSSHUB_TEMPLATE_PREFIX):
+            return PROVIDER_RSSHUB
+        return PROVIDER_RSS_BRIDGE
+
+    @computed_field
+    @property
+    def site_domain(self) -> str:
+        """The site this template pulls from, e.g. "bilibili.com".
+
+        Imported route names are often just "User posts", which says nothing
+        about which site's users; the domain is what makes a result legible.
+        """
+        host = urllib.parse.urlparse(str(self.url)).netloc
+        return host[4:] if host.startswith("www.") else host
+
+    @computed_field
+    @property
+    def required_parameters(self) -> List[str]:
+        """Names of the values a user must supply before this can be saved."""
+        return [
+            parameter.name or key
+            for key, parameter in self.parameters.items()
+            if parameter.required
+        ]
+
+    @computed_field
+    @property
+    def optional_parameter_count(self) -> int:
+        return sum(1 for p in self.parameters.values() if not p.required)
 
     def validate_parameters(self, **kwargs) -> None:
         validation_issues = []
@@ -282,7 +329,12 @@ class SourceTemplate(AggyBaseModel):
         skip: Union[int, None] = None,
         limit: Union[int, None] = None,
     ) -> List["SourceTemplate"]:
-        templates = sorted(cls.read_all(), key=lambda t: t.user_friendly_name.lower())
+        def browse_order(t: "SourceTemplate"):
+            # Aggy's own handful of templates first, then rss-bridge, then
+            # RSSHub's thousands — otherwise browsing is just RSSHub.
+            return (PROVIDER_RANK.get(t.provider, 99), t.user_friendly_name.lower())
+
+        templates = sorted(cls.read_all(), key=browse_order)
         query = (query or "").strip().lower()
 
         if query:
@@ -290,14 +342,19 @@ class SourceTemplate(AggyBaseModel):
             def score(t: "SourceTemplate") -> float:
                 # description matches are weighted below name matches so a
                 # template whose name matches always outranks one where the
-                # query only appears in the description
+                # query only appears in the description. The provider and site
+                # are matchable too, so "rsshub" or a bare domain both work.
                 return max(
                     fuzz.WRatio(query, t.user_friendly_name.lower()),
+                    fuzz.WRatio(query, t.site_domain.lower()),
+                    fuzz.WRatio(query, t.provider.lower()),
                     fuzz.WRatio(query, (t.description or "").lower()) * 0.6,
                 )
 
+            # equal matches break toward the more reliable provider
             scored = sorted(
-                ((t, score(t)) for t in templates), key=lambda x: x[1], reverse=True
+                ((t, score(t)) for t in templates),
+                key=lambda x: (-x[1], PROVIDER_RANK.get(x[0].provider, 99)),
             )
             templates = [
                 t
