@@ -30,7 +30,8 @@ def ingest_source(source: Source) -> None:
 
     for candidate in candidates:
         # if the item already exists in the database, skip scraping
-        if candidate.exists():
+        already_stored = candidate.exists()
+        if already_stored:
             logging.info(f"Item already exists in database: {candidate.url}")
 
             # TODO check how long ago we ingested this item and re-ingest if it's been long enough
@@ -92,11 +93,17 @@ def ingest_source(source: Source) -> None:
             except Exception as e:
                 logging.error(f"Error adding image embedding to item: {e}")
 
-        # write item to db
+        # write item to db. An item already in the table is updated rather than
+        # inserted: create() refuses to overwrite, and treating that as a
+        # failure used to skip the attachment below — so an article another
+        # source had already stored never showed up in this one's feed.
         try:
-            final_item.create()
+            if already_stored:
+                final_item.update()
+            else:
+                final_item.create()
         except Exception as e:
-            logging.error(f"Error creating item: {e}")
+            logging.error(f"Error storing item {final_item.url}: {e}")
             continue
 
         source.add_items(final_item)

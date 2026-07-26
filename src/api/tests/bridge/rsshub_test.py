@@ -119,3 +119,108 @@ def test_a_non_json_catalog_is_survivable(monkeypatch):
     monkeypatch.setattr(rsshub.requests, "get", lambda *a, **kw: _HtmlResponse())
 
     rsshub.rsshub_get_templates_job()
+
+
+# ---------- what a route's parameters should tell the user ----------
+
+
+def test_example_values_are_read_out_of_the_routes_example(monkeypatch):
+    """Without these a user has to guess what a segment wants, and a wrong
+    guess is often accepted by the route and only fails when it's fetched."""
+    monkeypatch.setattr(rsshub, "_base_url", lambda: "http://rsshub:1200")
+
+    template = rsshub.route_to_template(
+        "example",
+        NAMESPACE,
+        "/user/:uid/:language?",
+        {"name": "User posts", "example": "/example/user/12345/en"},
+    )
+
+    assert template.parameters["uid"].example == "12345"
+    assert template.parameters["language"].example == "en"
+
+
+def test_example_values_are_url_decoded(monkeypatch):
+    monkeypatch.setattr(rsshub, "_base_url", lambda: "http://rsshub:1200")
+
+    template = rsshub.route_to_template(
+        "example",
+        NAMESPACE,
+        "/category/:path",
+        {"name": "Category", "example": "/example/category/videos%2Frecent"},
+    )
+
+    assert template.parameters["path"].example == "videos/recent"
+
+
+def test_a_shorter_example_leaves_the_rest_without_one(monkeypatch):
+    """Examples routinely omit optional trailing segments."""
+    monkeypatch.setattr(rsshub, "_base_url", lambda: "http://rsshub:1200")
+
+    template = rsshub.route_to_template(
+        "example",
+        NAMESPACE,
+        "/user/:uid/:language?",
+        {"name": "User posts", "example": "/example/user/12345"},
+    )
+
+    assert template.parameters["uid"].example == "12345"
+    assert template.parameters["language"].example is None
+
+
+def test_a_parameter_with_known_values_becomes_a_dropdown(monkeypatch):
+    """So a value the route would reject can't be typed in the first place."""
+    monkeypatch.setattr(rsshub, "_base_url", lambda: "http://rsshub:1200")
+
+    template = rsshub.route_to_template(
+        "example",
+        NAMESPACE,
+        "/user/:language",
+        {
+            "name": "User posts",
+            "parameters": {
+                "language": {
+                    "description": "site language",
+                    "default": "www",
+                    "options": [
+                        {"value": "www", "label": "English"},
+                        {"value": "de", "label": "German"},
+                    ],
+                }
+            },
+        },
+    )
+
+    parameter = template.parameters["language"]
+    assert parameter.type.value == "select"
+    assert parameter.options == {"www": "English", "de": "German"}
+    assert parameter.default == "www"
+
+
+def test_options_given_as_a_mapping_are_understood(monkeypatch):
+    monkeypatch.setattr(rsshub, "_base_url", lambda: "http://rsshub:1200")
+
+    template = rsshub.route_to_template(
+        "example",
+        NAMESPACE,
+        "/user/:sort",
+        {"name": "User posts", "parameters": {"sort": {"options": {"new": "Newest"}}}},
+    )
+
+    assert template.parameters["sort"].options == {"new": "Newest"}
+
+
+def test_a_plain_string_parameter_description_still_works(monkeypatch):
+    monkeypatch.setattr(rsshub, "_base_url", lambda: "http://rsshub:1200")
+
+    template = rsshub.route_to_template(
+        "example",
+        NAMESPACE,
+        "/user/:uid",
+        {"name": "User posts", "parameters": {"uid": "the user's numeric id"}},
+    )
+
+    parameter = template.parameters["uid"]
+    assert parameter.title == "the user's numeric id"
+    assert parameter.type.value == "text"
+    assert parameter.options is None

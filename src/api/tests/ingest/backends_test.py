@@ -5,6 +5,7 @@ from db.source import Source
 from ingest import source as ingest_source_module
 from ingest.backends import get_backend
 from ingest.backends import html as html_backend
+from ingest.backends import rss as rss_backend
 from ingest.backends import ytdlp as ytdlp_backend
 
 
@@ -293,3 +294,79 @@ def test_ingest_source_skips_scraping_for_backends_that_dont_want_it(
     ingest_source_module.ingest_source(existing_source)
 
     assert len(existing_source.query_items()) == 1
+
+
+def test_ingest_source_attaches_an_item_another_source_already_stored(
+    monkeypatch, existing_source, unique_item_strict
+):
+    """Items are shared across sources, so one already in the table still has
+    to be attached here — it used to be dropped as a failed insert, leaving
+    the second source's feed empty."""
+    unique_item_strict.create()
+    assert existing_source.query_items() == []
+
+    monkeypatch.setattr(
+        rss_backend,
+        "fetch_items",
+        lambda source: [ItemLoose(url=str(unique_item_strict.url))],
+    )
+    monkeypatch.setattr(
+        ingest_source_module.config, "get", lambda key, default=None: default
+    )
+    for scraper in ("ingest_open_graph_item", "ingest_mercury_item"):
+        monkeypatch.setattr(ingest_source_module, scraper, lambda item: None)
+
+    ingest_source_module.ingest_source(existing_source)
+
+    assert [str(i.url) for i in existing_source.query_items()] == [
+        str(unique_item_strict.url)
+    ]
+
+
+# ---------- surfacing why a feed failed ----------
+
+
+class _ErrorResponse:
+    def __init__(self, status_code, text, content_type="text/html"):
+        self.status_code = status_code
+        self.text = text
+        self.content = text.encode()
+        self.headers = {"Content-Type": content_type}
+
+
+def test_a_failed_feed_quotes_what_the_server_said(monkeypatch):
+    """ "HTTP 503" alone tells a user nothing; bridges put the actual reason
+    in the body."""
+    monkeypatch.setattr(
+        rss_backend.requests,
+        "get",
+        lambda *a, **kw: _ErrorResponse(
+            503, "<html><body><p>this route is empty</p></body></html>"
+        ),
+    )
+
+    with pytest.raises(Exception, match="this route is empty"):
+        rss_backend.fetch_items(
+            Source(
+                user_hash="user",
+                feed_hash="feed",
+                name="Example",
+                url="http://bridge.local/some/route",
+            )
+        )
+
+
+def test_a_failed_feed_with_an_empty_body_still_reports_its_status(monkeypatch):
+    monkeypatch.setattr(
+        rss_backend.requests, "get", lambda *a, **kw: _ErrorResponse(502, "   ")
+    )
+
+    with pytest.raises(Exception, match="HTTP 502"):
+        rss_backend.fetch_items(
+            Source(
+                user_hash="user",
+                feed_hash="feed",
+                name="Example",
+                url="http://bridge.local/some/route",
+            )
+        )
