@@ -297,9 +297,10 @@
 
     <!-- Template Tab -->
     <div id="sourceTabTemplate">
-      <input type="text" class="input input-bordered w-full mb-3" id="templateSearch" placeholder="Search templates (e.g. Reddit, YouTube...)">
+      <input type="text" class="input input-bordered w-full mb-3" id="templateSearch" placeholder="Search templates by name, site, or provider (Reddit, youtube.com, RSSHub...)">
       <div class="max-h-[60vh] overflow-y-auto border border-base-300 rounded-lg" id="templateList"></div>
       <div id="templateParams" class="hidden mt-3">
+        <div id="templateAbout" class="mb-3"></div>
         <div class="form-control mb-3">
           <label class="label" for="templateSourceName"><span class="label-text">Source Name</span></label>
           <input type="text" class="input input-bordered w-full" id="templateSourceName" placeholder="Give this source a name" required>

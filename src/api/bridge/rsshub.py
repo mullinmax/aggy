@@ -7,8 +7,9 @@ templates — so the routes become searchable in the same catalog as everything
 else instead of the user having to hand-write route paths.
 
 Imported templates are marked with a ``rsshub:`` prefix in
-``bridge_short_name`` so they can be told apart from rss-bridge's (and cleaned
-up when RSSHub goes away).
+``bridge_short_name`` so they can be told apart from rss-bridge's — which is
+what the catalog's provider label reads, and what lets them be cleaned up when
+RSSHub goes away.
 """
 
 import logging
@@ -18,10 +19,10 @@ from typing import Optional
 import requests
 
 from config import config
+from constants import RSSHUB_TEMPLATE_PREFIX as MARKER_PREFIX
 from db.base import get_db_con
 from db.source_template import SourceTemplate, SourceTemplateParameter
 
-MARKER_PREFIX = "rsshub:"
 CATALOG_TIMEOUT_SECONDS = 60
 # A route needing more than this many values is more of a form than a
 # template; the generic "RSSHub Route" template still covers it.
