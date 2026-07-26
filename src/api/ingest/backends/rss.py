@@ -5,6 +5,7 @@ from typing import List
 
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 
 from config import config
 from db.item import ItemLoose
@@ -22,6 +23,30 @@ def feed_headers() -> dict:
             "(self-hosted feed aggregator; +https://github.com/mullinmax/aggy)"
         )
     }
+
+
+# How much of a failed response to quote back. Enough for a bridge's one-line
+# explanation, not enough to put a stack trace in the sources list.
+ERROR_MESSAGE_MAX_CHARS = 300
+
+
+def _response_message(response) -> str:
+    """The human-readable part of a failed response body, if there is one."""
+    try:
+        body = response.text[:4000]
+    except Exception:
+        return ""
+    if not body.strip():
+        return ""
+
+    content_type = response.headers.get("Content-Type", "")
+    if "html" in content_type or body.lstrip().startswith("<"):
+        body = BeautifulSoup(body, "html.parser").get_text(" ", strip=True)
+
+    message = " ".join(body.split())
+    if len(message) > ERROR_MESSAGE_MAX_CHARS:
+        message = message[: ERROR_MESSAGE_MAX_CHARS - 1] + "…"
+    return message
 
 
 def fetch_items(source: Source) -> List[ItemLoose]:
@@ -43,7 +68,14 @@ def fetch_items(source: Source) -> List[ItemLoose]:
         raise Exception(f"Rate limited by feed server (HTTP 429{detail})")
 
     if response.status_code != 200:
-        raise Exception(f"Feed request returned HTTP {response.status_code}")
+        # Bridges put the real reason in the body — "this route is empty",
+        # "route not found", a stack trace — and the status code alone
+        # ("HTTP 503") tells a user nothing they can act on.
+        detail = _response_message(response)
+        raise Exception(
+            f"Feed request returned HTTP {response.status_code}"
+            + (f": {detail}" if detail else "")
+        )
 
     parsed = feedparser.parse(response.content)
     entries = parsed.entries
@@ -58,7 +90,9 @@ def fetch_items(source: Source) -> List[ItemLoose]:
     # item titled "Bridge returned error <code>! (<id>)". Treat that as a
     # failed ingest instead of ingesting the error as an article.
     bridge_errors = [
-        e for e in entries if str(e.get("title", "")).startswith("Bridge returned error")
+        e
+        for e in entries
+        if str(e.get("title", "")).startswith("Bridge returned error")
     ]
     if bridge_errors:
         raise Exception(f"rss-bridge failed: {bridge_errors[0].get('title')}")

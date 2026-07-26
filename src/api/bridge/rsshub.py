@@ -14,6 +14,7 @@ RSSHub goes away.
 
 import logging
 import re
+import urllib.parse
 from typing import Optional
 
 import requests
@@ -42,15 +43,61 @@ def _base_url() -> str:
     )
 
 
-def _parameter_description(raw, name: str) -> str:
-    """RSSHub describes parameters as either a string or an object."""
-    if isinstance(raw, dict):
-        entry = raw.get(name)
-        if isinstance(entry, dict):
-            return str(entry.get("description") or "")
-        if entry:
-            return str(entry)
-    return ""
+def _parameter_meta(raw, name: str) -> dict:
+    """What the catalog says about one route parameter.
+
+    RSSHub describes a parameter as either a bare description string or an
+    object that can also carry a default and the values it accepts. Returns
+    ``{description, default, options}`` with whatever was available.
+    """
+    meta = {"description": "", "default": None, "options": None}
+    entry = raw.get(name) if isinstance(raw, dict) else None
+
+    if isinstance(entry, str):
+        meta["description"] = entry
+        return meta
+    if not isinstance(entry, dict):
+        return meta
+
+    meta["description"] = str(entry.get("description") or "")
+    if entry.get("default") not in (None, ""):
+        meta["default"] = str(entry["default"])
+
+    options = entry.get("options")
+    if isinstance(options, dict):
+        meta["options"] = {str(k): str(v) for k, v in options.items()}
+    elif isinstance(options, list):
+        # [{value, label}, ...]
+        pairs = {
+            str(o["value"]): str(o.get("label") or o["value"])
+            for o in options
+            if isinstance(o, dict) and o.get("value") is not None
+        }
+        meta["options"] = pairs or None
+
+    return meta
+
+
+def _examples_from_route(namespace: str, path: str, example: str) -> dict:
+    """Per-parameter example values, read out of the route's example URL.
+
+    A route path like ``/user/:uid/:language?`` alongside the example
+    ``/example/user/12345/en`` gives ``{"uid": "12345", "language": "en"}``.
+    Without this a user has to guess what a segment wants, and a wrong guess
+    is often accepted by the route and only fails when the feed is fetched.
+    """
+    if not example:
+        return {}
+
+    route_segments = f"/{namespace}{path}".strip("/").split("/")
+    example_segments = example.strip("/").split("/")
+
+    examples = {}
+    for route_segment, example_segment in zip(route_segments, example_segments):
+        match = _PARAMETER_PATTERN.fullmatch(route_segment)
+        if match and example_segment:
+            examples[match.group(1)] = urllib.parse.unquote(example_segment)
+    return examples
 
 
 def route_to_template(
@@ -67,14 +114,22 @@ def route_to_template(
         return None
 
     raw_parameters = route.get("parameters") or {}
+    examples = _examples_from_route(namespace, path, str(route.get("example") or ""))
+
     parameters = {}
     for name, optional_marker in matches:
-        description = _parameter_description(raw_parameters, name)
+        meta = _parameter_meta(raw_parameters, name)
+        options = meta["options"]
         parameters[name] = SourceTemplateParameter(
             name=name.replace("_", " ").title(),
-            title=description,
+            title=meta["description"],
             required=optional_marker != "?",
-            type="text",
+            # a parameter with a known set of values becomes a dropdown, so a
+            # value the route would reject can't be typed in the first place
+            type="select" if options else "text",
+            options=options,
+            default=meta["default"],
+            example=examples.get(name),
             # each value is one path segment and must stay in its place
             quote="strict",
         )
