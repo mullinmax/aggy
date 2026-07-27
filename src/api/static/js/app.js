@@ -1109,7 +1109,15 @@ function streamPlayer(m, itemHash) {
         onclick: (ev) => ev.stopPropagation(),
       }));
     } catch (err) {
-      render(wrap, poster());
+      // Not every item has a rendition a browser can play, and a site can
+      // simply refuse the lookup. Offer the page itself rather than leaving
+      // a play button that does nothing.
+      render(wrap, poster(),
+        h('a', {
+          class: 'absolute inset-x-0 bottom-0 bg-base-100/90 text-xs text-primary px-3 py-2 flex items-center gap-1.5',
+          href: m.url, target: '_blank', rel: 'noopener',
+          onclick: (ev) => ev.stopPropagation(),
+        }, openInNewTabIcon(), h('span', {}, "Can't play here — open on the site")));
       toast(err.message, 'alert-error');
     } finally {
       wrap._loading = false;

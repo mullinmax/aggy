@@ -423,3 +423,104 @@ def test_an_unlabelled_error_body_is_quoted_as_is(monkeypatch):
                 url="http://bridge.local/some/route",
             )
         )
+
+
+# ---------- filling in what a listing pass didn't carry ----------
+
+
+def _new_video_item() -> ItemLoose:
+    return ItemLoose(
+        url="https://videos.example.com/watch/abc123",
+        title="An example upload",
+        domain="videos.example.com",
+        excerpt="An example upload",
+        content="An example upload",
+        media=[{"type": "stream", "url": "https://videos.example.com/watch/abc123"}],
+    )
+
+
+def test_a_new_item_without_a_thumbnail_is_looked_up(monkeypatch):
+    """Flat extraction is cheap because it never visits the items, so on many
+    sites an entry arrives with no picture at all."""
+    monkeypatch.setattr(ytdlp_backend, "is_configured", lambda: True)
+    monkeypatch.setattr(ytdlp_backend.config, "get", lambda key, default=None: "svc")
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        return _FakeResponse(
+            {
+                "thumbnail": "https://videos.example.com/thumbs/abc123.jpg",
+                "description": "A much better description",
+                "timestamp": 1767225600,
+            }
+        )
+
+    monkeypatch.setattr(ytdlp_backend.requests, "post", fake_post)
+
+    enriched = ytdlp_backend.enrich_new_item(_new_video_item())
+
+    assert captured["url"].endswith("/metadata")
+    assert enriched.image_url == "https://videos.example.com/thumbs/abc123.jpg"
+    # the player's poster is the same picture; without it the frame is blank
+    assert enriched.media[0]["poster"] == "https://videos.example.com/thumbs/abc123.jpg"
+    assert enriched.excerpt == "A much better description"
+    assert enriched.date_published.year == 2026
+
+
+def test_an_item_that_already_has_a_thumbnail_is_left_alone(monkeypatch):
+    monkeypatch.setattr(ytdlp_backend, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        ytdlp_backend.requests,
+        "post",
+        lambda *a, **kw: pytest.fail("should not have looked anything up"),
+    )
+
+    item = _new_video_item().model_copy(
+        update={"image_url": "https://videos.example.com/from-the-listing.jpg"}
+    )
+
+    assert ytdlp_backend.enrich_new_item(item) is None
+
+
+def test_a_failed_lookup_keeps_the_item_as_it_was(monkeypatch):
+    monkeypatch.setattr(ytdlp_backend, "is_configured", lambda: True)
+    monkeypatch.setattr(ytdlp_backend.config, "get", lambda key, default=None: "svc")
+    monkeypatch.setattr(
+        ytdlp_backend.requests,
+        "post",
+        lambda *a, **kw: _FakeResponse({}, status_code=422, text="no metadata"),
+    )
+
+    assert ytdlp_backend.enrich_new_item(_new_video_item()) is None
+
+
+def test_the_pipeline_only_enriches_items_it_has_not_seen(
+    monkeypatch, existing_source, unique_item_strict
+):
+    """The visit costs a request per article, so it happens once — not on
+    every check of the listing."""
+    unique_item_strict.create()
+    existing_source.kind = "ytdlp"
+
+    monkeypatch.setattr(
+        ytdlp_backend,
+        "fetch_items",
+        lambda source: [ItemLoose(url=str(unique_item_strict.url))],
+    )
+    monkeypatch.setattr(
+        ytdlp_backend,
+        "enrich_new_item",
+        lambda item: pytest.fail("a stored item should not be looked up again"),
+    )
+    monkeypatch.setattr(
+        ingest_source_module.config, "get", lambda key, default=None: default
+    )
+
+    ingest_source_module.ingest_source(existing_source)
+
+
+def test_a_backend_without_the_hook_is_fine(monkeypatch, existing_source):
+    """Only some backends have anything to add."""
+    assert get_backend("rss").enrich_new_item(_new_video_item()) is None

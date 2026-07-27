@@ -9,6 +9,7 @@ Adding a backend means writing a module with a ``fetch_items(source)`` and
 registering it here.
 """
 
+import logging
 from types import ModuleType
 from typing import List
 
@@ -30,6 +31,22 @@ class Backend:
     def fetch_items(self, source: Source) -> List[ItemLoose]:
         # looked up on the module per call, so a backend stays substitutable
         return self.module.fetch_items(source)
+
+    def enrich_new_item(self, item):
+        """A backend's own chance to top up an item it has just discovered.
+
+        Only called for items not already stored, so the cost is paid once per
+        article rather than on every check. Backends that have nothing to add
+        don't define it.
+        """
+        hook = getattr(self.module, "enrich_new_item", None)
+        if hook is None:
+            return None
+        try:
+            return hook(item)
+        except Exception as e:
+            logging.error(f"Enriching {item.url} failed: {e}")
+            return None
 
 
 BACKENDS = {
