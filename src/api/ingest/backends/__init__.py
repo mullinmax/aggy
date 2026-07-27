@@ -32,14 +32,14 @@ class Backend:
         # looked up on the module per call, so a backend stays substitutable
         return self.module.fetch_items(source)
 
-    def enrich_new_item(self, item):
-        """A backend's own chance to top up an item it has just discovered.
+    def enrich_item(self, item):
+        """A backend's own chance to top up an item.
 
-        Only called for items not already stored, so the cost is paid once per
-        article rather than on every check. Backends that have nothing to add
-        don't define it.
+        Called when an item is first seen, and again on an explicit
+        re-collect — never on every check, since it costs a request per
+        article. Backends with nothing to add don't define it.
         """
-        hook = getattr(self.module, "enrich_new_item", None)
+        hook = getattr(self.module, "enrich_item", None)
         if hook is None:
             return None
         try:

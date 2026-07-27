@@ -225,8 +225,13 @@ class ItemBase(AggyBaseModel):
     @classmethod
     def remove_html_tags(cls, v):
         if v:
-            return clean(
-                str(html.unescape(v)), tags=[], attributes={}, strip=True
+            # Unescape last: clean() escapes as part of sanitizing, so
+            # unescaping first only fed it an "&" to turn back into "&amp;",
+            # and the entity was displayed literally. These fields are
+            # rendered as text, never as markup, so plain characters are what
+            # they should hold.
+            return html.unescape(
+                clean(str(v), tags=[], attributes={}, strip=True)
             ).strip()
         return v
 

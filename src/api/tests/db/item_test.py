@@ -531,3 +531,34 @@ def test_fetch_image_rejects_non_image_response(
 
     with pytest.raises(ValueError, match="text/html"):
         ItemStrict._fetch_image_base64("https://preview.redd.it/a.jpg")
+
+def test_titles_keep_their_ampersands(unique_item_strict):
+    """Sanitizing escapes as it goes, so unescaping first only handed it an
+    "&" to turn back into "&amp;" — which was then shown literally."""
+    item = unique_item_strict.model_copy(
+        update={"title": "Rock &amp; Roll &mdash; a history"}
+    )
+    item = ItemStrict(**item.dict())
+
+    assert item.title == "Rock & Roll — a history"
+
+
+def test_titles_still_have_their_markup_stripped(unique_item_strict):
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={"title": "<b>Bold</b> and <i>italic</i>"}
+        ).dict()
+    )
+
+    assert item.title == "Bold and italic"
+
+
+def test_excerpts_and_authors_are_unescaped_too(unique_item_strict):
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={"excerpt": "Ben &amp; Jerry", "author": "R&amp;D team"}
+        ).dict()
+    )
+
+    assert item.excerpt == "Ben & Jerry"
+    assert item.author == "R&D team"

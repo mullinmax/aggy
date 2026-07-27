@@ -93,7 +93,7 @@ def ingest_source(source: Source) -> None:
 
             # the backend's own turn to fill gaps, now that we know this
             # article is new and worth spending a request on
-            final_item = backend.enrich_new_item(final_item) or final_item
+            final_item = backend.enrich_item(final_item) or final_item
 
         embedded_before = _embedded_models(final_item)
 

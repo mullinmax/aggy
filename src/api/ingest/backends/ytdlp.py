@@ -148,7 +148,7 @@ def fetch_items(source: Source) -> List[ItemLoose]:
     return [item for item in items if item is not None]
 
 
-def enrich_new_item(item):
+def enrich_item(item):
     """Fill in what a listing pass didn't carry, for an item just discovered.
 
     Flat extraction is cheap because it never visits the items themselves, so
