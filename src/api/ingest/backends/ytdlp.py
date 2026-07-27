@@ -148,6 +148,64 @@ def fetch_items(source: Source) -> List[ItemLoose]:
     return [item for item in items if item is not None]
 
 
+def enrich_new_item(item):
+    """Fill in what a listing pass didn't carry, for an item just discovered.
+
+    Flat extraction is cheap because it never visits the items themselves, so
+    on many sites an entry arrives with a URL and a title and nothing else —
+    no thumbnail, which leaves a card with an empty frame. This visits the
+    item once, the first time it's seen, and is skipped entirely when the
+    listing already gave us a picture.
+    """
+    if not is_configured() or item.image_url:
+        return None
+
+    try:
+        response = requests.post(
+            _service_url("/metadata"),
+            json={"url": str(item.url)},
+            timeout=EXTRACT_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            logging.info(
+                f"No metadata for {item.url} "
+                f"(HTTP {response.status_code}); keeping the listing's version"
+            )
+            return None
+        data = response.json()
+    except (requests.RequestException, ValueError) as e:
+        logging.warning(f"Metadata lookup failed for {item.url}: {e}")
+        return None
+
+    thumbnail = data.get("thumbnail")
+    if not thumbnail:
+        return None
+
+    updates = {"image_url": thumbnail}
+
+    # the stream entry's poster is the same picture; without it the player
+    # shows a blank box until it's told to play
+    if item.media:
+        updates["media"] = [
+            {**entry, "poster": entry.get("poster") or thumbnail}
+            if entry.get("type") == "stream"
+            else entry
+            for entry in item.media
+        ]
+
+    if item.date_published is None:
+        published = _published(data)
+        if published is not None:
+            updates["date_published"] = published
+
+    description = (data.get("description") or "").strip()
+    if description and item.excerpt == item.title:
+        updates["excerpt"] = description
+        updates["content"] = description
+
+    return item.model_copy(update=updates)
+
+
 def resolve_stream(url: str, cookie: Optional[str] = None) -> dict:
     """A currently-playable media URL for a page URL.
 
@@ -166,5 +224,7 @@ def resolve_stream(url: str, cookie: Optional[str] = None) -> dict:
     )
     if response.status_code != 200:
         detail = response.text.strip()[:300]
-        raise Exception(f"Could not resolve a playable URL (HTTP {response.status_code}): {detail}")
+        raise Exception(
+            f"Could not resolve a playable URL (HTTP {response.status_code}): {detail}"
+        )
     return response.json()

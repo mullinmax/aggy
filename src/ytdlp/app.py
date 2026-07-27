@@ -34,6 +34,11 @@ BASE_OPTIONS = {
     "noprogress": True,
     # keep one bad entry in a listing from failing the whole page
     "ignoreerrors": True,
+    # Sites throttle, and a stalled TLS handshake otherwise hangs for the
+    # whole request budget and then fails the item outright.
+    "socket_timeout": 30,
+    "retries": 3,
+    "extractor_retries": 2,
 }
 
 
@@ -165,6 +170,44 @@ def extract(request: ExtractRequest) -> dict:
     return {
         "title": info.get("title"),
         "entries": [entry for entry in entries if entry][:limit],
+    }
+
+
+@app.post("/metadata")
+def metadata(request: ResolveRequest) -> dict:
+    """One item's own metadata, without resolving playable formats.
+
+    A flat listing pass is cheap precisely because it doesn't visit each
+    item, so on many sites it carries nothing but a URL and a title. This
+    fills in the rest — thumbnail above all — for an item worth the visit.
+    Format selection is skipped, so it still answers for items that have no
+    rendition a browser could play.
+    """
+    _validate(request.url)
+
+    try:
+        with YoutubeDL(_options(request.cookie, noplaylist=True)) as ydl:
+            info = ydl.extract_info(request.url, download=False, process=False)
+            info = ydl.sanitize_info(info)
+    except DownloadError as e:
+        raise HTTPException(status_code=422, detail=str(e)[:500])
+    except Exception as e:
+        logging.exception(f"metadata lookup failed for {request.url}")
+        raise HTTPException(status_code=500, detail=str(e)[:500])
+
+    if not info:
+        raise HTTPException(status_code=422, detail="Nothing could be extracted")
+
+    return {
+        "url": _entry_url(info) or request.url,
+        "title": info.get("title"),
+        "description": info.get("description"),
+        "uploader": info.get("uploader") or info.get("channel"),
+        "thumbnail": _best_thumbnail(info),
+        "duration": info.get("duration"),
+        "timestamp": info.get("timestamp"),
+        "upload_date": info.get("upload_date"),
+        "view_count": info.get("view_count"),
     }
 
 
