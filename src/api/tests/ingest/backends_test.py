@@ -459,7 +459,7 @@ def test_a_new_item_without_a_thumbnail_is_looked_up(monkeypatch):
 
     monkeypatch.setattr(ytdlp_backend.requests, "post", fake_post)
 
-    enriched = ytdlp_backend.enrich_new_item(_new_video_item())
+    enriched = ytdlp_backend.enrich_item(_new_video_item())
 
     assert captured["url"].endswith("/metadata")
     assert enriched.image_url == "https://videos.example.com/thumbs/abc123.jpg"
@@ -481,7 +481,7 @@ def test_an_item_that_already_has_a_thumbnail_is_left_alone(monkeypatch):
         update={"image_url": "https://videos.example.com/from-the-listing.jpg"}
     )
 
-    assert ytdlp_backend.enrich_new_item(item) is None
+    assert ytdlp_backend.enrich_item(item) is None
 
 
 def test_a_failed_lookup_keeps_the_item_as_it_was(monkeypatch):
@@ -493,7 +493,7 @@ def test_a_failed_lookup_keeps_the_item_as_it_was(monkeypatch):
         lambda *a, **kw: _FakeResponse({}, status_code=422, text="no metadata"),
     )
 
-    assert ytdlp_backend.enrich_new_item(_new_video_item()) is None
+    assert ytdlp_backend.enrich_item(_new_video_item()) is None
 
 
 def test_the_pipeline_only_enriches_items_it_has_not_seen(
@@ -511,7 +511,7 @@ def test_the_pipeline_only_enriches_items_it_has_not_seen(
     )
     monkeypatch.setattr(
         ytdlp_backend,
-        "enrich_new_item",
+        "enrich_item",
         lambda item: pytest.fail("a stored item should not be looked up again"),
     )
     monkeypatch.setattr(
@@ -523,4 +523,4 @@ def test_the_pipeline_only_enriches_items_it_has_not_seen(
 
 def test_a_backend_without_the_hook_is_fine(monkeypatch, existing_source):
     """Only some backends have anything to add."""
-    assert get_backend("rss").enrich_new_item(_new_video_item()) is None
+    assert get_backend("rss").enrich_item(_new_video_item()) is None

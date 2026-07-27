@@ -5,6 +5,7 @@ from db.base import get_db_con
 from db.feed import Feed
 from db.item import ItemLoose
 from db.source import Source
+from ingest.backends import get_backend
 from ingest.source import ingest_source
 from ingest.item.reddit import ingest_reddit_item
 from ingest.item.open_graph import ingest_open_graph_item
@@ -128,6 +129,7 @@ def rescrape_source(source: Source) -> None:
     """
     from ranking.engine import rank_feed  # local import avoids an import cycle
 
+    backend = get_backend(source.kind)
     embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
     image_embed_host = config.get("IMAGE_EMBED_HOST", None)
     image_embed_model = config.get("IMAGE_EMBED_MODEL")
@@ -137,31 +139,37 @@ def rescrape_source(source: Source) -> None:
         try:
             before = {f: getattr(item, f) for f in _RESCRAPE_FIELDS}
 
-            merged = ItemLoose.merge_instances(
-                items=[
-                    item,
-                    ingest_reddit_item(item),
-                    ingest_open_graph_item(item),
-                    ingest_mercury_item(item),
-                ]
-            )
+            if backend.enrich:
+                merged = ItemLoose.merge_instances(
+                    items=[
+                        item,
+                        ingest_reddit_item(item),
+                        ingest_open_graph_item(item),
+                        ingest_mercury_item(item),
+                    ]
+                )
+            else:
+                # the generic scrapers have nothing to offer a backend that
+                # says so, and the sites it reaches refuse them anyway
+                merged = ItemLoose(**item.dict())
             # merge_instances doesn't carry embeddings over; keep the existing
             # ones so a re-scrape never drops them
             merged.embeddings = item.embeddings
             merged.image_embeddings = item.image_embeddings
 
+            # a re-collect is the one other time a backend gets to top an item
+            # up, which is how items stored before it could do so get their
+            # pictures
+            merged = backend.enrich_item(merged) or merged
+
             after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
-            text_changed = any(
-                after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS
-            )
+            text_changed = any(after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS)
             image_changed = after["image_url"] != before["image_url"]
 
             embedding_changed = False
             if text_changed and embedding_model is not None:
                 try:
-                    merged.add_embedding(
-                        model_name=embedding_model, force_refresh=True
-                    )
+                    merged.add_embedding(model_name=embedding_model, force_refresh=True)
                     embedding_changed = merged.embeddings != item.embeddings
                 except Exception as e:
                     logging.error(f"Error re-embedding item {item.url}: {e}")
@@ -196,7 +204,9 @@ def rescrape_source(source: Source) -> None:
         try:
             rank_feed(feed)
         except Exception as e:
-            logging.exception(f"Re-ranking feed {feed.name} after re-scrape failed: {e}")
+            logging.exception(
+                f"Re-ranking feed {feed.name} after re-scrape failed: {e}"
+            )
 
     logging.info(
         f"Re-scraped source '{source.name}': "
@@ -253,4 +263,6 @@ def backfill_image_embeddings_job() -> None:
         except Exception as e:
             logging.error(f"Error backfilling image embedding for {item.url}: {e}")
 
-    logging.info(f"Image embedding backfill complete: {done}/{len(url_hashes)} embedded.")
+    logging.info(
+        f"Image embedding backfill complete: {done}/{len(url_hashes)} embedded."
+    )

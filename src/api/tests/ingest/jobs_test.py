@@ -1,3 +1,5 @@
+import pytest
+
 from config import config
 from db.item import ItemLoose, ItemStrict
 from ingest import jobs
@@ -56,9 +58,7 @@ def test_rescrape_source_skips_unchanged_item(
     assert ranked == []
 
 
-def test_backfill_image_embeddings_embeds_missing(
-    monkeypatch, existing_item_strict
-):
+def test_backfill_image_embeddings_embeds_missing(monkeypatch, existing_item_strict):
     """The backfill embeds stored items whose preview image has no embedding for
     the current model, and persists the result."""
     config.set("IMAGE_EMBED_HOST", "image-embed")
@@ -92,3 +92,46 @@ def test_backfill_image_embeddings_noop_without_service(
     jobs.backfill_image_embeddings_job()
 
     assert called == []
+
+
+def test_rescrape_backfills_a_backends_own_metadata(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """Items stored before the backend could top them up have no picture;
+    a re-collect is how they get one."""
+    existing_source.kind = "ytdlp"
+    existing_item_strict.update(image_url=None, media=[{"type": "stream", "url": "x"}])
+
+    from ingest.backends import ytdlp as ytdlp_backend
+
+    monkeypatch.setattr(
+        ytdlp_backend,
+        "enrich_item",
+        lambda item: item.model_copy(
+            update={"image_url": "https://videos.example.com/thumb.jpg"}
+        ),
+    )
+    monkeypatch.setattr(jobs.config, "get", lambda key, default=None: default)
+    monkeypatch.setattr("ranking.engine.rank_feed", lambda feed: None)
+
+    jobs.rescrape_source(existing_source)
+
+    assert (
+        ItemStrict.read(url_hash=existing_item_strict.url_hash).image_url
+        == "https://videos.example.com/thumb.jpg"
+    )
+
+
+def test_rescrape_skips_the_generic_scrapers_for_backends_that_refuse_them(
+    monkeypatch, existing_source, existing_item_strict
+):
+    existing_source.kind = "ytdlp"
+
+    for scraper in ("ingest_open_graph_item", "ingest_mercury_item"):
+        monkeypatch.setattr(
+            jobs, scraper, lambda item: pytest.fail("should not have scraped")
+        )
+    monkeypatch.setattr(jobs.config, "get", lambda key, default=None: default)
+    monkeypatch.setattr("ranking.engine.rank_feed", lambda feed: None)
+
+    jobs.rescrape_source(existing_source)
