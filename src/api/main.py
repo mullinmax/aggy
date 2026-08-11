@@ -1,5 +1,6 @@
 import os
 import threading
+import warnings
 
 # Guard against the musl/OpenBLAS segfault on alpine: BLAS must not spawn
 # its own worker threads (they get musl's 128KB stack and crash on big
@@ -45,13 +46,36 @@ from ranking.engine import feed_ranking_job
 # Scheduler instance
 scheduler = AsyncIOScheduler()
 
+# HS256 wants a key at least as long as its 32-byte digest; PyJWT warns about
+# a shorter one on every single encode and decode, which in practice means a
+# multi-line warning per authenticated request. Say it once, loudly, at start
+# up instead -- the operator fixes this by setting a longer JWT_SECRET, and
+# repeating it on every request only hides the rest of the log.
+_MIN_JWT_SECRET_BYTES = 32
+
+
+def check_jwt_secret() -> None:
+    """Fail fast on a missing JWT_SECRET, warn once on a too-short one."""
+    from jwt.warnings import InsecureKeyLengthWarning
+
+    secret = config.get("JWT_SECRET")
+
+    if len(str(secret).encode()) < _MIN_JWT_SECRET_BYTES:
+        logging.warning(
+            f"JWT_SECRET is shorter than {_MIN_JWT_SECRET_BYTES} bytes, which "
+            "is below the minimum recommended for "
+            f"{config.get('JWT_ALGORITHM')}. Set a longer secret (e.g. "
+            "`openssl rand -hex 32`); doing so signs users out once."
+        )
+        warnings.filterwarnings("ignore", category=InsecureKeyLengthWarning)
+
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     logging.info("API starting up...")
 
     # Fail fast on missing critical config instead of erroring on first login.
-    config.get("JWT_SECRET")
+    check_jwt_secret()
 
     try:
         create_builtin_source_templates()

@@ -5,16 +5,38 @@ import logging
 import dateparser
 import httpx
 from bleach import clean
-from typing import Optional, List, Dict
+from typing import ClassVar, Optional, List, Dict
 import html
 import json
+import warnings
 from urllib.parse import urljoin, urlparse, urlunparse
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from config import config
 from .base import AggyBaseModel
 from typing_extensions import Annotated
 from utils import get_ollama_connection
+
+# Item content is whatever the feed gave us, and plenty of feeds put a bare URL
+# in the description. Running it through the sanitizer is correct -- there's
+# just nothing to parse -- but BeautifulSoup warns that it "looks more like a
+# URL than HTML", once per item, which buries real ingest errors in the log.
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
+
+
+# Ollama rejects an over-long embedding prompt with a 500 whose message names
+# the context length; it has no dedicated error type to catch instead.
+_CONTEXT_LENGTH_ERROR_MARKERS = (
+    "exceeds the context length",
+    "input length exceeds",
+    "input is too large",
+    "too large to process",
+)
+
+
+def _is_context_length_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in _CONTEXT_LENGTH_ERROR_MARKERS)
 
 
 def _fetch_error_detail(error: Exception) -> str:
@@ -211,7 +233,16 @@ class ItemBase(AggyBaseModel):
     # average ~4 chars/token for prose, but dense content (URLs, code,
     # markup) can be ~3, so we budget at 3 to guarantee the character-capped
     # prompt stays under the token context window.
-    _CHARS_PER_TOKEN = 3
+    #
+    # Annotated ClassVar so these stay plain class attributes: pydantic turns
+    # an unannotated underscore-prefixed attribute into a private attribute
+    # descriptor, which reads back as a ModelPrivateAttr off the class.
+    _CHARS_PER_TOKEN: ClassVar[int] = 3
+    # How many times to halve the prompt when the estimate above turns out to
+    # have been too generous anyway. Each retry costs one Ollama round trip,
+    # and four halvings take even a full context window down to a sixteenth of
+    # its size, which no realistic tokenizer overshoots.
+    _EMBEDDING_SHRINK_ATTEMPTS: ClassVar[int] = 4
 
     def embedding_prompt(self, num_ctx: int) -> str:
         """The text embedded for this item, truncated so it fits the model's
@@ -238,14 +269,34 @@ class ItemBase(AggyBaseModel):
         # get the embedding
         ollama_embedding_model = config.get("OLLAMA_EMBEDDING_MODEL")
         num_ctx = config.get_int("OLLAMA_EMBEDDING_NUM_CTX")
-        embedding = ollama.embeddings(
-            model=ollama_embedding_model,
-            prompt=self.embedding_prompt(num_ctx),
-            # num_batch must match num_ctx: an embedding prompt is processed in
-            # one batch, so a small physical batch (Ollama's 2048 default)
-            # rejects longer inputs even when the context window is large.
-            options={"num_ctx": num_ctx, "num_batch": num_ctx},
-        )["embedding"]
+        prompt = self.embedding_prompt(num_ctx)
+
+        # embedding_prompt caps the prompt by characters, which is only an
+        # estimate of its token count -- text that tokenizes densely (CJK,
+        # base64, long URLs) can still overflow the window and come back as a
+        # 500. Halve and retry rather than leave the item unembedded forever:
+        # a shortened embedding is a far better signal than none at all.
+        for attempt in range(self._EMBEDDING_SHRINK_ATTEMPTS + 1):
+            try:
+                embedding = ollama.embeddings(
+                    model=ollama_embedding_model,
+                    prompt=prompt,
+                    # num_batch must match num_ctx: an embedding prompt is
+                    # processed in one batch, so a small physical batch
+                    # (Ollama's 2048 default) rejects longer inputs even when
+                    # the context window is large.
+                    options={"num_ctx": num_ctx, "num_batch": num_ctx},
+                )["embedding"]
+                break
+            except Exception as e:
+                too_long = _is_context_length_error(e)
+                if not too_long or attempt == self._EMBEDDING_SHRINK_ATTEMPTS:
+                    raise
+                prompt = prompt[: len(prompt) // 2]
+                logging.warning(
+                    f"Embedding prompt for {self.url} exceeded the model's "
+                    f"context window; retrying with {len(prompt)} characters"
+                )
 
         # add the embedding to self
         self.embeddings[ollama_embedding_model] = embedding

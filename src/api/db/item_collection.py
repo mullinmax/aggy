@@ -41,14 +41,26 @@ class ItemCollection(AggyBaseModel):
         return [ItemStrict.from_row(row) for row in rows if row]
 
     def add_items(self, items: Union[ItemStrict, List[ItemStrict]]) -> None:
+        """Link items to this collection, leaving any already linked alone.
+
+        Adding is not scoring: an item this collection already holds keeps the
+        score ranking gave it. Ingest re-links every entry it sees on every
+        check (that's how an item another feed scraped first gets attached),
+        so overwriting here would reset the whole feed to zero each pass.
+        """
         if isinstance(items, ItemStrict):
             items = [items]
         if not isinstance(items, list):
             raise ValueError(f"Invalid type for items: {type(items)}")
 
-        self.set_items_scores({item.url_hash: 0 for item in items})
+        self._upsert_items_scores(
+            {item.url_hash: 0 for item in items}, overwrite=False
+        )
 
     def set_items_scores(self, items: dict[str, float]) -> None:
+        self._upsert_items_scores(items, overwrite=True)
+
+    def _upsert_items_scores(self, items: dict[str, float], overwrite: bool) -> None:
         if not items:
             return
         cols, key_params = self._collection_keys()
@@ -59,10 +71,12 @@ class ItemCollection(AggyBaseModel):
             params.append(url_hash)
             params.append(float(score))
         col_list = ", ".join(cols + ["item_url_hash", "score"])
+        conflict = (
+            "DO UPDATE SET score = EXCLUDED.score" if overwrite else "DO NOTHING"
+        )
         sql = (
             f"INSERT INTO {self._items_table} ({col_list}) VALUES {placeholders} "
-            f"ON CONFLICT ({', '.join(cols + ['item_url_hash'])}) DO UPDATE "
-            f"SET score = EXCLUDED.score"
+            f"ON CONFLICT ({', '.join(cols + ['item_url_hash'])}) {conflict}"
         )
         with self.db_con() as cur:
             cur.execute(sql, params)

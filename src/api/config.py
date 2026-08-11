@@ -42,6 +42,9 @@ KNOWN_CONFIG_VALUES = [
     "REDDIT_MIN_REQUEST_INTERVAL_SECONDS",
     "REDDIT_MAX_REQUEST_INTERVAL_SECONDS",
     "REDDIT_INITIAL_REQUEST_INTERVAL_SECONDS",
+    "REDDIT_BLOCK_THRESHOLD",
+    "REDDIT_BLOCK_COOLDOWN_SECONDS",
+    "REDDIT_MAX_BLOCK_COOLDOWN_SECONDS",
 ]
 
 DEFAULT_CONFIG = {
@@ -103,6 +106,14 @@ DEFAULT_CONFIG = {
     "REDDIT_MIN_REQUEST_INTERVAL_SECONDS": 2.0,
     "REDDIT_MAX_REQUEST_INTERVAL_SECONDS": 900.0,
     "REDDIT_INITIAL_REQUEST_INTERVAL_SECONDS": 5.0,
+    # Reddit answers HTTP 403 ("Blocked") to endpoints it won't serve this host
+    # at all -- typically the .json API from a datacenter IP, while the public
+    # RSS feeds keep working. Waiting between those requests doesn't help, so
+    # this many consecutive 403s stops that kind of request for a cooldown
+    # instead, doubling on each re-trip up to the ceiling. Values are seconds.
+    "REDDIT_BLOCK_THRESHOLD": 3,
+    "REDDIT_BLOCK_COOLDOWN_SECONDS": 900.0,
+    "REDDIT_MAX_BLOCK_COOLDOWN_SECONDS": 21600.0,
 }
 
 FALSEY_STRINGS = {"", "0", "false", "no", "off"}

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from config import config
 from db.item import ItemLoose
-from ingest.reddit_rate_limit import reddit_get
+from ingest.reddit_rate_limit import RedditBlocked, reddit_get
 
 # A reddit post's comments page, which is what reddit RSS uses as the entry
 # link, e.g. https://www.reddit.com/r/pics/comments/abc123/title/
@@ -189,6 +189,12 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         )
         response.raise_for_status()
         post = response.json()[0]["data"]["children"][0]["data"]
+    except RedditBlocked:
+        # The circuit breaker already logged why it opened; every post in every
+        # feed hitting the same wall isn't worth a line each. Media stays
+        # unset, so these posts are retried once reddit serves the API again.
+        logging.debug(f"Skipped reddit post data for {url}: API blocked")
+        return None
     except Exception as e:
         logging.warning(f"Could not fetch reddit post data for {url}: {e}")
         return None

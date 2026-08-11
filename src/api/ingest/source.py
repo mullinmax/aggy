@@ -13,6 +13,19 @@ from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 
 
+def _embedded_models(item: ItemStrict) -> tuple:
+    """Which models this item already carries embeddings for.
+
+    Compared before and after the embedding step to tell whether an ingest
+    pass actually added anything to an item that was already stored, so a feed
+    full of unchanged items doesn't rewrite every row on every check.
+    """
+    return (
+        tuple(sorted(item.embeddings or {})),
+        tuple(sorted(item.image_embeddings or {})),
+    )
+
+
 def ingest_source(source: Source) -> None:
     # Fetch the feed ourselves so failures produce a useful error instead of
     # feedparser silently returning zero entries (rss-bridge answers bad
@@ -63,12 +76,15 @@ def ingest_source(source: Source) -> None:
 
     feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
     ingested_url_hashes: list[str] = []
+    new_items = 0
+    stored_items = 0
 
     for entry in entries:
         # if the item already exists in the database, skip scraping
         temp_item = ItemLoose(url=entry.link)
-        if temp_item.exists():
-            logging.info(f"Item already exists in database: {entry.link}")
+        already_stored = temp_item.exists()
+        if already_stored:
+            stored_items += 1
 
             # TODO check how long ago we ingested this item and re-ingest if it's been long enough
             final_item = ItemStrict.read(url_hash=temp_item.url_hash)
@@ -87,6 +103,7 @@ def ingest_source(source: Source) -> None:
                         image_url=reddit_item.image_url or final_item.image_url,
                     )
         else:
+            new_items += 1
             rss_item = ingest_rss_item(entry)
             # reddit's post JSON has full-res images, gifs, videos, and
             # galleries that the RSS feed only thumbnails; merge it in ahead
@@ -108,6 +125,8 @@ def ingest_source(source: Source) -> None:
                 # TODO make sure we don't attempt this url over and over
                 continue
 
+        embedded_before = _embedded_models(final_item)
+
         # generate embedding if a model is configured and it doesn't exist yet
         embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
         if embedding_model is not None:
@@ -126,16 +145,32 @@ def ingest_source(source: Source) -> None:
             except Exception as e:
                 logging.error(f"Error adding image embedding to item: {e}")
 
-        # write item to db
+        # Write the item to the db. An item that was already stored is updated
+        # in place, and only when this pass actually produced an embedding it
+        # didn't have -- calling create() on it raises "already exists", which
+        # used to abort the rest of this loop body: the item never got linked
+        # to this source and feed, and any embedding just computed for it was
+        # thrown away and recomputed from scratch on every later check.
         try:
-            final_item.create()
+            if not already_stored:
+                final_item.create()
+            elif _embedded_models(final_item) != embedded_before:
+                final_item.update()
         except Exception as e:
-            logging.error(f"Error creating item: {e}")
+            logging.error(f"Error saving item {final_item.url}: {e}")
             continue
 
+        # Linking is idempotent, so re-running it for an item this source
+        # already carries is a no-op -- but it's what attaches items that
+        # another feed ingested first, which no later pass would fix.
         source.add_items(final_item)
         feed.add_items(final_item)
         ingested_url_hashes.append(final_item.url_hash)
+
+    logging.info(
+        f"Source '{source.name}': {new_items} new item(s), "
+        f"{stored_items} already stored"
+    )
 
     # Mirror everything this source produced into any feed that uses this feed
     # as a source (and on down the chain). Cheap no-op for items already there.

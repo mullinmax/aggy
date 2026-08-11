@@ -205,6 +205,71 @@ def test_add_embedding_expands_context_and_batch(unique_item_strict, monkeypatch
     assert unique_item_strict.embeddings["nomic-embed-text"] == [0.1, 0.2, 0.3]
 
 
+def test_add_embedding_shrinks_prompt_when_ollama_rejects_it(
+    unique_item_strict, monkeypatch
+):
+    """The character budget is only an estimate of the token count, so a dense
+    item can still overflow the window. Halve and retry rather than leave the
+    item permanently unembedded."""
+    config.set("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    config.set("OLLAMA_EMBEDDING_NUM_CTX", 8192)
+
+    prompts = []
+
+    def embeddings(model, prompt, options):
+        prompts.append(prompt)
+        if len(prompts) < 3:
+            raise RuntimeError(
+                "the input length exceeds the context length (status code: 500)"
+            )
+        return {"embedding": [0.4]}
+
+    fake_client = MagicMock()
+    fake_client.embeddings.side_effect = embeddings
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    unique_item_strict.add_embedding("nomic-embed-text")
+
+    assert len(prompts[1]) == len(prompts[0]) // 2
+    assert len(prompts[2]) == len(prompts[1]) // 2
+    assert unique_item_strict.embeddings["nomic-embed-text"] == [0.4]
+
+
+def test_add_embedding_does_not_retry_unrelated_errors(unique_item_strict, monkeypatch):
+    """Only an over-long prompt is worth shrinking; a model that isn't pulled
+    or a service that's down should surface immediately."""
+    config.set("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    config.set("OLLAMA_EMBEDDING_NUM_CTX", 8192)
+
+    fake_client = MagicMock()
+    fake_client.embeddings.side_effect = RuntimeError("model not found")
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    with pytest.raises(RuntimeError, match="model not found"):
+        unique_item_strict.add_embedding("nomic-embed-text")
+
+    fake_client.embeddings.assert_called_once()
+
+
+def test_add_embedding_gives_up_after_shrinking(unique_item_strict, monkeypatch):
+    """An item that never fits raises rather than looping forever."""
+    config.set("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    config.set("OLLAMA_EMBEDDING_NUM_CTX", 8192)
+
+    fake_client = MagicMock()
+    fake_client.embeddings.side_effect = RuntimeError(
+        "the input length exceeds the context length"
+    )
+    monkeypatch.setattr("db.item.get_ollama_connection", lambda: fake_client)
+
+    with pytest.raises(RuntimeError):
+        unique_item_strict.add_embedding("nomic-embed-text")
+
+    assert (
+        fake_client.embeddings.call_count == ItemStrict._EMBEDDING_SHRINK_ATTEMPTS + 1
+    )
+
+
 def test_add_embedding_skips_when_already_present(unique_item_strict, monkeypatch):
     """An existing embedding for the model is not recomputed unless forced."""
     fake_client = MagicMock()
