@@ -106,14 +106,17 @@ async def app_lifespan(app: FastAPI):
         replace_existing=False,
     )
 
-    # embed any preview images scraped before the image service existed, once at
-    # start up (no-op when the service isn't configured)
+    # embed preview images that have no embedding yet — items scraped before the
+    # image service existed, and items whose image download failed earlier. Runs
+    # at start up and then on an interval, since a failed fetch is worth
+    # retrying (no-op when the service isn't configured)
     scheduler.add_job(
         func=backfill_image_embeddings_job,
-        trigger="date",
-        run_date=datetime.now(),
+        trigger="interval",
+        seconds=60 * config.get_int("IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES"),
         id="backfill_image_embeddings_job",
         replace_existing=False,
+        next_run_time=datetime.now(),
     )
 
     scheduler.start()

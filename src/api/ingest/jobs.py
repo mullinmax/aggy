@@ -146,9 +146,15 @@ def rescrape_source(source: Source) -> None:
                 ]
             )
             # merge_instances doesn't carry embeddings over; keep the existing
-            # ones so a re-scrape never drops them
-            merged.embeddings = item.embeddings
-            merged.image_embeddings = item.image_embeddings
+            # ones so a re-scrape never drops them. Copied rather than shared:
+            # add_embedding mutates the dict in place, so handing `merged` the
+            # same object would also mutate `item` and leave the two comparing
+            # equal — a freshly computed embedding would then look like "no
+            # change" and never get written back.
+            merged.embeddings = dict(item.embeddings) if item.embeddings else None
+            merged.image_embeddings = (
+                dict(item.image_embeddings) if item.image_embeddings else None
+            )
 
             after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
             text_changed = any(
@@ -166,10 +172,15 @@ def rescrape_source(source: Source) -> None:
                 except Exception as e:
                     logging.error(f"Error re-embedding item {item.url}: {e}")
 
-            if image_changed and image_embed_host is not None:
+            # a re-scrape is also a chance to fill in an embedding that never
+            # landed (the image host was down, rate-limiting us, or refusing
+            # the request), which no amount of unchanged re-scraping would
+            # otherwise retry
+            image_missing = image_embed_model not in (merged.image_embeddings or {})
+            if (image_changed or image_missing) and image_embed_host is not None:
                 try:
                     merged.add_image_embedding(
-                        model_name=image_embed_model, force_refresh=True
+                        model_name=image_embed_model, force_refresh=image_changed
                     )
                     embedding_changed = (
                         embedding_changed
@@ -218,21 +229,39 @@ def download_embedding_model_job() -> None:
 
 
 def backfill_image_embeddings_job() -> None:
-    """One-shot at startup: embed the preview image of every stored item that's
-    missing an embedding for the current CLIP model. New items are embedded at
-    ingest time, but this catches everything scraped before the service existed
-    (or before the model changed). No-op when the service isn't configured."""
+    """Embed the preview image of stored items missing an embedding for the
+    current CLIP model.
+
+    New items are embedded at ingest time, so this catches everything scraped
+    before the service existed (or before the model changed) — plus every item
+    whose image download failed at the time. Image hosts fail transiently
+    (rate limits, timeouts, CDN hiccups) and a failed fetch leaves no marker on
+    the row, so the pass repeats on a schedule instead of running only at start
+    up, where one bad moment meant an item stayed unembedded until the next
+    restart. Each run is capped so a large backlog is worked off over several
+    passes rather than tying up the worker. Newest items go first: those are
+    the ones the recommender is about to rank.
+
+    No-op when the service isn't configured.
+    """
     image_embed_host = config.get("IMAGE_EMBED_HOST", None)
     if image_embed_host is None:
         return
     model_name = config.get("IMAGE_EMBED_MODEL")
+    batch_size = config.get_int("IMAGE_EMBED_BACKFILL_BATCH_SIZE")
 
     with get_db_con() as cur:
         cur.execute(
-            "SELECT url_hash FROM items WHERE image_url IS NOT NULL "
+            # an item with no image_url can still show a picture: the UI (and
+            # ItemBase.embeddable_image_url) falls back to the first <img> in
+            # the content, which is all a reddit RSS entry carries when the
+            # post JSON couldn't be fetched
+            "SELECT url_hash FROM items "
+            "WHERE (image_url IS NOT NULL OR content ILIKE '%%<img%%') "
             "AND (image_embeddings IS NULL "
-            "OR NOT jsonb_exists(image_embeddings, %s))",
-            (model_name,),
+            "OR NOT jsonb_exists(image_embeddings, %s)) "
+            "ORDER BY created_at DESC LIMIT %s",
+            (model_name, batch_size),
         )
         url_hashes = [row["url_hash"] for row in cur.fetchall()]
 

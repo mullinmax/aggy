@@ -299,3 +299,138 @@ def test_add_image_embedding_skips_when_already_present(
     unique_item_strict.add_image_embedding("clip-model")
 
     post.assert_not_called()
+
+
+def test_add_image_embedding_falls_back_to_content_image(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """An item with no image_url still gets embedded from the first image in its
+    content — the same picture the UI shows on the card. Reddit RSS entries only
+    carry their thumbnail there when the post JSON couldn't be fetched."""
+    fetched = []
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64",
+        staticmethod(lambda url: fetched.append(url) or "aGVsbG8="),
+    )
+    monkeypatch.setattr("db.item.httpx.post", _fake_post([0.7]))
+
+    unique_item_strict.image_url = None
+    unique_item_strict.content = '<p>hi</p><img src="https://preview.redd.it/a.jpg">'
+    unique_item_strict.add_image_embedding("clip-model")
+
+    assert fetched == ["https://preview.redd.it/a.jpg"]
+    assert unique_item_strict.image_embeddings["clip-model"] == [0.7]
+    # the fallback is for embedding only; the column the reader uses to decide
+    # whether to promote a content image into the hero slot stays untouched
+    assert unique_item_strict.image_url is None
+
+
+def test_add_image_embedding_retries_unsigned_reddit_url(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """When reddit's signed preview host refuses the download, the same asset is
+    retried on the unsigned i.redd.it path."""
+    attempted = []
+
+    def fake_fetch(url):
+        attempted.append(url)
+        if "preview.redd.it" in url:
+            raise ValueError("403")
+        return "aGVsbG8="
+
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64", staticmethod(fake_fetch)
+    )
+    monkeypatch.setattr("db.item.httpx.post", _fake_post([0.8]))
+
+    unique_item_strict.image_url = "https://preview.redd.it/a.jpg?width=640&s=sig"
+    unique_item_strict.add_image_embedding("clip-model")
+
+    assert attempted == [
+        "https://preview.redd.it/a.jpg?width=640&s=sig",
+        "https://i.redd.it/a.jpg",
+    ]
+    assert unique_item_strict.image_embeddings["clip-model"] == [0.8]
+
+
+def test_add_image_embedding_retries_html_escaped_url(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """A stored URL that still carries &amp; entities is retried unescaped —
+    reddit signs its preview URLs over the query string, so the escaped form is
+    rejected."""
+    attempted = []
+
+    def fake_fetch(url):
+        attempted.append(url)
+        if "&amp;" in url:
+            raise ValueError("403")
+        return "aGVsbG8="
+
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64", staticmethod(fake_fetch)
+    )
+    monkeypatch.setattr("db.item.httpx.post", _fake_post([0.9]))
+
+    unique_item_strict.image_url = "https://example.com/a.jpg?w=1&amp;s=sig"
+    unique_item_strict.add_image_embedding("clip-model")
+
+    assert attempted == [
+        "https://example.com/a.jpg?w=1&amp;s=sig",
+        "https://example.com/a.jpg?w=1&s=sig",
+    ]
+    assert unique_item_strict.image_embeddings["clip-model"] == [0.9]
+
+
+def test_add_image_embedding_gives_up_after_all_candidates(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """When every candidate URL fails, nothing is sent to the embedding service
+    and no embedding is recorded."""
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64",
+        staticmethod(lambda url: (_ for _ in ()).throw(ValueError("403"))),
+    )
+    post = MagicMock()
+    monkeypatch.setattr("db.item.httpx.post", post)
+
+    unique_item_strict.image_url = "https://preview.redd.it/a.jpg?s=sig"
+    unique_item_strict.add_image_embedding("clip-model")
+
+    post.assert_not_called()
+    assert unique_item_strict.image_embeddings == {}
+
+
+def test_fetch_image_sends_browser_user_agent(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """Preview images are downloaded with a browser user agent: reddit's image
+    CDN answers httpx's default agent with a 403, which is why the picture
+    rendered in the page but never reached the embedding service."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.headers = {"content-type": "image/jpeg"}
+    resp.content = b"hello"
+    get = MagicMock(return_value=resp)
+    monkeypatch.setattr("db.item.httpx.get", get)
+
+    assert ItemStrict._fetch_image_base64("https://preview.redd.it/a.jpg") == "aGVsbG8="
+
+    headers = get.call_args.kwargs["headers"]
+    assert "Mozilla/5.0" in headers["User-Agent"]
+    assert "python-httpx" not in headers["User-Agent"]
+
+
+def test_fetch_image_rejects_non_image_response(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """A host that refuses the request with a 200 HTML notice is treated as a
+    failed fetch rather than fed to the embedding service as garbage."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.headers = {"content-type": "text/html; charset=utf-8"}
+    resp.content = b"<html>Forbidden</html>"
+    monkeypatch.setattr("db.item.httpx.get", MagicMock(return_value=resp))
+
+    with pytest.raises(ValueError, match="text/html"):
+        ItemStrict._fetch_image_base64("https://preview.redd.it/a.jpg")

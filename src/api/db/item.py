@@ -8,13 +8,20 @@ from bleach import clean
 from typing import Optional, List, Dict
 import html
 import json
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from config import config
 from .base import AggyBaseModel
 from typing_extensions import Annotated
 from utils import get_ollama_connection
+
+
+def _fetch_error_detail(error: Exception) -> str:
+    """Short, log-friendly description of a failed image fetch."""
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"HTTP {error.response.status_code}"
+    return f"{type(error).__name__}: {error}"
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -243,12 +250,93 @@ class ItemBase(AggyBaseModel):
         # add the embedding to self
         self.embeddings[ollama_embedding_model] = embedding
 
+    @property
+    def embeddable_image_url(self) -> Optional[str]:
+        """The picture this item actually shows, for embedding purposes.
+
+        Usually ``image_url``, but a scraped item doesn't always have one:
+        reddit RSS entries carry their thumbnail only as an ``<img>`` inside the
+        entry body, and the post JSON that would turn it into a real
+        ``image_url`` is the request most likely to be rate-limited away. The UI
+        already falls back to the first image in the content when rendering a
+        card, so those items look like they have a preview while the recommender
+        sees no picture at all. Fall back the same way so the two agree.
+
+        Deliberately not written back to ``image_url``: that column drives which
+        image the reader promotes out of the article body into the hero slot,
+        and a content image belongs in both places at once.
+        """
+        if self.image_url:
+            return self.image_url
+        if not self.content:
+            return None
+        # content is stored sanitized, with relative srcs already made absolute
+        img = BeautifulSoup(self.content, "html.parser").find("img", src=True)
+        return img["src"] if img else None
+
+    @staticmethod
+    def _image_fetch_headers() -> Dict[str, str]:
+        """Headers used when downloading a preview image.
+
+        Image CDNs — reddit's above all — answer requests that don't look like
+        a browser with a 403. httpx's default ``python-httpx/x.y`` agent is
+        exactly what they block, which is why reddit previews render fine in
+        the page (the browser fetches them directly) but never reached the
+        embedding service when we fetched them server-side. The article
+        scrapers keep their descriptive ``aggy/...`` agent; only the image
+        fetch pretends to be the ``<img>`` tag the CDN expects.
+        """
+        return {
+            "User-Agent": config.get("IMAGE_FETCH_USER_AGENT"),
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+    @staticmethod
+    def _image_fetch_urls(image_url: str) -> List[str]:
+        """The URLs to try, in order, for one preview image.
+
+        A stored image URL isn't always fetchable as-is:
+
+        * URLs scraped out of HTML (or out of reddit's JSON before we started
+          asking for ``raw_json=1``) can still carry ``&amp;`` entities, which
+          corrupt the query string — and reddit signs its preview URLs over
+          that query string, so a mangled one is rejected outright.
+        * reddit's signed preview host serves the same asset unsigned from
+          ``i.redd.it``, which works even when the signature doesn't.
+        """
+        urls = [image_url]
+
+        unescaped = html.unescape(image_url)
+        if unescaped not in urls:
+            urls.append(unescaped)
+
+        for url in list(urls):
+            parsed = urlparse(url)
+            if parsed.netloc.lower() == "preview.redd.it" and parsed.path:
+                unsigned = urlunparse(("https", "i.redd.it", parsed.path, "", "", ""))
+                if unsigned not in urls:
+                    urls.append(unsigned)
+
+        return urls
+
     @staticmethod
     def _fetch_image_base64(image_url: str) -> str:
         """Download the preview image and return it base64-encoded."""
         timeout = config.get_int("IMAGE_EMBED_TIMEOUT_SECONDS")
-        response = httpx.get(image_url, timeout=timeout, follow_redirects=True)
+        response = httpx.get(
+            image_url,
+            timeout=timeout,
+            follow_redirects=True,
+            headers=ItemBase._image_fetch_headers(),
+        )
         response.raise_for_status()
+        # a host that refuses the request often answers 200 with an HTML
+        # notice; sending that on would fail in the embedding service with a
+        # far less obvious error
+        content_type = response.headers.get("content-type", "").split(";")[0].strip()
+        if content_type and not content_type.startswith("image/"):
+            raise ValueError(f"expected an image, got content-type '{content_type}'")
         return base64.b64encode(response.content).decode("ascii")
 
     def add_image_embedding(self, model_name: str, force_refresh=False) -> None:
@@ -260,7 +348,8 @@ class ItemBase(AggyBaseModel):
         in ``image_embeddings`` (keyed by model name), kept separate from the
         text ``embeddings`` so the two pieces are never blended into one signal.
         """
-        if not self.image_url:
+        image_url = self.embeddable_image_url
+        if not image_url:
             return
 
         host = config.get("IMAGE_EMBED_HOST", None)
@@ -273,10 +362,20 @@ class ItemBase(AggyBaseModel):
         if model_name in self.image_embeddings and not force_refresh:
             return
 
-        try:
-            image_base64 = self._fetch_image_base64(self.image_url)
-        except Exception as e:
-            logging.error(f"Error fetching image {self.image_url}: {e}")
+        image_base64 = None
+        failures = []
+        for candidate in self._image_fetch_urls(image_url):
+            try:
+                image_base64 = self._fetch_image_base64(candidate)
+                break
+            except Exception as e:
+                failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+
+        if image_base64 is None:
+            logging.warning(
+                f"Could not fetch preview image for {self.url}, "
+                f"no image embedding: {'; '.join(failures)}"
+            )
             return
 
         port = config.get_int("IMAGE_EMBED_PORT")
