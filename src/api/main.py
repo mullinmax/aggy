@@ -32,6 +32,7 @@ from routers.source_analyze import source_analyze_router
 from routers.bulk_import import bulk_import_router
 from routers.item import item_router
 from routers.list import list_router
+from routers.stats import stats_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
 from builtin_templates import create_builtin_source_templates
@@ -171,6 +172,7 @@ app.include_router(
 app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
 app.include_router(list_router, prefix="/list", tags=["Lists"])
+app.include_router(stats_router, prefix="/stats", tags=["Stats"])
 app.include_router(web_router)
 
 

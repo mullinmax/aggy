@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   router
     .add('', showDashboard)
+    .add('stats', showArticleStats)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
@@ -88,6 +89,8 @@ function bindControls() {
   $('templateBackBtn').onclick = clearTemplateSelection;
   $('templateAddBtn').onclick = handleCreateSourceFromTemplate;
   $('editSourceSaveBtn').onclick = handleUpdateSource;
+
+  $('statsRefreshBtn').onclick = refreshArticleStats;
 
   $('createListForm').onsubmit = handleCreateList;
   $('listSaveBtn').onclick = handleListSave;
@@ -139,6 +142,7 @@ function setView(name) {
   $('viewDashboard').classList.toggle('hidden', name !== 'dashboard');
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
   $('viewList').classList.toggle('hidden', name !== 'list');
+  $('viewStats').classList.toggle('hidden', name !== 'stats');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -172,12 +176,15 @@ async function loadFeeds() {
   render(grid, h('div', { class: 'col-span-full' }, spinner()));
   try {
     const feeds = await sdk.feedList();
+    // the article-stats link only means something once a feed exists
+    $('statsLinkFooter').classList.toggle('hidden', !feeds.length);
     if (!feeds.length) {
       render(grid, h('div', { class: 'col-span-full' }, onboardingWelcome()));
       return;
     }
     render(grid, feeds.map(feedCard));
   } catch (err) {
+    $('statsLinkFooter').classList.add('hidden');
     render(grid, h('div', { class: 'col-span-full text-center py-16 text-base-content/50' }, 'Failed to load feeds'));
     toast(err.message, 'alert-error');
   }

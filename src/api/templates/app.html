@@ -47,6 +47,42 @@
       </div>
       <div class="grid gap-2 grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]" id="listGrid"></div>
     </div>
+
+    <!-- Footer link to the cross-feed article stats page (hidden until the
+         user actually has a feed to collect articles into) -->
+    <div class="mt-10 pt-4 border-t border-base-300 text-center hidden" id="statsLinkFooter">
+      <a href="#/stats" class="btn btn-ghost btn-sm gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 20V10M10 20V4M16 20v-7M20 20H3"/>
+        </svg>
+        Article stats
+      </a>
+      <p class="text-xs text-base-content/50 mt-1">
+        Coverage and volume for every site your articles link to
+      </p>
+    </div>
+  </div>
+
+  <!-- Article Stats View -->
+  <div id="viewStats" class="hidden">
+    <div class="breadcrumbs text-sm mb-4">
+      <ul>
+        <li><a href="#/">Home</a></li>
+        <li>Article stats</li>
+      </ul>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div>
+        <h1 class="text-2xl font-bold">Article Stats</h1>
+        <p class="text-sm text-base-content/60 mt-1">
+          Every article across all your feeds, grouped by the site it links to
+        </p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="statsRefreshBtn">Refresh</button>
+    </div>
+
+    <div id="statsPageBody"></div>
   </div>
 
   <!-- List Detail View -->
@@ -516,4 +552,5 @@
 {% block scripts %}
 <script src="{{ static_url('vendor/plyr.min.js') }}"></script>
 <script src="{{ static_url('js/app.js') }}"></script>
+<script src="{{ static_url('js/stats.js') }}"></script>
 {% endblock %}
