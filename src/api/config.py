@@ -25,6 +25,9 @@ KNOWN_CONFIG_VALUES = [
     "IMAGE_EMBED_PORT",
     "IMAGE_EMBED_MODEL",
     "IMAGE_EMBED_TIMEOUT_SECONDS",
+    "IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES",
+    "IMAGE_EMBED_BACKFILL_BATCH_SIZE",
+    "IMAGE_FETCH_USER_AGENT",
     "OLLAMA_ANALYSIS_MODEL",
     "OLLAMA_ANALYSIS_NUM_CTX",
     "RSS_BRIDGE_HOST",
@@ -61,6 +64,18 @@ DEFAULT_CONFIG = {
     "IMAGE_EMBED_PORT": 8000,
     "IMAGE_EMBED_MODEL": "clip-ViT-B-32",
     "IMAGE_EMBED_TIMEOUT_SECONDS": 30,
+    # Items missing an image embedding are retried on this interval, a batch at
+    # a time. Image hosts fail transiently (rate limits, timeouts, expired CDN
+    # URLs), so a single pass at start up leaves items permanently unembedded.
+    "IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES": 60,
+    "IMAGE_EMBED_BACKFILL_BATCH_SIZE": 250,
+    # Preview images are downloaded with a browser user agent because image
+    # CDNs (reddit's especially) answer non-browser agents with a 403 — the
+    # image renders in the page but never reaches the embedding service.
+    "IMAGE_FETCH_USER_AGENT": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
     # Text-generation model used to propose CSS selectors when creating a
     # source from a bare website URL. Any Ollama chat model that supports
     # structured (JSON schema) output works; qwen3:4b is small and reliable.
