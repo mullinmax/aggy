@@ -463,3 +463,41 @@ def test_source_color_assigned_and_editable(unique_feed):
         source_hash=stored.name_hash,
     )
     assert reread.color == "#123abc"
+
+
+def _feed_item_score(feed, item):
+    from db.base import get_db_con
+
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT score FROM feed_items "
+            "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+            (feed.user_hash, feed.name_hash, item.url_hash),
+        )
+        return cur.fetchone()["score"]
+
+
+def test_add_items_does_not_reset_an_existing_score(unique_feed, unique_item_strict):
+    """Adding is linking, not scoring. Ingest re-links every entry it sees on
+    every check, so clobbering here would zero the whole feed each pass."""
+    unique_feed.create()
+    unique_item_strict.create()
+
+    unique_feed.add_items(unique_item_strict)
+    unique_feed.set_items_scores({unique_item_strict.url_hash: 7.5})
+
+    unique_feed.add_items(unique_item_strict)
+
+    assert _feed_item_score(unique_feed, unique_item_strict) == 7.5
+
+
+def test_set_items_scores_still_overwrites(unique_feed, unique_item_strict):
+    """Ranking must be able to replace a score it already set."""
+    unique_feed.create()
+    unique_item_strict.create()
+
+    unique_feed.add_items(unique_item_strict)
+    unique_feed.set_items_scores({unique_item_strict.url_hash: 7.5})
+    unique_feed.set_items_scores({unique_item_strict.url_hash: 1.5})
+
+    assert _feed_item_score(unique_feed, unique_item_strict) == 1.5

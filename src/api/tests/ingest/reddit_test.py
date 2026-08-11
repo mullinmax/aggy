@@ -1,3 +1,5 @@
+import logging
+
 from db.item import ItemLoose
 from ingest.item.reddit import (
     _external_link_media,
@@ -6,6 +8,7 @@ from ingest.item.reddit import (
     is_reddit_post,
 )
 from ingest.item.rss import _link_media
+from ingest.reddit_rate_limit import RedditBlocked
 
 
 def test_is_reddit_post():
@@ -295,3 +298,30 @@ def test_rss_link_media():
     ]
     assert _link_media("https://example.com/article") is None
     assert _link_media(None) is None
+
+
+def test_ingest_reddit_item_skips_quietly_while_api_blocked(monkeypatch, caplog):
+    """A blocked JSON API means every post in every feed fails the same way;
+    the circuit breaker logs that once, so the items must not each add a line."""
+
+    def blocked(url, **kwargs):
+        raise RedditBlocked("reddit is refusing post JSON requests")
+
+    monkeypatch.setattr("ingest.item.reddit.reddit_get", blocked)
+
+    item = ItemLoose(url="https://www.reddit.com/r/x/comments/abc123/a_title/")
+    with caplog.at_level(logging.WARNING):
+        assert ingest_reddit_item(item) is None
+    assert caplog.records == []
+
+
+def test_ingest_reddit_item_still_warns_on_other_failures(monkeypatch, caplog):
+    def boom(url, **kwargs):
+        raise ValueError("connection reset")
+
+    monkeypatch.setattr("ingest.item.reddit.reddit_get", boom)
+
+    item = ItemLoose(url="https://www.reddit.com/r/x/comments/abc123/a_title/")
+    with caplog.at_level(logging.WARNING):
+        assert ingest_reddit_item(item) is None
+    assert any("connection reset" in r.message for r in caplog.records)
