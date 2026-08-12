@@ -245,6 +245,11 @@ class AggySDK {
     return this._request("GET", "/source_template/search", { query: { query, skip, limit } });
   }
 
+  /** Summary stats for every article the user has collected */
+  async statsArticles({ timeline_days }) {
+    return this._request("GET", "/stats/articles", { query: { timeline_days } });
+  }
+
   /** Get Version */
   async version() {
     return this._request("GET", "/version");
