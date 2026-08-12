@@ -12,6 +12,8 @@ several sources routinely deliver articles from the same site.
 from datetime import date, timedelta
 from typing import List, Optional
 
+from config import config
+
 from .base import get_db_con
 
 # Second-level suffixes under which the *next* label is the registrable name:
@@ -100,6 +102,12 @@ def base_domain(host: Optional[str]) -> str:
 # "Has a preview image" matches ItemBase.embeddable_image_url: an explicit
 # image_url, or failing that the first <img> in the (sanitized) content -- that
 # is exactly the picture the image embedder would be handed.
+#
+# The first parameter is the backfill's attempt ceiling: an article whose
+# picture has been retried that many times has left the backfill queue for good,
+# which is the difference between "the embedder hasn't got to it yet" and "the
+# embedder can't have it" -- worth telling apart on a page whose whole job is
+# showing what the recommender is missing.
 _USER_ITEMS_CTE = """
 WITH user_items AS (
     SELECT DISTINCT ON (i.url_hash)
@@ -115,6 +123,7 @@ WITH user_items AS (
         (i.image_embeddings IS NOT NULL
             AND i.image_embeddings::text NOT IN ('null', '{}'))
             AS has_image_embedding,
+        (i.image_embed_attempts >= %s) AS image_embed_given_up,
         (i.content IS NOT NULL AND i.content <> '') AS has_content,
         (i.excerpt IS NOT NULL AND i.excerpt <> '') AS has_excerpt,
         (i.author IS NOT NULL AND i.author <> '') AS has_author,
@@ -138,6 +147,7 @@ WITH user_items AS (
 _COUNT_FIELDS = (
     "with_preview_image",
     "with_image_embedding",
+    "image_embed_failed",
     "with_text_embedding",
     "with_media",
     "with_content",
@@ -157,6 +167,8 @@ SELECT
     COUNT(*) AS article_count,
     COUNT(*) FILTER (WHERE has_preview_image) AS with_preview_image,
     COUNT(*) FILTER (WHERE has_image_embedding) AS with_image_embedding,
+    COUNT(*) FILTER (WHERE image_embed_given_up AND NOT has_image_embedding)
+        AS image_embed_failed,
     COUNT(*) FILTER (WHERE has_text_embedding) AS with_text_embedding,
     COUNT(*) FILTER (WHERE has_media) AS with_media,
     COUNT(*) FILTER (WHERE has_content) AS with_content,
@@ -216,10 +228,15 @@ def _merge_host_row(target: dict, row: dict) -> None:
             target[field] = value if current is None else pick(current, value)
 
 
+def _image_embed_max_attempts() -> int:
+    """How many failed tries retire an item from the backfill queue."""
+    return config.get_int("IMAGE_EMBED_MAX_ATTEMPTS")
+
+
 def domain_stats(user_hash: str) -> List[dict]:
     """Per-base-domain article stats for one user, busiest domain first."""
     with get_db_con() as cur:
-        cur.execute(_HOST_AGGREGATE_SQL, (user_hash,))
+        cur.execute(_HOST_AGGREGATE_SQL, (_image_embed_max_attempts(), user_hash))
         rows = cur.fetchall()
 
     domains: dict[str, dict] = {}
@@ -275,7 +292,7 @@ def article_timeline(user_hash: str, days: int) -> List[dict]:
     time axis instead of silently compressing quiet stretches.
     """
     with get_db_con() as cur:
-        cur.execute(_TIMELINE_SQL, (user_hash, days))
+        cur.execute(_TIMELINE_SQL, (_image_embed_max_attempts(), user_hash, days))
         by_day = {row["day"]: row for row in cur.fetchall()}
         cur.execute("SELECT date_trunc('day', NOW())::date AS today")
         today: date = cur.fetchone()["today"]

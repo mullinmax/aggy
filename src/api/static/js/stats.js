@@ -235,7 +235,18 @@ function coverageChart(summary) {
         `${fmtPct(value, total)} · ${fmtInt(value)}`));
   };
 
-  return h('div', { class: 'flex flex-col gap-2' }, COVERAGE_METRICS.map(row));
+  // The image-embedding gap has two very different halves: pictures still
+  // queued for the embedder, and pictures it has given up on after repeated
+  // failed downloads. Only the first one closes by waiting, so say which.
+  const failed = summary.image_embed_failed || 0;
+  const note = failed
+    ? h('p', { class: 'text-xs text-base-content/50 mt-1' },
+      `${fmtInt(failed)} preview ${failed === 1 ? 'image' : 'images'} could not be ` +
+      'downloaded after repeated tries and are no longer queued for embedding ' +
+      '— usually expired or deleted images at the source.')
+    : null;
+
+  return h('div', { class: 'flex flex-col gap-2' }, COVERAGE_METRICS.map(row), note);
 }
 
 // ---------- daily timeline chart ----------

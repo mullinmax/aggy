@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from config import config
-from .base import AggyBaseModel
+from .base import AggyBaseModel, get_db_con
 from typing_extensions import Annotated
 from utils import get_ollama_connection
 
@@ -44,6 +44,17 @@ def _fetch_error_detail(error: Exception) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         return f"HTTP {error.response.status_code}"
     return f"{type(error).__name__}: {error}"
+
+
+class ImageEmbedError(Exception):
+    """A preview image could not be turned into an embedding.
+
+    Raised for every reason an item can fail: the picture couldn't be
+    downloaded from any candidate URL, the host answered with something that
+    isn't an image, or the embedding service rejected/failed on it. The message
+    is short enough to store on the row so a stuck item can be diagnosed
+    without digging through logs.
+    """
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -317,13 +328,7 @@ class ItemBase(AggyBaseModel):
         image the reader promotes out of the article body into the hero slot,
         and a content image belongs in both places at once.
         """
-        if self.image_url:
-            return self.image_url
-        if not self.content:
-            return None
-        # content is stored sanitized, with relative srcs already made absolute
-        img = BeautifulSoup(self.content, "html.parser").find("img", src=True)
-        return img["src"] if img else None
+        return embeddable_image_url(self.image_url, self.content)
 
     @staticmethod
     def _image_fetch_headers() -> Dict[str, str]:
@@ -398,13 +403,17 @@ class ItemBase(AggyBaseModel):
         No-op when the item has no image or the service isn't configured. Stored
         in ``image_embeddings`` (keyed by model name), kept separate from the
         text ``embeddings`` so the two pieces are never blended into one signal.
+
+        A failure here is swallowed (logged, embedding left absent) because the
+        callers are ingest paths where an unfetchable thumbnail must not cost
+        the article itself. The backfill calls :func:`embed_image` directly so
+        it can record *why* an item failed.
         """
         image_url = self.embeddable_image_url
         if not image_url:
             return
 
-        host = config.get("IMAGE_EMBED_HOST", None)
-        if host is None:
+        if config.get("IMAGE_EMBED_HOST", None) is None:
             return
 
         if self.image_embeddings is None:
@@ -413,24 +422,68 @@ class ItemBase(AggyBaseModel):
         if model_name in self.image_embeddings and not force_refresh:
             return
 
-        image_base64 = None
-        failures = []
-        for candidate in self._image_fetch_urls(image_url):
-            try:
-                image_base64 = self._fetch_image_base64(candidate)
-                break
-            except Exception as e:
-                failures.append(f"{candidate} ({_fetch_error_detail(e)})")
-
-        if image_base64 is None:
-            logging.warning(
-                f"Could not fetch preview image for {self.url}, "
-                f"no image embedding: {'; '.join(failures)}"
-            )
+        try:
+            embedding = embed_image(image_url)
+        except ImageEmbedError as e:
+            logging.warning(f"No image embedding for {self.url}: {e}")
             return
 
-        port = config.get_int("IMAGE_EMBED_PORT")
-        timeout = config.get_int("IMAGE_EMBED_TIMEOUT_SECONDS")
+        if embedding:
+            self.image_embeddings[model_name] = embedding
+
+
+# ---------------------------------------------------------------------------
+# Image embedding, without an Item
+#
+# The backfill works over tens of thousands of rows, so it deliberately doesn't
+# hydrate an ItemLoose per candidate: that costs a SELECT of the full article
+# body, a pydantic parse, and a re-sanitize of the content per item, and writing
+# the result back through Item.update() rewrites every column of the row. These
+# functions take the two columns the work actually needs and the DB helpers
+# below touch only the embedding columns.
+# ---------------------------------------------------------------------------
+
+
+def embeddable_image_url(
+    image_url: Optional[str], content: Optional[str]
+) -> Optional[str]:
+    """The picture an item actually shows, given its ``image_url``/``content``.
+
+    See :attr:`ItemBase.embeddable_image_url` for why the content fallback
+    exists.
+    """
+    if image_url:
+        return image_url
+    if not content:
+        return None
+    # content is stored sanitized, with relative srcs already made absolute
+    img = BeautifulSoup(content, "html.parser").find("img", src=True)
+    return img["src"] if img else None
+
+
+def embed_image(image_url: str) -> List[float]:
+    """Download a preview image and return its CLIP embedding vector.
+
+    Raises :class:`ImageEmbedError` — with a message short enough to store on
+    the item — when the picture can't be fetched from any candidate URL or the
+    embedding service won't produce a vector for it.
+    """
+    image_base64 = None
+    failures = []
+    for candidate in ItemBase._image_fetch_urls(image_url):
+        try:
+            image_base64 = ItemBase._fetch_image_base64(candidate)
+            break
+        except Exception as e:
+            failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+
+    if image_base64 is None:
+        raise ImageEmbedError(f"could not fetch image: {'; '.join(failures)}")
+
+    host = config.get("IMAGE_EMBED_HOST", None)
+    port = config.get_int("IMAGE_EMBED_PORT")
+    timeout = config.get_int("IMAGE_EMBED_TIMEOUT_SECONDS")
+    try:
         response = httpx.post(
             f"http://{host}:{port}/embed",
             json={"image_base64": image_base64},
@@ -438,8 +491,121 @@ class ItemBase(AggyBaseModel):
         )
         response.raise_for_status()
         embedding = response.json().get("embedding")
-        if embedding:
-            self.image_embeddings[model_name] = embedding
+    except Exception as e:
+        raise ImageEmbedError(f"embedding service failed: {_fetch_error_detail(e)}")
+
+    if not embedding:
+        raise ImageEmbedError("embedding service returned no vector")
+
+    return embedding
+
+
+# Error messages are stored so a stuck item can be diagnosed from the row; a
+# fetch failure that tried several candidate URLs can otherwise run to a few
+# hundred characters of little extra value.
+_MAX_STORED_IMAGE_EMBED_ERROR = 500
+
+# Candidates for the backfill: items that show a picture but have no vector for
+# the model in use. Failing items are held off with an exponential backoff on
+# their attempt count, and dropped from consideration entirely once they've
+# burned through `max_attempts` -- without that, a batch of permanently
+# unfetchable images is re-selected and re-failed on every pass and the queue
+# never reaches the items behind them.
+#
+# Never-attempted items come first so a fresh backlog is always making progress;
+# within a tier the newest go first, since those are what the recommender is
+# about to rank.
+_BACKFILL_CANDIDATES_SQL = """
+SELECT url_hash, url, image_url, content
+FROM items
+WHERE (image_url IS NOT NULL OR content ILIKE '%%<img%%')
+  AND (image_embeddings IS NULL OR NOT jsonb_exists(image_embeddings, %(model)s))
+  AND image_embed_attempts < %(max_attempts)s
+  AND (
+        image_embed_failed_at IS NULL
+        OR image_embed_failed_at <= NOW() - make_interval(secs =>
+            LEAST(
+                %(retry_minutes)s * power(2, image_embed_attempts - 1),
+                %(max_retry_minutes)s
+            ) * 60)
+      )
+ORDER BY image_embed_attempts ASC, created_at DESC
+LIMIT %(limit)s
+"""
+
+
+def image_embed_backfill_candidates(
+    model_name: str,
+    limit: int,
+    max_attempts: int,
+    retry_minutes: float,
+    max_retry_minutes: float,
+) -> List[dict]:
+    """Rows the image-embedding backfill should try this pass."""
+    with get_db_con() as cur:
+        cur.execute(
+            _BACKFILL_CANDIDATES_SQL,
+            {
+                "model": model_name,
+                "limit": limit,
+                "max_attempts": max_attempts,
+                "retry_minutes": float(retry_minutes),
+                "max_retry_minutes": float(max_retry_minutes),
+            },
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def save_image_embedding(
+    url_hash: str, model_name: str, embedding: List[float]
+) -> None:
+    """Merge one image embedding into an item, touching nothing else.
+
+    The attempt counter is cleared: the item is healthy again, so a later model
+    change starts it from a full retry budget rather than from whatever failures
+    it accumulated under the old one.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET "
+            "image_embeddings = COALESCE(image_embeddings, '{}'::jsonb) "
+            "  || jsonb_build_object(%s, %s::jsonb), "
+            "image_embed_attempts = 0, "
+            "image_embed_failed_at = NULL, "
+            "image_embed_error = NULL "
+            "WHERE url_hash = %s",
+            (model_name, json.dumps(embedding), url_hash),
+        )
+
+
+def record_image_embed_failure(url_hash: str, error: str) -> None:
+    """Count a failed image-embedding attempt so the item backs off."""
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET "
+            "image_embed_attempts = image_embed_attempts + 1, "
+            "image_embed_failed_at = NOW(), "
+            "image_embed_error = %s "
+            "WHERE url_hash = %s",
+            (error[:_MAX_STORED_IMAGE_EMBED_ERROR], url_hash),
+        )
+
+
+def reset_image_embed_attempts(url_hash: str) -> None:
+    """Give an item a fresh retry budget.
+
+    Called when a re-scrape turns up a different preview image: the old URL's
+    failures say nothing about the new one, and without this an item that
+    exhausted its attempts would never be tried again even after the thing that
+    was broken about it got fixed.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_attempts = 0, "
+            "image_embed_failed_at = NULL, image_embed_error = NULL "
+            "WHERE url_hash = %s AND image_embed_attempts > 0",
+            (url_hash,),
+        )
 
 
 class ItemStrict(ItemBase):

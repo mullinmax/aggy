@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from config import config
-from db.item import ItemLoose, ItemStrict
+from db.item import ImageEmbedError, ItemLoose, ItemStrict, embed_image
 
 
 @pytest.mark.parametrize(
@@ -464,6 +464,38 @@ def test_add_image_embedding_gives_up_after_all_candidates(
 
     post.assert_not_called()
     assert unique_item_strict.image_embeddings == {}
+
+
+def test_embed_image_raises_when_no_candidate_url_can_be_fetched(
+    image_embed_configured, monkeypatch
+):
+    """The backfill needs the reason a picture failed, not just the absence of a
+    vector — that's what it records on the row to back the item off."""
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64",
+        staticmethod(lambda url: (_ for _ in ()).throw(ValueError("403"))),
+    )
+    post = MagicMock()
+    monkeypatch.setattr("db.item.httpx.post", post)
+
+    with pytest.raises(ImageEmbedError, match="could not fetch image"):
+        embed_image("https://preview.redd.it/a.jpg?s=sig")
+
+    post.assert_not_called()
+
+
+def test_embed_image_raises_when_the_service_returns_no_vector(
+    image_embed_configured, monkeypatch
+):
+    """A service that answers 200 with an empty body is a failure too; treating
+    it as "nothing to do" left the item silently unembedded forever."""
+    monkeypatch.setattr(
+        "db.item.ItemBase._fetch_image_base64", staticmethod(lambda url: "aGVsbG8=")
+    )
+    monkeypatch.setattr("db.item.httpx.post", _fake_post(None))
+
+    with pytest.raises(ImageEmbedError, match="no vector"):
+        embed_image("https://example.com/a.jpg")
 
 
 def test_fetch_image_sends_browser_user_agent(

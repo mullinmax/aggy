@@ -1,9 +1,20 @@
 import logging
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from constants import SOURCE_READ_INTERVAL_MINUTES
 from db.base import get_db_con
 from db.feed import Feed
-from db.item import ItemLoose
+from db.item import (
+    ImageEmbedError,
+    ItemLoose,
+    embed_image,
+    embeddable_image_url,
+    image_embed_backfill_candidates,
+    record_image_embed_failure,
+    reset_image_embed_attempts,
+    save_image_embedding,
+)
 from db.source import Source
 from ingest.source import ingest_source
 from ingest.item.reddit import ingest_reddit_item
@@ -172,6 +183,13 @@ def rescrape_source(source: Source) -> None:
                 except Exception as e:
                     logging.error(f"Error re-embedding item {item.url}: {e}")
 
+            # a re-scrape that turns up a different picture clears the old
+            # one's failure history: those failures say nothing about the new
+            # URL, and an item that had exhausted its retries would otherwise
+            # stay out of the backfill queue forever
+            if image_changed:
+                reset_image_embed_attempts(item.url_hash)
+
             # a re-scrape is also a chance to fill in an embedding that never
             # landed (the image host was down, rate-limiting us, or refusing
             # the request), which no amount of unchanged re-scraping would
@@ -228,58 +246,112 @@ def download_embedding_model_job() -> None:
         ollama.pull(embedding_model)
 
 
+def _backfill_one_image(row: dict) -> tuple:
+    """Embed one candidate row's preview image.
+
+    Returns ``(embedding_or_None, error_or_None)``. Runs on a worker thread and
+    takes no database connection of its own — results are written by the caller
+    — so a wide fan-out can't drain the pool.
+    """
+    try:
+        image_url = embeddable_image_url(row["image_url"], row["content"])
+        if not image_url:
+            # the candidate query matches "<img" anywhere in the content, which
+            # a sanitized body can carry without a usable src; count it as a
+            # failure so the row backs off instead of being re-picked each pass
+            return None, "no embeddable image url"
+        return embed_image(image_url), None
+    except ImageEmbedError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _failure_summary(reasons: Counter) -> str:
+    """The handful of reasons that account for a run's failures.
+
+    One log line per failed image would bury everything else at this batch size,
+    but "1,431 failed" on its own says nothing about whether the image hosts are
+    rate-limiting us or the URLs are simply dead — which is the first thing
+    worth knowing when coverage stops climbing.
+    """
+    return ", ".join(f"{count}x {reason}" for reason, count in reasons.most_common(3))
+
+
+def _failure_reason(error: str) -> str:
+    """Collapse a failure to something worth counting across a run.
+
+    The stored error names the URLs it tried, which is exactly what makes every
+    message unique and useless to tally; the parenthesised detail at the end is
+    the part that repeats.
+    """
+    detail = error.rsplit("(", 1)[-1].rstrip(")").strip()
+    return detail or error
+
+
 def backfill_image_embeddings_job() -> None:
     """Embed the preview image of stored items missing an embedding for the
     current CLIP model.
 
     New items are embedded at ingest time, so this catches everything scraped
     before the service existed (or before the model changed) — plus every item
-    whose image download failed at the time. Image hosts fail transiently
-    (rate limits, timeouts, CDN hiccups) and a failed fetch leaves no marker on
-    the row, so the pass repeats on a schedule instead of running only at start
-    up, where one bad moment meant an item stayed unembedded until the next
-    restart. Each run is capped so a large backlog is worked off over several
-    passes rather than tying up the worker. Newest items go first: those are
-    the ones the recommender is about to rank.
+    whose image download failed at the time. Image hosts fail transiently (rate
+    limits, timeouts, CDN hiccups), so a failed item is worth retrying; but
+    plenty of them fail *permanently* — expired reddit signed URLs, deleted
+    images, hosts that answer a scraper with HTML. Each attempt is therefore
+    recorded on the row, and a failing item backs off exponentially before it is
+    offered again, then drops out of the queue once it has burned through its
+    attempts. Without that, a batch of permanently broken images is re-selected
+    and re-failed on every single pass and the backlog behind them is never
+    reached.
+
+    Items are fetched a few at a time: the work is almost entirely waiting on
+    image hosts, and a serial loop over a five-figure backlog never catches up.
 
     No-op when the service isn't configured.
     """
-    image_embed_host = config.get("IMAGE_EMBED_HOST", None)
-    if image_embed_host is None:
+    if config.get("IMAGE_EMBED_HOST", None) is None:
         return
+
     model_name = config.get("IMAGE_EMBED_MODEL")
-    batch_size = config.get_int("IMAGE_EMBED_BACKFILL_BATCH_SIZE")
+    rows = image_embed_backfill_candidates(
+        model_name=model_name,
+        limit=config.get_int("IMAGE_EMBED_BACKFILL_BATCH_SIZE"),
+        max_attempts=config.get_int("IMAGE_EMBED_MAX_ATTEMPTS"),
+        retry_minutes=config.get_float("IMAGE_EMBED_RETRY_MINUTES"),
+        max_retry_minutes=config.get_float("IMAGE_EMBED_MAX_RETRY_MINUTES"),
+    )
 
-    with get_db_con() as cur:
-        cur.execute(
-            # an item with no image_url can still show a picture: the UI (and
-            # ItemBase.embeddable_image_url) falls back to the first <img> in
-            # the content, which is all a reddit RSS entry carries when the
-            # post JSON couldn't be fetched
-            "SELECT url_hash FROM items "
-            "WHERE (image_url IS NOT NULL OR content ILIKE '%%<img%%') "
-            "AND (image_embeddings IS NULL "
-            "OR NOT jsonb_exists(image_embeddings, %s)) "
-            "ORDER BY created_at DESC LIMIT %s",
-            (model_name, batch_size),
-        )
-        url_hashes = [row["url_hash"] for row in cur.fetchall()]
-
-    if not url_hashes:
+    if not rows:
         return
 
-    logging.info(f"Backfilling image embeddings for {len(url_hashes)} item(s)...")
-    done = 0
-    for url_hash in url_hashes:
-        item = ItemLoose.read(url_hash)
-        if item is None:
-            continue
-        try:
-            item.add_image_embedding(model_name=model_name)
-            if item.image_embeddings and model_name in item.image_embeddings:
-                item.update()
-                done += 1
-        except Exception as e:
-            logging.error(f"Error backfilling image embedding for {item.url}: {e}")
+    concurrency = max(1, config.get_int("IMAGE_EMBED_BACKFILL_CONCURRENCY"))
+    logging.info(
+        f"Backfilling image embeddings for {len(rows)} item(s) "
+        f"({concurrency} at a time)..."
+    )
 
-    logging.info(f"Image embedding backfill complete: {done}/{len(url_hashes)} embedded.")
+    embedded = 0
+    reasons: Counter = Counter()
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(_backfill_one_image, row): row for row in rows}
+        for future in as_completed(futures):
+            row = futures[future]
+            embedding, error = future.result()
+            try:
+                if embedding is not None:
+                    save_image_embedding(row["url_hash"], model_name, embedding)
+                    embedded += 1
+                else:
+                    record_image_embed_failure(row["url_hash"], error)
+                    reasons[_failure_reason(error)] += 1
+            except Exception as e:
+                logging.error(
+                    f"Error recording image embedding result for {row['url']}: {e}"
+                )
+
+    failed = sum(reasons.values())
+    logging.info(
+        f"Image embedding backfill complete: {embedded} embedded, {failed} failed"
+        + (f" ({_failure_summary(reasons)})" if failed else "")
+    )

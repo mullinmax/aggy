@@ -13,6 +13,10 @@ class ArticleCountsResponse(BaseRouteModel):
 
     with_preview_image: int
     with_image_embedding: int
+    # articles whose preview image the embedder has given up on after repeated
+    # failed fetches -- the part of the image-embedding gap that will not close
+    # on its own, as opposed to the part still queued up
+    image_embed_failed: int
     with_text_embedding: int
     with_media: int
     with_content: int

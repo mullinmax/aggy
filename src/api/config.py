@@ -27,6 +27,10 @@ KNOWN_CONFIG_VALUES = [
     "IMAGE_EMBED_TIMEOUT_SECONDS",
     "IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES",
     "IMAGE_EMBED_BACKFILL_BATCH_SIZE",
+    "IMAGE_EMBED_BACKFILL_CONCURRENCY",
+    "IMAGE_EMBED_MAX_ATTEMPTS",
+    "IMAGE_EMBED_RETRY_MINUTES",
+    "IMAGE_EMBED_MAX_RETRY_MINUTES",
     "IMAGE_FETCH_USER_AGENT",
     "OLLAMA_ANALYSIS_MODEL",
     "OLLAMA_ANALYSIS_NUM_CTX",
@@ -70,8 +74,22 @@ DEFAULT_CONFIG = {
     # Items missing an image embedding are retried on this interval, a batch at
     # a time. Image hosts fail transiently (rate limits, timeouts, expired CDN
     # URLs), so a single pass at start up leaves items permanently unembedded.
-    "IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES": 60,
-    "IMAGE_EMBED_BACKFILL_BATCH_SIZE": 250,
+    # The batch is worked a few items at a time because the job spends nearly
+    # all of its time waiting on image hosts; at one item at a time a backlog of
+    # tens of thousands of pictures never catches up with ingestion.
+    "IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES": 15,
+    "IMAGE_EMBED_BACKFILL_BATCH_SIZE": 500,
+    "IMAGE_EMBED_BACKFILL_CONCURRENCY": 4,
+    # How a failing item is retried. Plenty of preview images are gone for good
+    # (expired reddit signatures, deleted uploads, hosts that answer a scraper
+    # with HTML), so attempts are counted on the row: each failure pushes the
+    # next try out exponentially -- IMAGE_EMBED_RETRY_MINUTES, doubling, capped
+    # at IMAGE_EMBED_MAX_RETRY_MINUTES -- and after IMAGE_EMBED_MAX_ATTEMPTS the
+    # item leaves the queue entirely. Without that, permanently broken images
+    # fill every batch and the rest of the backlog is never reached.
+    "IMAGE_EMBED_MAX_ATTEMPTS": 6,
+    "IMAGE_EMBED_RETRY_MINUTES": 60,
+    "IMAGE_EMBED_MAX_RETRY_MINUTES": 60 * 24 * 3,
     # Preview images are downloaded with a browser user agent because image
     # CDNs (reddit's especially) answer non-browser agents with a 403 — the
     # image renders in the page but never reaches the embedding service.
