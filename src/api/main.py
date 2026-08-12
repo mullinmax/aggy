@@ -134,7 +134,10 @@ async def app_lifespan(app: FastAPI):
     # embed preview images that have no embedding yet — items scraped before the
     # image service existed, and items whose image download failed earlier. Runs
     # at start up and then on an interval, since a failed fetch is worth
-    # retrying (no-op when the service isn't configured)
+    # retrying (no-op when the service isn't configured). A pass held up by slow
+    # image hosts can outlast the interval; the job keeps its own attempt state
+    # in the database, so skipping the overlapping run and coalescing the
+    # missed ones into one is exactly right — nothing is lost.
     scheduler.add_job(
         func=backfill_image_embeddings_job,
         trigger="interval",
@@ -142,6 +145,8 @@ async def app_lifespan(app: FastAPI):
         id="backfill_image_embeddings_job",
         replace_existing=False,
         next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True,
     )
 
     scheduler.start()

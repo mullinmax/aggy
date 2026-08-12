@@ -13,6 +13,7 @@ import binascii
 import io
 import logging
 import os
+import threading
 
 from fastapi import FastAPI, HTTPException
 from PIL import Image
@@ -29,6 +30,13 @@ MODEL_NAME = os.getenv("IMAGE_EMBED_MODEL", "clip-ViT-B-32")
 logging.info(f"Loading image embedding model '{MODEL_NAME}'...")
 model = SentenceTransformer(MODEL_NAME)
 logging.info("Image embedding model ready.")
+
+# The backfill embeds several images at once, and FastAPI runs this sync
+# endpoint on a worker thread per request. Decoding and downloading in parallel
+# is the point of that; running several CLIP forward passes over one shared
+# model on the same CPU is not -- they only fight each other for cores. Hold
+# inference to one at a time and let the concurrency live on the caller's side.
+_encode_lock = threading.Lock()
 
 app = FastAPI(title="aggy image embedding")
 
@@ -60,5 +68,6 @@ def embed(request: EmbedRequest) -> EmbedResponse:
 
     # normalize so cosine similarity is a plain dot product, matching how the
     # text embeddings are consumed downstream
-    vector = model.encode(image, normalize_embeddings=True)
+    with _encode_lock:
+        vector = model.encode(image, normalize_embeddings=True)
     return EmbedResponse(model=MODEL_NAME, embedding=vector.tolist())

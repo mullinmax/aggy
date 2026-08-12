@@ -1,5 +1,7 @@
 import pytest
 
+from config import config
+from db.base import get_db_con
 from db.item import ItemLoose
 from db.item_state import ItemState
 from db.stats import article_stats, base_domain, domain_stats
@@ -85,6 +87,41 @@ def test_domain_stats_counts_coverage(existing_user, existing_feed):
     assert row["with_author"] == 1
     assert row["with_excerpt"] == 1
     assert row["with_content"] == 2
+
+
+def test_domain_stats_counts_given_up_image_embeddings(existing_user, existing_feed):
+    """The image-embedding gap splits into pictures still queued and pictures
+    the embedder has given up on — only the first closes by waiting, so the page
+    has to be able to tell them apart."""
+    max_attempts = config.get_int("IMAGE_EMBED_MAX_ATTEMPTS")
+
+    queued = add_item(
+        existing_feed, "https://example.com/queued", image_url="https://e.com/a.jpg"
+    )
+    exhausted = add_item(
+        existing_feed, "https://example.com/exhausted", image_url="https://e.com/b.jpg"
+    )
+    # an item can burn its attempts and still end up embedded later (a re-scrape
+    # finds a working URL); that is covered, not failed
+    embedded = add_item(
+        existing_feed,
+        "https://example.com/embedded",
+        image_url="https://e.com/c.jpg",
+        image_embeddings={"clip": [0.1]},
+    )
+
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_attempts = %s WHERE url_hash IN (%s, %s)",
+            (max_attempts, exhausted.url_hash, embedded.url_hash),
+        )
+
+    row = domain_stats(existing_user.name_hash)[0]
+
+    assert row["with_preview_image"] == 3
+    assert row["with_image_embedding"] == 1
+    assert row["image_embed_failed"] == 1
+    assert queued.url_hash  # the third article is simply still in the queue
 
 
 def test_preview_image_falls_back_to_content_image(existing_user, existing_feed):
