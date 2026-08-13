@@ -260,6 +260,11 @@ class AggySDK {
     return this._request("GET", "/stats/articles", { query: { timeline_days } });
   }
 
+  /** How reliably each site has been answering this user's sources */
+  async statsSources({ days }) {
+    return this._request("GET", "/stats/sources", { query: { days } });
+  }
+
   /** Get Version */
   async version() {
     return this._request("GET", "/version");

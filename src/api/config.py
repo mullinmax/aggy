@@ -65,6 +65,13 @@ KNOWN_CONFIG_VALUES = [
     "REDDIT_BLOCK_THRESHOLD",
     "REDDIT_BLOCK_COOLDOWN_SECONDS",
     "REDDIT_MAX_BLOCK_COOLDOWN_SECONDS",
+    # Per-site circuit breaker over all source ingests, and how long the
+    # attempt history behind the reliability stats is kept.
+    "HOST_FAILURE_THRESHOLD",
+    "HOST_COOLDOWN_SECONDS",
+    "HOST_MAX_COOLDOWN_SECONDS",
+    "SOURCE_ATTEMPT_HISTORY_DAYS",
+    "ATTEMPT_PRUNE_INTERVAL_MINUTES",
 ]
 
 DEFAULT_CONFIG = {
@@ -154,6 +161,22 @@ DEFAULT_CONFIG = {
     "REDDIT_BLOCK_THRESHOLD": 3,
     "REDDIT_BLOCK_COOLDOWN_SECONDS": 900.0,
     "REDDIT_MAX_BLOCK_COOLDOWN_SECONDS": 21600.0,
+    # Sites fail all at once: when a feed endpoint breaks it breaks for every
+    # source pointing at it, and with one source popped per run those dead
+    # sources crowd the healthy ones out of the schedule. This many consecutive
+    # failures for a site stops its sources being attempted at all for a
+    # cooldown, doubling on each re-trip up to the ceiling. The threshold is
+    # above 1 so a single flaky fetch doesn't pause a working site, and the
+    # ceiling is well under a day so a site that recovers overnight is picked
+    # back up without anyone touching it. Values are seconds.
+    "HOST_FAILURE_THRESHOLD": 5,
+    "HOST_COOLDOWN_SECONDS": 600.0,
+    "HOST_MAX_COOLDOWN_SECONDS": 14400.0,
+    # Ingest attempts are logged per source per run to back the reliability
+    # stats. At the default cadence that is a few thousand rows a day, so they
+    # are pruned to this window.
+    "SOURCE_ATTEMPT_HISTORY_DAYS": 30,
+    "ATTEMPT_PRUNE_INTERVAL_MINUTES": 360,
 }
 
 FALSEY_STRINGS = {"", "0", "false", "no", "off"}

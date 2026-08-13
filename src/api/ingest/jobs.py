@@ -16,7 +16,16 @@ from db.item import (
     save_image_embedding,
 )
 from db.source import Source
+from db.source_attempt import (
+    OUTCOME_ERROR,
+    OUTCOME_OK,
+    OUTCOME_SKIPPED,
+    prune_attempts,
+    record_attempt,
+)
+from ingest import host_circuit
 from ingest.backends import get_backend
+from ingest.host_circuit import HostUnavailable, source_host
 from ingest.source import ingest_source
 from ingest.item.reddit import ingest_reddit_item
 from ingest.item.open_graph import ingest_open_graph_item
@@ -92,13 +101,80 @@ def source_ingestion_job() -> None:
             source_hash=row["name_hash"],
         )
         logging.info(f"Ingesting source '{source.name}' ({source.url})")
-        ingest_source(source=source)
+        _ingest_with_circuit(source)
         source.mark_ingested()
+    except HostUnavailable as e:
+        # Not a failure of this source: its site is in cooldown and was never
+        # contacted. Logged at info because a broken site produces one of these
+        # per source per cycle, and they are the breaker working, not news.
+        logging.info(f"Skipping source '{source.name}': {e}")
+        source.mark_ingest_error(str(e))
+        return
     except Exception as e:
         logging.exception(f"Ingesting of source {row['name_hash']} failed: {e}")
         if source is not None:
             source.mark_ingest_error(str(e))
         return
+
+
+def _ingest_with_circuit(source: Source) -> None:
+    """Ingest a source, reporting the outcome to the per-site breaker.
+
+    Feed sources are exempt: they read another feed out of our own database
+    rather than fetching a site, so there is no host whose reliability they
+    could speak to.
+    """
+    if source.is_feed_source:
+        ingest_source(source=source)
+        return
+
+    host = source_host(str(source.url))
+
+    try:
+        host_circuit.check(str(source.url))
+    except HostUnavailable:
+        record_attempt(
+            user_hash=source.user_hash,
+            feed_hash=source.feed_hash,
+            source_hash=source.name_hash,
+            host=host,
+            outcome=OUTCOME_SKIPPED,
+        )
+        raise
+
+    try:
+        ingest_source(source=source)
+    except Exception as e:
+        host_circuit.record_failure(str(source.url))
+        record_attempt(
+            user_hash=source.user_hash,
+            feed_hash=source.feed_hash,
+            source_hash=source.name_hash,
+            host=host,
+            outcome=OUTCOME_ERROR,
+            error=str(e),
+        )
+        raise
+
+    host_circuit.record_success(str(source.url))
+    record_attempt(
+        user_hash=source.user_hash,
+        feed_hash=source.feed_hash,
+        source_hash=source.name_hash,
+        host=host,
+        outcome=OUTCOME_OK,
+    )
+
+
+def prune_ingest_attempts_job() -> None:
+    """Drop ingest attempts that have aged out of the retention window."""
+    try:
+        deleted = prune_attempts()
+    except Exception as e:
+        logging.error(f"Pruning ingest attempt history failed: {e}")
+        return
+    if deleted:
+        logging.info(f"Pruned {deleted} ingest attempt(s) from history")
 
 
 def ingest_source_now(source: Source) -> None:

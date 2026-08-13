@@ -42,6 +42,7 @@ from ingest.jobs import (
     source_ingestion_job,
     download_embedding_model_job,
     backfill_image_embeddings_job,
+    prune_ingest_attempts_job,
 )
 from ranking.engine import feed_ranking_job
 
@@ -157,6 +158,20 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * config.get_int("IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES"),
         id="backfill_image_embeddings_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Trim the ingest attempt history that backs the source-reliability stats.
+    # Runs at start up too, so a deployment that was down long enough for the
+    # window to lapse doesn't carry the backlog until the first interval.
+    scheduler.add_job(
+        func=prune_ingest_attempts_job,
+        trigger="interval",
+        seconds=60 * config.get_int("ATTEMPT_PRUNE_INTERVAL_MINUTES"),
+        id="prune_ingest_attempts_job",
         replace_existing=False,
         next_run_time=datetime.now(),
         max_instances=1,
