@@ -81,12 +81,21 @@ def test_merge_items(unique_item_strict):
     ],
 )
 def test_date_published_parsing(unique_item_strict, raw_date, expected_date):
-    """Tests parsing of various date_published string formats."""
-    unique_item_strict.date_published = raw_date
-    unique_item_strict.create()
+    """Tests parsing of various date_published string formats.
 
-    item = ItemLoose.read(unique_item_strict.url_hash)
-    assert item.date_published.strftime("%Y-%m-%d") == expected_date
+    Built through the model rather than assigned onto it: pydantic does not
+    re-run validators on assignment, so assigning sent the raw string straight
+    to Postgres and this only ever tested which literals *Postgres* happens to
+    accept -- passing for "May 1, 2021" and failing for "1st of April, 2021",
+    neither of which says anything about our own parsing.
+    """
+    item = ItemStrict(
+        **{**unique_item_strict.dict(), "date_published": raw_date}
+    )
+    item.create()
+
+    stored = ItemLoose.read(item.url_hash)
+    assert stored.date_published.strftime("%Y-%m-%d") == expected_date
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")

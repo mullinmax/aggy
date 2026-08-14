@@ -20,7 +20,26 @@ jobs:
         sudo apt-get install -y docker-compose
 
     - name: Build and run tests
+      # `up --abort-on-container-exit` stopped the stack the moment the flyway
+      # container finished migrating, which is before pytest has run at all --
+      # so this job reported success without executing a single test. Start
+      # detached instead (depends_on still holds the test container back until
+      # flyway completes), then wait on that container and exit with pytest's
+      # own status.
+      working-directory: src/api
       run: |
-        compose_file="src/api/docker-compose.test.yml"
-        docker-compose -f $compose_file up --build --abort-on-container-exit
+        compose_file="docker-compose.test.yml"
+        docker-compose -f $compose_file up --build -d
+
+        container=$(docker-compose -f $compose_file ps -q test-aggy-api)
+        if [ -z "$container" ]; then
+          echo "test container never started"
+          docker-compose -f $compose_file logs
+          exit 1
+        fi
+
+        status=$(docker wait "$container")
+        docker logs "$container"
+
         docker-compose -f $compose_file down
+        exit "$status"

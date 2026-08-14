@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from tests.testing_utils import build_api_request_args
 
 from db.item_state import ItemState
@@ -65,7 +67,11 @@ def test_get_item_state(
 
     item_state = response.json()
     assert item_state["score"] == existing_item_state.score
-    assert item_state["score_date"] == existing_item_state.score_date.isoformat()
+    # compared as instants, not strings: the API renders UTC as "...Z" while
+    # datetime.isoformat() writes "+00:00" for the very same moment
+    assert datetime.fromisoformat(
+        item_state["score_date"].replace("Z", "+00:00")
+    ) == existing_item_state.score_date
     assert item_state["is_read"] == existing_item_state.is_read
 
 

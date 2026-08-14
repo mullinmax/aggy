@@ -88,8 +88,10 @@ class ItemCollection(AggyBaseModel):
         with self.db_con() as cur:
             for item in items:
                 cur.execute(
-                    f"DELETE FROM {self._items_table} "
-                    f"WHERE {where} AND item_url_hash = %s",
+                    # aliased "c" because _items_filter qualifies its columns
+                    # with it, the way query_items' join does
+                    f"DELETE FROM {self._items_table} AS c "
+                    f"WHERE {where} AND c.item_url_hash = %s",
                     params + (item.url_hash,),
                 )
 
@@ -97,7 +99,8 @@ class ItemCollection(AggyBaseModel):
         where, params = self._items_filter()
         with self.db_con() as cur:
             cur.execute(
-                f"SELECT COUNT(*) AS n FROM {self._items_table} WHERE {where}",
+                f"SELECT COUNT(*) AS n FROM {self._items_table} AS c "
+                f"WHERE {where}",
                 params,
             )
             return cur.fetchone()["n"]

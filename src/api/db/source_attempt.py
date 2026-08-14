@@ -18,7 +18,6 @@ from typing import List, Optional
 from config import config
 
 from .base import get_db_con
-from .stats import base_domain
 
 OUTCOME_OK = "ok"
 OUTCOME_ERROR = "error"
