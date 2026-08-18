@@ -118,6 +118,63 @@ def test_items_sort_newest_oldest(
     assert oldest[0]["item_url"] == "http://example.com/0/"
 
 
+def test_items_max_age_filter(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    ages = {
+        "fresh": timedelta(hours=2),
+        "this-week": timedelta(days=3),
+        "old": timedelta(days=40),
+    }
+    for name, age in ages.items():
+        item = unique_item_strict.model_copy()
+        item.url = HttpUrl(f"http://example.com/{name}/")
+        item.date_published = now - age
+        item.create()
+        existing_source.add_items(item)
+        existing_feed.add_items(item)
+
+    def urls(**params):
+        items = _get_items(client, token, existing_feed, **params)
+        return {i["item_url"] for i in items}
+
+    assert urls(max_age="day") == {"http://example.com/fresh/"}
+    assert urls(max_age="week") == {
+        "http://example.com/fresh/",
+        "http://example.com/this-week/",
+    }
+    # "month" is a 30-day window, so the 40-day-old item drops out
+    assert len(urls(max_age="month")) == 2
+    assert len(urls(max_age="year")) == 3
+    assert len(urls(max_age="all")) == 3
+    # the default keeps every item, same as "all"
+    assert len(urls()) == 3
+
+
+def test_items_max_age_falls_back_to_added_at(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    """Items with no publish date are dated by when the feed picked them up."""
+    unique_item_strict.date_published = None
+    unique_item_strict.create()
+    existing_source.add_items(unique_item_strict)
+    existing_feed.add_items(unique_item_strict)
+
+    assert len(_get_items(client, token, existing_feed, max_age="day")) == 1
+
+
+def test_items_bad_max_age_rejected(client, existing_user, existing_feed, token):
+    args = build_api_request_args(
+        path="/feed/items",
+        params={"feed_name_hash": existing_feed.name_hash, "max_age": "decade"},
+        token=token,
+    )
+    assert client.get(**args).status_code == 422
+
+
 def test_items_bad_sort_rejected(client, existing_user, existing_feed, token):
     args = build_api_request_args(
         path="/feed/items",

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from typing import List, Optional, Union
 
-from db.feed import Feed, ITEM_SORTS
+from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS
 from db.user import User
 from route_models.feed import FeedResponse
 from route_models.source import SourceRouteModel
@@ -147,6 +147,9 @@ def get_feed_items(
     text_only: Optional[bool] = Query(
         None, description="true: only text posts, false: only posts with media"
     ),
+    max_age: str = Query(
+        "all", description="Only items this recent: day, week, month, year, all"
+    ),
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
@@ -156,6 +159,9 @@ def get_feed_items(
 
     if sort not in ITEM_SORTS:
         raise HTTPException(status_code=422, detail=f"Unknown sort '{sort}'")
+
+    if max_age != "all" and max_age not in ITEM_AGE_WINDOWS:
+        raise HTTPException(status_code=422, detail=f"Unknown max_age '{max_age}'")
 
     source_hashes = (
         [s for s in sources.split(",") if s] if sources is not None else None
@@ -170,6 +176,7 @@ def get_feed_items(
             include_read=include_read,
             source_hashes=source_hashes,
             text_only=text_only,
+            max_age=None if max_age == "all" else max_age,
         )
     ]
 
