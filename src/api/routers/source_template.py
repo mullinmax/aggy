@@ -76,6 +76,9 @@ def create_source_from_template(
         url=source_url,
         template_name_hash=source_template.name_hash,
         template_parameters=sf_template.parameters,
+        # the template decides how its sources are read; without this a video
+        # listing would be handed to the feed parser as if it were RSS
+        kind=source_template.kind,
     )
     if source.exists():
         # add_source() silently no-ops on duplicates, which used to leave the

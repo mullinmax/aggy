@@ -32,8 +32,11 @@ class FakeResponse:
 def offline_ingest(monkeypatch):
     """Serve one canned RSS entry and stub out every network-bound scraper, so
     ingest_source exercises its own bookkeeping and nothing else."""
+    # The fetch now lives in the rss backend rather than in ingest.source --
+    # ingest_source asks its backend for candidates and never touches the
+    # network itself.
     monkeypatch.setattr(
-        "ingest.source.requests.get", lambda url, **kw: FakeResponse(RSS.encode())
+        "ingest.backends.rss.requests.get", lambda url, **kw: FakeResponse(RSS.encode())
     )
     monkeypatch.setattr("ingest.source.ingest_reddit_item", lambda item: None)
     monkeypatch.setattr("ingest.source.ingest_open_graph_item", lambda item: None)

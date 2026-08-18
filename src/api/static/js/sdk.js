@@ -145,6 +145,11 @@ class AggySDK {
     return this._request("POST", "/item/set_state", { query: { feed_hash, item_url_hash, score, is_read } });
   }
 
+  /** Resolve a currently-playable media URL for a video item */
+  async itemStreamUrl({ item_url_hash }) {
+    return this._request("GET", "/item/stream_url", { query: { item_url_hash } });
+  }
+
   /** Create a list */
   async listCreate({ list_name }) {
     return this._request("POST", "/list/create", { query: { list_name } });
@@ -183,6 +188,11 @@ class AggySDK {
   /** Add another feed as a source (shares its items and votes) */
   async sourceCreateFeed({ feed_name_hash, source_feed_name_hash }) {
     return this._request("POST", "/source/create_feed", { query: { feed_name_hash, source_feed_name_hash } });
+  }
+
+  /** Create a source that scrapes a web page with CSS selectors */
+  async sourceCreateScraped({ body }) {
+    return this._request("POST", "/source/create_scraped", { body });
   }
 
   /** Delete a source */
@@ -248,6 +258,11 @@ class AggySDK {
   /** Summary stats for every article the user has collected */
   async statsArticles({ timeline_days }) {
     return this._request("GET", "/stats/articles", { query: { timeline_days } });
+  }
+
+  /** How reliably each site has been answering this user's sources */
+  async statsSources({ days }) {
+    return this._request("GET", "/stats/sources", { query: { days } });
   }
 
   /** Get Version */

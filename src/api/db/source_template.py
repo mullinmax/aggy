@@ -5,9 +5,22 @@ import urllib
 import json
 from rapidfuzz import fuzz
 
+from constants import (
+    PROVIDER_BUILTIN,
+    PROVIDER_RANK,
+    PROVIDER_RSSHUB,
+    PROVIDER_RSS_BRIDGE,
+    RSSHUB_TEMPLATE_PREFIX,
+)
 from db.base import AggyBaseModel
 from config import config
 from utils import skip_limit_to_start_end
+
+
+def _escape(value: str, policy: str) -> str:
+    if policy == "none":
+        return value
+    return urllib.parse.quote(value, safe="/" if policy == "path" else "")
 
 
 class SourceTemplateParameterType(Enum):
@@ -25,6 +38,14 @@ class SourceTemplateParameter(AggyBaseModel):
     example: Optional[str] = None
     title: Optional[str] = None
     options: Optional[Dict[str, str]] = None
+    # How the value is escaped into a template's url_template:
+    #   "strict" - a single value; everything but unreserved characters is
+    #              encoded, so it can't escape its position in the URL
+    #   "path"   - a path fragment ("github/issues/owner/repo"), so slashes
+    #              survive encoding
+    #   "none"   - the value IS a complete URL and is used verbatim (it is
+    #              checked to be http(s) instead)
+    quote: str = "strict"
 
 
 class SourceTemplate(AggyBaseModel):
@@ -37,6 +58,10 @@ class SourceTemplate(AggyBaseModel):
     # Built-in (non-rss-bridge) templates: a python format string with
     # {parameter} placeholders, e.g. "https://www.reddit.com/r/{subreddit}/{sort}.rss"
     url_template: Optional[str] = None
+    # Ingest backend the sources built from this template should use. "rss"
+    # (the default) means the URL is fetched and parsed as a feed; see
+    # ingest/backends for the rest.
+    kind: str = "rss"
 
     @property
     def key(self):
@@ -53,6 +78,46 @@ class SourceTemplate(AggyBaseModel):
         if self.context:
             return f"{self.name} ({self.context})"
         return self.name
+
+    @computed_field
+    @property
+    def provider(self) -> str:
+        """Which service produces this template's feed.
+
+        Derived from what the template already carries rather than stored, so
+        a re-import can't leave the label disagreeing with the template.
+        """
+        if not self.bridge_short_name:
+            return PROVIDER_BUILTIN
+        if self.bridge_short_name.startswith(RSSHUB_TEMPLATE_PREFIX):
+            return PROVIDER_RSSHUB
+        return PROVIDER_RSS_BRIDGE
+
+    @computed_field
+    @property
+    def site_domain(self) -> str:
+        """The site this template pulls from, e.g. "bilibili.com".
+
+        Imported route names are often just "User posts", which says nothing
+        about which site's users; the domain is what makes a result legible.
+        """
+        host = urllib.parse.urlparse(str(self.url)).netloc
+        return host[4:] if host.startswith("www.") else host
+
+    @computed_field
+    @property
+    def required_parameters(self) -> List[str]:
+        """Names of the values a user must supply before this can be saved."""
+        return [
+            parameter.name or key
+            for key, parameter in self.parameters.items()
+            if parameter.required
+        ]
+
+    @computed_field
+    @property
+    def optional_parameter_count(self) -> int:
+        return sum(1 for p in self.parameters.values() if not p.required)
 
     def validate_parameters(self, **kwargs) -> None:
         validation_issues = []
@@ -87,11 +152,23 @@ class SourceTemplate(AggyBaseModel):
                 validation_issues.append(
                     f"Parameter {name} is not defined in the template"
                 )
+            # unescaped parameters go into the URL verbatim, so they have to
+            # be a URL themselves rather than arbitrary text
+            elif self.parameters[name].quote == "none" and value:
+                if not str(value).lower().startswith(("http://", "https://")):
+                    validation_issues.append(
+                        f"Parameter {name} must be a http:// or https:// URL"
+                    )
 
         if validation_issues:
             raise Exception(f"Validation issues: {', '.join(validation_issues)}")
 
-    def create_rss_url(self, **kwargs) -> str:
+    def create_source_url(self, **kwargs) -> str:
+        """The URL a source built from this template should point at.
+
+        For ``kind == "rss"`` that's a feed URL (rss-bridge's, or a site's own);
+        for the other backends it's the page the backend goes on to work with.
+        """
         if kwargs is None:
             kwargs = {}
 
@@ -106,7 +183,9 @@ class SourceTemplate(AggyBaseModel):
                     values[name] = kwargs[name]
                 elif parameter.default is not None:
                     values[name] = parameter.default
-            quoted = {k: urllib.parse.quote(str(v), safe="") for k, v in values.items()}
+            quoted = {
+                k: _escape(str(v), self.parameters[k].quote) for k, v in values.items()
+            }
             return self.url_template.format(**quoted)
 
         url_params = {
@@ -130,6 +209,10 @@ class SourceTemplate(AggyBaseModel):
             query=urllib.parse.urlencode(url_params),
         )
 
+    # Templates produced feed URLs exclusively before the other ingest
+    # backends existed; keep the old name working for existing callers.
+    create_rss_url = create_source_url
+
     def exists(self) -> bool:
         with self.db_con() as cur:
             cur.execute(
@@ -145,14 +228,14 @@ class SourceTemplate(AggyBaseModel):
         with self.db_con() as cur:
             cur.execute(
                 "INSERT INTO source_templates (name_hash, name, bridge_short_name, "
-                "url, description, context, parameters, url_template) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "url, description, context, parameters, url_template, kind) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (name_hash) DO UPDATE SET "
                 "name = EXCLUDED.name, "
                 "bridge_short_name = EXCLUDED.bridge_short_name, "
                 "url = EXCLUDED.url, description = EXCLUDED.description, "
                 "context = EXCLUDED.context, parameters = EXCLUDED.parameters, "
-                "url_template = EXCLUDED.url_template",
+                "url_template = EXCLUDED.url_template, kind = EXCLUDED.kind",
                 (
                     self.name_hash,
                     self.name,
@@ -162,6 +245,7 @@ class SourceTemplate(AggyBaseModel):
                     self.context,
                     params_json,
                     self.url_template,
+                    self.kind,
                 ),
             )
 
@@ -188,6 +272,7 @@ class SourceTemplate(AggyBaseModel):
             context=row["context"],
             parameters=parameters,
             url_template=row.get("url_template"),
+            kind=row.get("kind") or "rss",
         )
 
     @classmethod
@@ -195,7 +280,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters, url_template FROM source_templates WHERE name_hash = %s",
+                "parameters, url_template, kind FROM source_templates WHERE name_hash = %s",
                 (name_hash,),
             )
             row = cur.fetchone()
@@ -211,7 +296,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters, url_template FROM source_templates "
+                "parameters, url_template, kind FROM source_templates "
                 "WHERE bridge_short_name = %s LIMIT 1",
                 (bridge_short_name,),
             )
@@ -226,7 +311,7 @@ class SourceTemplate(AggyBaseModel):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, bridge_short_name, url, description, context, "
-                "parameters, url_template FROM source_templates"
+                "parameters, url_template, kind FROM source_templates"
             )
             rows = cur.fetchall()
 
@@ -244,7 +329,12 @@ class SourceTemplate(AggyBaseModel):
         skip: Union[int, None] = None,
         limit: Union[int, None] = None,
     ) -> List["SourceTemplate"]:
-        templates = sorted(cls.read_all(), key=lambda t: t.user_friendly_name.lower())
+        def browse_order(t: "SourceTemplate"):
+            # Aggy's own handful of templates first, then rss-bridge, then
+            # RSSHub's thousands — otherwise browsing is just RSSHub.
+            return (PROVIDER_RANK.get(t.provider, 99), t.user_friendly_name.lower())
+
+        templates = sorted(cls.read_all(), key=browse_order)
         query = (query or "").strip().lower()
 
         if query:
@@ -252,14 +342,19 @@ class SourceTemplate(AggyBaseModel):
             def score(t: "SourceTemplate") -> float:
                 # description matches are weighted below name matches so a
                 # template whose name matches always outranks one where the
-                # query only appears in the description
+                # query only appears in the description. The provider and site
+                # are matchable too, so "rsshub" or a bare domain both work.
                 return max(
                     fuzz.WRatio(query, t.user_friendly_name.lower()),
+                    fuzz.WRatio(query, t.site_domain.lower()),
+                    fuzz.WRatio(query, t.provider.lower()),
                     fuzz.WRatio(query, (t.description or "").lower()) * 0.6,
                 )
 
+            # equal matches break toward the more reliable provider
             scored = sorted(
-                ((t, score(t)) for t in templates), key=lambda x: x[1], reverse=True
+                ((t, score(t)) for t in templates),
+                key=lambda x: (-x[1], PROVIDER_RANK.get(x[0].provider, 99)),
             )
             templates = [
                 t

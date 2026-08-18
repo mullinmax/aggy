@@ -35,12 +35,14 @@ from routers.list import list_router
 from routers.stats import stats_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
+from bridge.rsshub import rsshub_get_templates_job
 from builtin_templates import create_builtin_source_templates
 from ingest.jobs import (
     source_ingestion_scheduling_job,
     source_ingestion_job,
     download_embedding_model_job,
     backfill_image_embeddings_job,
+    prune_ingest_attempts_job,
 )
 from ranking.engine import feed_ranking_job
 
@@ -92,13 +94,16 @@ async def app_lifespan(app: FastAPI):
         next_run_time=datetime.now(),
     )
 
-    # add scheduler job for ingesting sources every n seconds
+    # add scheduler job for ingesting sources every n seconds. Several may run
+    # at once: a video listing or a headless render takes far longer than the
+    # interval, and with a single instance one slow source stalls the queue.
     scheduler.add_job(
         func=source_ingestion_job,
         trigger="interval",
         seconds=config.get_int("SOURCE_INGESTION_RUN_INTERVAL_SECONDS"),
         id="source_ingestion_job",
         replace_existing=False,
+        max_instances=config.get_int("SOURCE_INGESTION_MAX_CONCURRENCY"),
         next_run_time=datetime.now(),
     )
 
@@ -108,6 +113,16 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * 60 * 12,
         id="rss_bridge_get_templates_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+    )
+
+    # and the same for the RSSHub route catalog, when that service is running
+    scheduler.add_job(
+        func=rsshub_get_templates_job,
+        trigger="interval",
+        seconds=60 * 60 * 12,
+        id="rsshub_get_templates_job",
         replace_existing=False,
         next_run_time=datetime.now(),
     )
@@ -143,6 +158,20 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * config.get_int("IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES"),
         id="backfill_image_embeddings_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Trim the ingest attempt history that backs the source-reliability stats.
+    # Runs at start up too, so a deployment that was down long enough for the
+    # window to lapse doesn't carry the backlog until the first interval.
+    scheduler.add_job(
+        func=prune_ingest_attempts_job,
+        trigger="interval",
+        seconds=60 * config.get_int("ATTEMPT_PRUNE_INTERVAL_MINUTES"),
+        id="prune_ingest_attempts_job",
         replace_existing=False,
         next_run_time=datetime.now(),
         max_instances=1,

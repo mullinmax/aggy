@@ -333,9 +333,10 @@
 
     <!-- Template Tab -->
     <div id="sourceTabTemplate">
-      <input type="text" class="input input-bordered w-full mb-3" id="templateSearch" placeholder="Search templates (e.g. Reddit, YouTube...)">
+      <input type="text" class="input input-bordered w-full mb-3" id="templateSearch" placeholder="Search templates by name, site, or provider (Reddit, youtube.com, RSSHub...)">
       <div class="max-h-[60vh] overflow-y-auto border border-base-300 rounded-lg" id="templateList"></div>
       <div id="templateParams" class="hidden mt-3">
+        <div id="templateAbout" class="mb-3"></div>
         <div class="form-control mb-3">
           <label class="label" for="templateSourceName"><span class="label-text">Source Name</span></label>
           <input type="text" class="input input-bordered w-full" id="templateSourceName" placeholder="Give this source a name" required>
@@ -396,7 +397,7 @@
 
       <!-- Shown when the URL is detected to be an RSS/Atom feed -->
       <div id="analyzeFeedStep" class="hidden">
-        <p class="text-sm text-success mb-3">
+        <p class="text-sm text-success mb-3" id="analyzeFeedNotice">
           ✓ Detected an RSS/Atom feed — no scraping needed.
         </p>
         <div class="form-control mb-3">
@@ -404,7 +405,7 @@
           <input type="text" class="input input-bordered w-full" id="analyzeFeedName" placeholder="e.g. Hacker News" required>
         </div>
         <div class="form-control mb-3">
-          <label class="label"><span class="label-text">Feed URL</span></label>
+          <label class="label"><span class="label-text" id="analyzeFeedUrlLabel">Feed URL</span></label>
           <div class="text-xs text-base-content/50 break-all font-mono border border-base-300 rounded-lg p-2" id="analyzeFeedUrl"></div>
         </div>
         <div class="flex gap-2 justify-end mt-4">

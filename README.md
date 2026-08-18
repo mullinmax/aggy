@@ -13,7 +13,9 @@ Aggy works for any type of content. Whether it’s specific animals, hobbies, ne
 
 Aggy currently supports:
 
-- **RSS sources** via templates powered by [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge)
+- **RSS sources** via templates powered by [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge) and [RSSHub](https://github.com/DIYgod/RSSHub)
+- **Video sites**, via [yt-dlp](https://github.com/yt-dlp/yt-dlp): point a source at a channel, user, playlist, or search-results page and Aggy reads it as a feed. Metadata only — nothing is downloaded, and playback streams from the source site
+- **JavaScript-heavy pages**, rendered in a headless browser before Aggy applies your CSS selectors
 
 Upcoming integrations:
 
@@ -31,7 +33,8 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 ### Available now:
 
 - **RSS source support** with predefined templates for faster setup
-- **Any website as a source**: paste a URL and a local Ollama model works out the CSS selectors (via RSS-Bridge), with a live preview to fine-tune before saving
+- **Any website as a source**: paste a URL and a local Ollama model works out the CSS selectors, with a live preview to fine-tune before saving. Pages that build themselves in the browser are rendered headlessly first, so client-side listings and lazy-loaded thumbnails work too
+- **Pluggable ingest backends**: every source names how it is read (`rss`, `ytdlp`, `html`), so reaching a new kind of site means adding a backend rather than bending everything through a feed
 - **Bulk subscription import** from Reddit, YouTube, Bluesky, and any OPML export (Feedly, Inoreader, podcast apps), with per-source feed assignment
 - **Embedding generation** for text to improve content relevance
 

@@ -230,6 +230,7 @@ def test_sources(client, existing_user, existing_feed, existing_source, token):
             "source_color": response.json()[0]["source_color"],
             "source_feed_hash": None,
             "source_feed_name": None,
+            "source_kind": "rss",
         }
     ]
     # a palette color was assigned at creation

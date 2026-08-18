@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from db.item import ItemStrict
 
@@ -9,7 +9,10 @@ def unique_item_strict():
     item = ItemStrict(
         url="http://example.com/",
         author="Example author",
-        date_published=datetime.now(),
+        # tz-aware on purpose: date_published is a TIMESTAMPTZ, so a naive
+        # value comes back from the database carrying UTC and no longer
+        # compares equal to the item that was stored.
+        date_published=datetime.now(timezone.utc),
         image_url="http://example.com/image.jpg",
         title="Example title",
         domain="example.com",

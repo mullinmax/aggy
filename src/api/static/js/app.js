@@ -1082,12 +1082,65 @@ function linkCard(m) {
       h('div', { class: 'text-sm text-primary break-all line-clamp-2' }, m.url)));
 }
 
+// Video-site items keep no playable URL: the ones sites hand out are signed
+// and expire within hours, so one stored at ingest time would already be dead.
+// The thumbnail stands in until the viewer presses play, and only then does
+// the API resolve a stream that plays straight from the origin.
+function streamPlayer(m, itemHash) {
+  const wrap = h('div', { class: 'relative aspect-video w-full bg-base-300 cursor-pointer' });
+
+  const poster = () => [
+    m.poster && h('img', {
+      class: 'absolute inset-0 w-full h-full object-cover',
+      src: m.poster, alt: '', loading: 'lazy',
+      onerror: (e) => e.target.remove(),
+    }),
+    h('div', { class: 'absolute inset-0 grid place-items-center pointer-events-none' },
+      h('div', { class: 'aggy-play-badge' })),
+  ];
+
+  render(wrap, poster());
+  wrap.onclick = async (e) => {
+    e.stopPropagation(); // don't open the reader behind the player
+    if (wrap._loading || wrap._playing) return;
+    wrap._loading = true;
+    render(wrap, h('div', { class: 'absolute inset-0 grid place-items-center' }, spinner()));
+    try {
+      const stream = await sdk.itemStreamUrl({ item_url_hash: itemHash });
+      wrap._playing = true;
+      wrap.classList.remove('cursor-pointer');
+      render(wrap, h('video', {
+        class: 'absolute inset-0 w-full h-full', src: stream.url,
+        poster: stream.poster || m.poster || null,
+        controls: true, autoplay: true, playsinline: true,
+        onclick: (ev) => ev.stopPropagation(),
+      }));
+    } catch (err) {
+      // Not every item has a rendition a browser can play, and a site can
+      // simply refuse the lookup. Offer the page itself rather than leaving
+      // a play button that does nothing.
+      render(wrap, poster(),
+        h('a', {
+          class: 'absolute inset-x-0 bottom-0 bg-base-100/90 text-xs text-primary px-3 py-2 flex items-center gap-1.5',
+          href: m.url, target: '_blank', rel: 'noopener',
+          onclick: (ev) => ev.stopPropagation(),
+        }, openInNewTabIcon(), h('span', {}, "Can't play here — open on the site")));
+      toast(err.message, 'alert-error');
+    } finally {
+      wrap._loading = false;
+    }
+  };
+  return wrap;
+}
+
 // One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
 // and loop like the reddit app; videos get controls, so their clicks must
 // reach the player instead of opening the reader.
-function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
+function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain', itemHash = null) {
   // reddit link posts point off-site: show a preview card, not a media frame
   if (m.type === 'link') return linkCard(m);
+  // a video site's item: resolved to a playable URL on demand
+  if (m.type === 'stream') return streamPlayer(m, itemHash);
   // third-party players (e.g. redgifs) embed as an iframe; their clicks
   // never bubble, so they don't open the reader
   if (m.type === 'embed') {
@@ -1116,15 +1169,15 @@ function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain') {
 
 // A media list -> single element or a swipeable snap-scrolling gallery
 // strip with an index badge.
-function mediaGallery(mediaList) {
-  if (mediaList.length === 1) return mediaElement(mediaList[0]);
+function mediaGallery(mediaList, itemHash = null) {
+  if (mediaList.length === 1) return mediaElement(mediaList[0], undefined, itemHash);
   const counter = h('div', {
     class: 'badge badge-neutral badge-sm absolute top-2 right-2 pointer-events-none',
   }, `1/${mediaList.length}`);
   const strip = h('div', { class: 'flex overflow-x-auto snap-x snap-mandatory' },
     mediaList.map((m) =>
       h('div', { class: 'w-full flex-none snap-center flex items-center justify-center bg-base-300' },
-        mediaElement(m))));
+        mediaElement(m, undefined, itemHash))));
   strip.addEventListener('scroll', () => {
     const index = Math.min(Math.round(strip.scrollLeft / strip.clientWidth) + 1, mediaList.length);
     counter.textContent = `${index}/${mediaList.length}`;
@@ -1146,7 +1199,7 @@ function itemCard(item, { listMode = false } = {}) {
   const mediaBlock = ytId
     ? h('figure', { class: 'bg-base-300 aggy-card-media' }, youtubeEmbed(ytId))
     : media
-    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media, item.item_hash))
     : imageUrl
       ? h('figure', { class: 'bg-base-300 aggy-card-media' },
           h('img', {
@@ -1489,7 +1542,7 @@ function openReader(item) {
     // the content's thumbnails would just duplicate the player
     parsed.root.querySelectorAll('img').forEach((img) => (img.closest('a') || img).remove());
   } else if (media.length) {
-    render(mediaHost, mediaGallery(media));
+    render(mediaHost, mediaGallery(media, item.item_hash));
   } else if (heroUrl) {
     render(mediaHost, h('img', {
       src: heroUrl, class: 'rounded-lg max-w-full max-h-[60vh] object-contain mx-auto',
@@ -1830,7 +1883,7 @@ const ANALYZE_FIELDS = [
 
 let analyzeState = null; // { suggestion, params } while the result step is open
 let analyzePreviewSeq = 0; // ignore out-of-order preview responses
-let detectedFeed = null; // { feed_url } while the feed-confirm step is open
+let detectedFeed = null; // { kind, url, template_name_hash } while the confirm step is open
 
 function resetAnalyzeTab() {
   analyzeState = null;
@@ -1877,10 +1930,21 @@ async function handleAddByUrl(e) {
     // First find out what we're dealing with: an RSS/Atom feed we can add
     // straight away, or a website that needs the selector analysis.
     const detected = await sdk.sourceAnalyzeDetect({ body: { url, cookie } });
-    if (detected.kind === 'feed') {
-      detectedFeed = { feed_url: detected.feed_url || url };
+    // Both a real feed and a recognized video listing skip the selector
+    // analysis entirely — they just need a name and a confirmation.
+    if (detected.kind === 'feed' || detected.kind === 'video') {
+      const isVideo = detected.kind === 'video';
+      detectedFeed = {
+        kind: detected.kind,
+        url: isVideo ? url : (detected.feed_url || url),
+        template_name_hash: detected.template_name_hash,
+      };
+      $('analyzeFeedNotice').textContent = isVideo
+        ? '✓ Recognized as a video listing — read as metadata only, nothing is downloaded.'
+        : '✓ Detected an RSS/Atom feed — no scraping needed.';
+      $('analyzeFeedUrlLabel').textContent = isVideo ? 'Listing URL' : 'Feed URL';
       $('analyzeFeedName').value = detected.suggested_source_name || '';
-      $('analyzeFeedUrl').textContent = detectedFeed.feed_url;
+      $('analyzeFeedUrl').textContent = detectedFeed.url;
       $('analyzeInputStep').classList.add('hidden');
       $('analyzeFeedStep').classList.remove('hidden');
       return;
@@ -1914,11 +1978,22 @@ async function handleAddDetectedFeed() {
   const btn = $('analyzeFeedAddBtn');
   btn.disabled = true;
   try {
-    await sdk.sourceCreate({
-      feed_name_hash: currentFeed.feed_name_hash,
-      source_name: name,
-      source_url: detectedFeed.feed_url,
-    });
+    if (detectedFeed.kind === 'video') {
+      await sdk.sourceTemplateCreate({
+        body: {
+          source_template_name_hash: detectedFeed.template_name_hash,
+          feed_hash: currentFeed.feed_name_hash,
+          source_name: name,
+          parameters: { url: detectedFeed.url },
+        },
+      });
+    } else {
+      await sdk.sourceCreate({
+        feed_name_hash: currentFeed.feed_name_hash,
+        source_name: name,
+        source_url: detectedFeed.url,
+      });
+    }
     closeModal('addSourceModal');
     toast(`Source "${name}" added`);
     resetAnalyzeTab();
@@ -2018,11 +2093,14 @@ const scheduleAnalyzePreview = debounce(loadAnalyzePreview, 500);
 async function loadAnalyzePreview() {
   if (!analyzeState) return;
   const seq = ++analyzePreviewSeq;
-  $('analyzePreviewStatus').textContent = 'rendering via rss-bridge…';
+  const rendered = !!analyzeState.suggestion.rendered;
+  $('analyzePreviewStatus').textContent = rendered
+    ? 'rendering in a headless browser…'
+    : 'rendering via rss-bridge…';
   render($('analyzePreview'), h('div', { class: 'p-6' }, spinner()));
   try {
     const preview = await sdk.sourceAnalyzePreview({
-      body: { parameters: analyzeState.params },
+      body: { parameters: analyzeState.params, rendered },
     });
     if (seq !== analyzePreviewSeq || !analyzeState) return;
     $('analyzePreviewStatus').textContent =
@@ -2061,14 +2139,27 @@ async function handleCreateAnalyzedSource() {
   const btn = $('analyzeAddBtn');
   btn.disabled = true;
   try {
-    await sdk.sourceTemplateCreate({
-      body: {
-        source_template_name_hash: analyzeState.suggestion.template_name_hash,
-        feed_hash: currentFeed.feed_name_hash,
-        source_name: name,
-        parameters: analyzeState.params,
-      },
-    });
+    if (analyzeState.suggestion.rendered) {
+      // the articles only exist after the page runs, so the source keeps its
+      // selectors and is scraped by aggy itself rather than by rss-bridge
+      await sdk.sourceCreateScraped({
+        body: {
+          feed_hash: currentFeed.feed_name_hash,
+          source_name: name,
+          parameters: analyzeState.params,
+          rendered: true,
+        },
+      });
+    } else {
+      await sdk.sourceTemplateCreate({
+        body: {
+          source_template_name_hash: analyzeState.suggestion.template_name_hash,
+          feed_hash: currentFeed.feed_name_hash,
+          source_name: name,
+          parameters: analyzeState.params,
+        },
+      });
+    }
     closeModal('addSourceModal');
     toast(`Source "${name}" added`);
     resetAnalyzeTab();
@@ -2429,6 +2520,55 @@ function renderImportResults(response) {
 }
 
 // ---------- source templates ----------
+
+// Which service produces a template's feed. Aggy's own templates fetch the
+// site directly; the other two go through a bridge, and RSSHub's imported
+// catalog is large enough that saying so matters.
+const PROVIDER_BADGE = {
+  'Built-in': 'badge-primary',
+  'RSS-Bridge': 'badge-secondary',
+  'RSSHub': 'badge-accent',
+};
+
+// How the source will be read, when it isn't a plain feed.
+const KIND_BADGE = {
+  ytdlp: { label: 'Video', title: 'Read with yt-dlp: metadata only, nothing is downloaded' },
+  html: { label: 'Scraped', title: 'Read by applying CSS selectors to the page' },
+};
+
+function templateBadges(t) {
+  const badges = [];
+  if (t.provider) {
+    badges.push(h('span', {
+      class: `badge badge-sm ${PROVIDER_BADGE[t.provider] || 'badge-ghost'}`,
+      title: `Feed provided by ${t.provider}`,
+    }, t.provider));
+  }
+  const kind = KIND_BADGE[t.kind];
+  if (kind) {
+    badges.push(h('span', { class: 'badge badge-sm badge-outline', title: kind.title }, kind.label));
+  }
+  return badges;
+}
+
+// The line under a template's name: which site it pulls from, and what it
+// will ask for. Imported route names are often just "User posts", so the
+// domain is what tells two of them apart.
+function templateMeta(t) {
+  const bits = [];
+  if (t.site_domain) bits.push(t.site_domain);
+  const required = t.required_parameters || [];
+  if (required.length) {
+    bits.push(`needs ${required.join(', ')}`);
+  } else {
+    bits.push('no setup needed');
+  }
+  if (t.optional_parameter_count) {
+    bits.push(`${t.optional_parameter_count} optional`);
+  }
+  return h('div', { class: 'text-xs text-base-content/40 mt-0.5' }, bits.join(' · '));
+}
+
 function openAddSourceModal() {
   showModal('addSourceModal');
   clearTemplateSelection();
@@ -2452,7 +2592,10 @@ async function searchTemplates() {
         class: 'p-3 border-b border-base-300 last:border-b-0 cursor-pointer hover:bg-base-300 transition-colors',
         onclick: () => selectTemplate(t.name_hash),
       },
-        h('div', { class: 'font-medium text-sm' }, t.user_friendly_name || t.name),
+        h('div', { class: 'flex items-center gap-2 flex-wrap' },
+          h('span', { class: 'font-medium text-sm' }, t.user_friendly_name || t.name),
+          ...templateBadges(t)),
+        templateMeta(t),
         t.description && h('div', { class: 'text-xs text-base-content/50 line-clamp-2 mt-0.5' }, t.description))));
   } catch (err) {
     toast(err.message, 'alert-error');
@@ -2465,6 +2608,12 @@ async function selectTemplate(hash) {
     selectedTemplate = tmpl;
     // swap the modal from browse mode to a clean configure view
     $('addSourceTitle').textContent = `Configure ${tmpl.user_friendly_name || tmpl.name}`;
+    // keep the provenance visible while configuring: which service will fetch
+    // this, from which site, and how it will be read
+    render($('templateAbout'),
+      h('div', { class: 'flex items-center gap-2 flex-wrap' }, ...templateBadges(tmpl)),
+      tmpl.site_domain && h('div', { class: 'text-xs text-base-content/40 mt-1' }, tmpl.site_domain),
+      tmpl.description && h('div', { class: 'text-xs text-base-content/50 mt-1' }, tmpl.description));
     $('sourceTabs').classList.add('hidden');
     $('templateSearch').classList.add('hidden');
     $('templateList').classList.add('hidden');

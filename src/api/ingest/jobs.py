@@ -16,6 +16,16 @@ from db.item import (
     save_image_embedding,
 )
 from db.source import Source
+from db.source_attempt import (
+    OUTCOME_ERROR,
+    OUTCOME_OK,
+    OUTCOME_SKIPPED,
+    prune_attempts,
+    record_attempt,
+)
+from ingest import host_circuit
+from ingest.backends import get_backend
+from ingest.host_circuit import HostUnavailable, source_host
 from ingest.source import ingest_source
 from ingest.item.reddit import ingest_reddit_item
 from ingest.item.open_graph import ingest_open_graph_item
@@ -91,13 +101,80 @@ def source_ingestion_job() -> None:
             source_hash=row["name_hash"],
         )
         logging.info(f"Ingesting source '{source.name}' ({source.url})")
-        ingest_source(source=source)
+        _ingest_with_circuit(source)
         source.mark_ingested()
+    except HostUnavailable as e:
+        # Not a failure of this source: its site is in cooldown and was never
+        # contacted. Logged at info because a broken site produces one of these
+        # per source per cycle, and they are the breaker working, not news.
+        logging.info(f"Skipping source '{source.name}': {e}")
+        source.mark_ingest_error(str(e))
+        return
     except Exception as e:
         logging.exception(f"Ingesting of source {row['name_hash']} failed: {e}")
         if source is not None:
             source.mark_ingest_error(str(e))
         return
+
+
+def _ingest_with_circuit(source: Source) -> None:
+    """Ingest a source, reporting the outcome to the per-site breaker.
+
+    Feed sources are exempt: they read another feed out of our own database
+    rather than fetching a site, so there is no host whose reliability they
+    could speak to.
+    """
+    if source.is_feed_source:
+        ingest_source(source=source)
+        return
+
+    host = source_host(str(source.url))
+
+    try:
+        host_circuit.check(str(source.url))
+    except HostUnavailable:
+        record_attempt(
+            user_hash=source.user_hash,
+            feed_hash=source.feed_hash,
+            source_hash=source.name_hash,
+            host=host,
+            outcome=OUTCOME_SKIPPED,
+        )
+        raise
+
+    try:
+        ingest_source(source=source)
+    except Exception as e:
+        host_circuit.record_failure(str(source.url))
+        record_attempt(
+            user_hash=source.user_hash,
+            feed_hash=source.feed_hash,
+            source_hash=source.name_hash,
+            host=host,
+            outcome=OUTCOME_ERROR,
+            error=str(e),
+        )
+        raise
+
+    host_circuit.record_success(str(source.url))
+    record_attempt(
+        user_hash=source.user_hash,
+        feed_hash=source.feed_hash,
+        source_hash=source.name_hash,
+        host=host,
+        outcome=OUTCOME_OK,
+    )
+
+
+def prune_ingest_attempts_job() -> None:
+    """Drop ingest attempts that have aged out of the retention window."""
+    try:
+        deleted = prune_attempts()
+    except Exception as e:
+        logging.error(f"Pruning ingest attempt history failed: {e}")
+        return
+    if deleted:
+        logging.info(f"Pruned {deleted} ingest attempt(s) from history")
 
 
 def ingest_source_now(source: Source) -> None:
@@ -139,6 +216,7 @@ def rescrape_source(source: Source) -> None:
     """
     from ranking.engine import rank_feed  # local import avoids an import cycle
 
+    backend = get_backend(source.kind)
     embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
     image_embed_host = config.get("IMAGE_EMBED_HOST", None)
     image_embed_model = config.get("IMAGE_EMBED_MODEL")
@@ -148,14 +226,19 @@ def rescrape_source(source: Source) -> None:
         try:
             before = {f: getattr(item, f) for f in _RESCRAPE_FIELDS}
 
-            merged = ItemLoose.merge_instances(
-                items=[
-                    item,
-                    ingest_reddit_item(item),
-                    ingest_open_graph_item(item),
-                    ingest_mercury_item(item),
-                ]
-            )
+            if backend.enrich:
+                merged = ItemLoose.merge_instances(
+                    items=[
+                        item,
+                        ingest_reddit_item(item),
+                        ingest_open_graph_item(item),
+                        ingest_mercury_item(item),
+                    ]
+                )
+            else:
+                # the generic scrapers have nothing to offer a backend that
+                # says so, and the sites it reaches refuse them anyway
+                merged = ItemLoose(**item.dict())
             # merge_instances doesn't carry embeddings over; keep the existing
             # ones so a re-scrape never drops them. Copied rather than shared:
             # add_embedding mutates the dict in place, so handing `merged` the
@@ -167,18 +250,19 @@ def rescrape_source(source: Source) -> None:
                 dict(item.image_embeddings) if item.image_embeddings else None
             )
 
+            # a re-collect is the one other time a backend gets to top an item
+            # up, which is how items stored before it could do so get their
+            # pictures
+            merged = backend.enrich_item(merged) or merged
+
             after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
-            text_changed = any(
-                after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS
-            )
+            text_changed = any(after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS)
             image_changed = after["image_url"] != before["image_url"]
 
             embedding_changed = False
             if text_changed and embedding_model is not None:
                 try:
-                    merged.add_embedding(
-                        model_name=embedding_model, force_refresh=True
-                    )
+                    merged.add_embedding(model_name=embedding_model, force_refresh=True)
                     embedding_changed = merged.embeddings != item.embeddings
                 except Exception as e:
                     logging.error(f"Error re-embedding item {item.url}: {e}")
@@ -225,7 +309,9 @@ def rescrape_source(source: Source) -> None:
         try:
             rank_feed(feed)
         except Exception as e:
-            logging.exception(f"Re-ranking feed {feed.name} after re-scrape failed: {e}")
+            logging.exception(
+                f"Re-ranking feed {feed.name} after re-scrape failed: {e}"
+            )
 
     logging.info(
         f"Re-scraped source '{source.name}': "

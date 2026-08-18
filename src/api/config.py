@@ -3,6 +3,10 @@ import os
 KNOWN_CONFIG_VALUES = [
     "SOURCE_READ_INTERVAL_MINUTES",
     "SOURCE_INGESTION_RUN_INTERVAL_SECONDS",
+    # How many sources may be ingested at once. One slow source (a video
+    # listing walking result pages, a headless render) otherwise holds up
+    # every other source's turn.
+    "SOURCE_INGESTION_MAX_CONCURRENCY",
     "PYTEST_RUNTIME_TYPE",
     "JWT_ALGORITHM",
     "JWT_SECRET",
@@ -36,6 +40,18 @@ KNOWN_CONFIG_VALUES = [
     "OLLAMA_ANALYSIS_NUM_CTX",
     "RSS_BRIDGE_HOST",
     "RSS_BRIDGE_PORT",
+    # Second bridge: RSSHub covers a different (much larger) set of sites than
+    # rss-bridge. Optional; unset means its templates simply aren't offered.
+    "RSSHUB_HOST",
+    "RSSHUB_PORT",
+    # Metadata-only video-site extraction (src/ytdlp). Optional; unset means
+    # "ytdlp" sources can't be created or ingested.
+    "YTDLP_HOST",
+    "YTDLP_PORT",
+    # Headless browser used to render pages before scraping them (src/render).
+    # Optional; unset falls back to a plain HTTP fetch everywhere.
+    "RENDER_HOST",
+    "RENDER_PORT",
     "BUILD_VERSION",
     "JWT_EXPIRATION_DAYS",
     "SIGNUP_ENABLED",
@@ -49,11 +65,21 @@ KNOWN_CONFIG_VALUES = [
     "REDDIT_BLOCK_THRESHOLD",
     "REDDIT_BLOCK_COOLDOWN_SECONDS",
     "REDDIT_MAX_BLOCK_COOLDOWN_SECONDS",
+    # Per-site circuit breaker over all source ingests, and how long the
+    # attempt history behind the reliability stats is kept.
+    "HOST_FAILURE_THRESHOLD",
+    "HOST_COOLDOWN_SECONDS",
+    "HOST_MAX_COOLDOWN_SECONDS",
+    "SOURCE_ATTEMPT_HISTORY_DAYS",
+    "ATTEMPT_PRUNE_INTERVAL_MINUTES",
 ]
 
 DEFAULT_CONFIG = {
     "SOURCE_READ_INTERVAL_MINUTES": 60,
     "SOURCE_INGESTION_RUN_INTERVAL_SECONDS": 15,
+    # Each run picks one due source with FOR UPDATE SKIP LOCKED, so runs never
+    # collide over the same source; this just lets a few overlap.
+    "SOURCE_INGESTION_MAX_CONCURRENCY": 3,
     "PYTEST_RUNTIME_TYPE": "local",
     "JWT_ALGORITHM": "HS256",
     "OLLAMA_PORT": 11434,
@@ -106,6 +132,9 @@ DEFAULT_CONFIG = {
     # the thinking trace on reasoning models.
     "OLLAMA_ANALYSIS_NUM_CTX": 32768,
     "RSS_BRIDGE_PORT": 80,
+    "RSSHUB_PORT": 1200,
+    "YTDLP_PORT": 8000,
+    "RENDER_PORT": 8000,
     "BUILD_VERSION": "0.0.0-beta",
     "DB_PORT": 5432,
     "DB_USER": "aggy",
@@ -132,6 +161,22 @@ DEFAULT_CONFIG = {
     "REDDIT_BLOCK_THRESHOLD": 3,
     "REDDIT_BLOCK_COOLDOWN_SECONDS": 900.0,
     "REDDIT_MAX_BLOCK_COOLDOWN_SECONDS": 21600.0,
+    # Sites fail all at once: when a feed endpoint breaks it breaks for every
+    # source pointing at it, and with one source popped per run those dead
+    # sources crowd the healthy ones out of the schedule. This many consecutive
+    # failures for a site stops its sources being attempted at all for a
+    # cooldown, doubling on each re-trip up to the ceiling. The threshold is
+    # above 1 so a single flaky fetch doesn't pause a working site, and the
+    # ceiling is well under a day so a site that recovers overnight is picked
+    # back up without anyone touching it. Values are seconds.
+    "HOST_FAILURE_THRESHOLD": 5,
+    "HOST_COOLDOWN_SECONDS": 600.0,
+    "HOST_MAX_COOLDOWN_SECONDS": 14400.0,
+    # Ingest attempts are logged per source per run to back the reliability
+    # stats. At the default cadence that is a few thousand rows a day, so they
+    # are pruned to this window.
+    "SOURCE_ATTEMPT_HISTORY_DAYS": 30,
+    "ATTEMPT_PRUNE_INTERVAL_MINUTES": 360,
 }
 
 FALSEY_STRINGS = {"", "0", "false", "no", "off"}

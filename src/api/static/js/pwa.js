@@ -176,10 +176,18 @@
   }
 
   // Android / Chrome: defer the native mini-infobar and offer our own button.
+  //
+  // preventDefault() is only called when we are actually about to offer the
+  // install ourselves. Calling it and then never calling prompt() suppresses
+  // Chrome's install banner and leaves nothing in its place -- which is both a
+  // worse experience on desktop (where we never show our modal) and the source
+  // of Chrome's "Banner not shown: beforeinstallpromptevent.preventDefault()
+  // called" console warning on every page load.
   window.addEventListener('beforeinstallprompt', (e) => {
+    if (!isMobile() || isStandalone() || recentlyDismissed()) return;
     e.preventDefault();
     deferredPrompt = e;
-    if (isMobile()) maybeShow('native');
+    maybeShow('native');
   });
 
   // iOS Safari: no event to hook, so show manual instructions after load.

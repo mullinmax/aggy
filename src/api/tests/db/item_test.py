@@ -81,12 +81,21 @@ def test_merge_items(unique_item_strict):
     ],
 )
 def test_date_published_parsing(unique_item_strict, raw_date, expected_date):
-    """Tests parsing of various date_published string formats."""
-    unique_item_strict.date_published = raw_date
-    unique_item_strict.create()
+    """Tests parsing of various date_published string formats.
 
-    item = ItemLoose.read(unique_item_strict.url_hash)
-    assert item.date_published.strftime("%Y-%m-%d") == expected_date
+    Built through the model rather than assigned onto it: pydantic does not
+    re-run validators on assignment, so assigning sent the raw string straight
+    to Postgres and this only ever tested which literals *Postgres* happens to
+    accept -- passing for "May 1, 2021" and failing for "1st of April, 2021",
+    neither of which says anything about our own parsing.
+    """
+    item = ItemStrict(
+        **{**unique_item_strict.dict(), "date_published": raw_date}
+    )
+    item.create()
+
+    stored = ItemLoose.read(item.url_hash)
+    assert stored.date_published.strftime("%Y-%m-%d") == expected_date
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -531,3 +540,34 @@ def test_fetch_image_rejects_non_image_response(
 
     with pytest.raises(ValueError, match="text/html"):
         ItemStrict._fetch_image_base64("https://preview.redd.it/a.jpg")
+
+def test_titles_keep_their_ampersands(unique_item_strict):
+    """Sanitizing escapes as it goes, so unescaping first only handed it an
+    "&" to turn back into "&amp;" — which was then shown literally."""
+    item = unique_item_strict.model_copy(
+        update={"title": "Rock &amp; Roll &mdash; a history"}
+    )
+    item = ItemStrict(**item.dict())
+
+    assert item.title == "Rock & Roll — a history"
+
+
+def test_titles_still_have_their_markup_stripped(unique_item_strict):
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={"title": "<b>Bold</b> and <i>italic</i>"}
+        ).dict()
+    )
+
+    assert item.title == "Bold and italic"
+
+
+def test_excerpts_and_authors_are_unescaped_too(unique_item_strict):
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={"excerpt": "Ben &amp; Jerry", "author": "R&amp;D team"}
+        ).dict()
+    )
+
+    assert item.excerpt == "Ben & Jerry"
+    assert item.author == "R&D team"

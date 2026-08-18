@@ -42,6 +42,15 @@ function fmtCompact(n) {
 const pct = (part, total) => (total ? (part / total) * 100 : 0);
 const fmtPct = (part, total) => (total ? `${Math.round(pct(part, total))}%` : '—');
 
+// A column path with a rounded cap on the data-end only; the baseline end stays
+// square. Shared by both column charts on this page.
+function cappedColumn(x, top, bottom, w) {
+  const height = Math.max(0, bottom - top);
+  const r = Math.min(4, w / 2, height);
+  return `M${x},${bottom} L${x},${top + r} Q${x},${top} ${x + r},${top} ` +
+    `L${x + w - r},${top} Q${x + w},${top} ${x + w},${top + r} L${x + w},${bottom} Z`;
+}
+
 // Smallest 1/2/5 x 10^k at or above v — keeps y-axis ticks on round numbers.
 function niceCeil(v) {
   if (v <= 1) return 1;
@@ -141,7 +150,16 @@ async function showArticleStats() {
 
 async function loadArticleStats() {
   try {
-    articleStats = await sdk.statsArticles({ timeline_days: STATS_TIMELINE_DAYS });
+    // Fetched together: the reliability panel answers "why has this gone
+    // quiet?", which is exactly the question the coverage numbers provoke.
+    // A failure to load it must not cost the user the rest of the page, so it
+    // degrades to nothing rather than rejecting the pair.
+    const [articles, sources] = await Promise.all([
+      sdk.statsArticles({ timeline_days: STATS_TIMELINE_DAYS }),
+      sdk.statsSources({ days: RELIABILITY_DAYS }).catch(() => null),
+    ]);
+    articleStats = articles;
+    sourceStats = sources;
     renderArticleStats();
   } catch (err) {
     render($('statsPageBody'),
@@ -164,10 +182,13 @@ function renderArticleStats() {
   const { summary, domains, timeline } = articleStats;
 
   if (!summary.total_articles) {
+    // No articles is the symptom; a site that has stopped answering is the
+    // likeliest cause, so the reliability panel stays even on the empty state.
     render($('statsPageBody'),
       emptyState('\u{1F4CA}', 'No articles yet',
         'Once your feeds pull in articles, this page breaks them down by the site they link to.',
-        h('a', { class: 'btn btn-primary btn-sm', href: '#/' }, 'Back to your feeds')));
+        h('a', { class: 'btn btn-primary btn-sm', href: '#/' }, 'Back to your feeds')),
+      reliabilitySection());
     return;
   }
 
@@ -181,7 +202,12 @@ function renderArticleStats() {
       timelineChart(timeline)),
     statsCard('By site',
       `${fmtInt(domains.length)} ${domains.length === 1 ? 'site' : 'sites'}, grouped by the base domain of each article's link.`,
-      domainTable(summary, domains)));
+      domainTable(summary, domains)),
+    h('h2', { class: 'font-semibold mt-8 mb-1' }, 'Source reliability'),
+    h('p', { class: 'text-xs text-base-content/60 mb-3' },
+      'Whether the sites behind your sources are answering at all — the numbers above ' +
+      'can only describe articles that arrived.'),
+    reliabilitySection());
 }
 
 // A titled section wrapper, so every block on the page reads the same.
@@ -287,14 +313,6 @@ function timelinePlot(timeline, metric) {
   const band = plotW / timeline.length;
   const barW = Math.max(2, Math.min(24, band - 4));
   const y = (value) => pad.top + plotH - (value / max) * plotH;
-
-  // rounded cap on the data-end only; the baseline end stays square
-  const cappedColumn = (x, top, bottom, w) => {
-    const height = Math.max(0, bottom - top);
-    const r = Math.min(4, w / 2, height);
-    return `M${x},${bottom} L${x},${top + r} Q${x},${top} ${x + r},${top} ` +
-      `L${x + w - r},${top} Q${x + w},${top} ${x + w},${top + r} L${x + w},${bottom} Z`;
-  };
 
   const gridlines = [0, 0.5, 1].map((f) =>
     svg('line', {
@@ -543,4 +561,228 @@ function domainTableBody(summary, domains) {
           onclick: () => { statsShowAll = !statsShowAll; rerenderDomainTable(); },
         }, statsShowAll ? 'Show top sites only' : `Show all ${fmtInt(rows.length)} sites`)
       : null);
+}
+
+// ---------- source reliability ----------
+//
+// The other half of the page: not what the articles carry, but whether the
+// sites they come from are answering at all. A site that has stopped serving
+// its feeds looks identical to a quiet one in the coverage numbers above —
+// articles simply stop arriving — so failures get their own panel.
+
+const RELIABILITY_DAYS = 7;
+const RELIABILITY_ROW_LIMIT = 15;
+
+let sourceStats = null;
+let reliabilityShowAll = false;
+
+// A host is "healthy" below this failure share; above it the row is flagged.
+// Feeds fail transiently often enough that a couple of percent means nothing.
+const RELIABILITY_WARN_RATE = 0.1;
+
+const fmtRate = (rate) => (rate == null ? '—' : `${Math.round(rate * 100)}%`);
+
+function rateClass(rate, inCooldown) {
+  if (inCooldown) return 'text-error';
+  if (rate == null) return 'text-base-content/40';
+  if (rate >= 0.5) return 'text-error';
+  if (rate >= RELIABILITY_WARN_RATE) return 'text-warning';
+  return 'text-success';
+}
+
+function fmtCooldown(seconds) {
+  if (seconds == null) return '';
+  const mins = Math.max(1, Math.round(seconds / 60));
+  return mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}m`;
+}
+
+// Daily failure share. Days with no attempts are drawn as a gap rather than as
+// 0%, so a stretch when nothing was scheduled doesn't read as a perfect record.
+function reliabilityChart(timeline) {
+  const W = 720;
+  const H = 150;
+  const pad = { top: 8, right: 8, bottom: 22, left: 34 };
+  const plotH = H - pad.top - pad.bottom;
+  const band = (W - pad.left - pad.right) / Math.max(1, timeline.length);
+  const barW = Math.max(2, Math.min(18, band - 4));
+
+  const y = (rate) => pad.top + plotH - rate * plotH;
+
+  const gridlines = [0, 0.5, 1].map((f) =>
+    svg('line', {
+      x1: pad.left, x2: W - pad.right, y1: y(f), y2: y(f),
+      class: 'stroke-base-300', 'stroke-width': 1,
+    }));
+
+  const yTicks = [0, 0.5, 1].map((f) =>
+    svg('text', {
+      x: pad.left - 6, y: y(f) + 3, 'text-anchor': 'end',
+      class: 'fill-base-content/50 text-[11px] tabular-nums',
+    }, `${Math.round(f * 100)}%`));
+
+  const xTicks = timeline.map((point, i) => {
+    const last = i === timeline.length - 1;
+    if (!last && (i % 2 !== 0 || i > timeline.length - 2)) return null;
+    return svg('text', {
+      x: pad.left + i * band + band / 2, y: H - 6,
+      'text-anchor': last ? 'end' : 'middle',
+      class: 'fill-base-content/50 text-[11px]',
+    }, dayLabel(point.day));
+  });
+
+  const columns = timeline.map((point, i) => {
+    if (point.error_rate == null) return null;
+    const x = pad.left + i * band + (band - barW) / 2;
+    const top = y(point.error_rate);
+    const baseline = y(0);
+    if (baseline - top < 0.5) return null; // a clean day draws nothing
+    return svg('path', {
+      d: cappedColumn(x, top, baseline, barW),
+      class: point.error_rate >= RELIABILITY_WARN_RATE ? 'fill-error' : 'fill-warning',
+    });
+  });
+
+  const tooltip = h('div', {
+    class: 'pointer-events-none absolute hidden z-10 rounded-lg border border-base-300 ' +
+      'bg-base-100 px-2 py-1.5 text-xs shadow-lg whitespace-nowrap',
+  });
+
+  const showTip = (point, i) => {
+    render(tooltip,
+      h('div', { class: 'font-semibold' }, dayLabel(point.day)),
+      h('div', { class: 'text-base-content/70' },
+        point.attempts
+          ? `${fmtInt(point.failures)} of ${fmtInt(point.attempts)} failed (${fmtRate(point.error_rate)})`
+          : 'No fetches attempted'),
+      point.skipped
+        ? h('div', { class: 'text-base-content/70' },
+            `${fmtInt(point.skipped)} skipped while backing off`)
+        : null);
+    tooltip.classList.remove('hidden');
+    const x = ((i + 0.5) / timeline.length) * 100;
+    tooltip.style.left = `${Math.min(Math.max(x, 18), 82)}%`;
+    tooltip.style.top = '0';
+    tooltip.style.transform = 'translate(-50%, 0)';
+  };
+
+  const hitBands = timeline.map((point, i) =>
+    svg('rect', {
+      x: pad.left + i * band, y: pad.top, width: band, height: plotH,
+      class: 'fill-base-content/0 hover:fill-base-content/5',
+      'pointer-events': 'all',
+      onmouseenter: () => showTip(point, i),
+      onfocus: () => showTip(point, i),
+      tabindex: '0',
+    },
+    svg('title', {},
+      `${dayLabel(point.day)}: ${fmtInt(point.failures)} of ${fmtInt(point.attempts)} fetches failed`)));
+
+  const plot = svg('svg', {
+    viewBox: `0 0 ${W} ${H}`, class: 'w-full h-36', role: 'img',
+    'aria-label': `Share of source fetches that failed each day over the last ${RELIABILITY_DAYS} days`,
+  }, gridlines, yTicks, xTicks, columns, hitBands);
+
+  return h('div', { class: 'overflow-x-auto' },
+    h('div', {
+      class: 'relative min-w-[480px]',
+      onmouseleave: () => tooltip.classList.add('hidden'),
+    }, tooltip, plot));
+}
+
+let reliabilityTableHost = null;
+
+function rerenderReliabilityTable() {
+  if (!reliabilityTableHost || !sourceStats) return;
+  render(reliabilityTableHost, reliabilityTableBody(sourceStats.hosts));
+}
+
+function reliabilityTableBody(hosts) {
+  const shown = reliabilityShowAll ? hosts : hosts.slice(0, RELIABILITY_ROW_LIMIT);
+
+  const hostRow = (row) =>
+    h('tr', { class: row.in_cooldown ? 'bg-error/5' : '' },
+      h('td', { class: 'font-medium text-xs' },
+        h('div', { class: 'flex items-center gap-2' },
+          h('span', {}, row.host),
+          row.in_cooldown
+            ? h('span', {
+                class: 'badge badge-error badge-xs gap-1 whitespace-nowrap',
+                title: 'Every recent fetch failed, so this site is being left alone for a while. ' +
+                  'It is retried automatically when the wait is up.',
+              }, `paused ${fmtCooldown(row.cooldown_seconds_remaining)}`)
+            : null)),
+      h('td', { class: 'text-right text-xs tabular-nums' }, fmtInt(row.source_count)),
+      h('td', { class: 'text-right text-xs tabular-nums' }, fmtInt(row.attempts)),
+      h('td', { class: 'text-right text-xs' },
+        h('div', { class: 'flex items-center justify-end gap-2' },
+          h('span', { class: `tabular-nums ${rateClass(row.error_rate, row.in_cooldown)}` },
+            fmtRate(row.error_rate)),
+          h('span', { class: 'h-1.5 w-10 rounded bg-base-300 overflow-hidden flex-none' },
+            h('span', {
+              class: `block h-full rounded-r ${row.error_rate >= RELIABILITY_WARN_RATE ? 'bg-error' : 'bg-success'}`,
+              style: `width:${((row.error_rate ?? 0) * 100).toFixed(1)}%`,
+            })))),
+      h('td', { class: 'text-right text-xs tabular-nums text-base-content/60' },
+        row.skipped ? fmtInt(row.skipped) : '—'),
+      h('td', { class: 'text-right text-xs whitespace-nowrap text-base-content/60' },
+        row.last_success_at ? timeAgo(row.last_success_at) : '—'),
+      h('td', {
+        class: 'text-xs text-base-content/60 max-w-[22rem] truncate',
+        title: row.last_error || '',
+      }, row.last_error || '—'));
+
+  return h('div', { class: 'flex flex-col gap-3' },
+    h('div', { class: 'overflow-x-auto' },
+      h('table', { class: 'table table-xs' },
+        h('thead', {},
+          h('tr', {},
+            h('th', {}, 'Site'),
+            h('th', { class: 'text-right', title: 'Your sources pointing at this site' }, 'Sources'),
+            h('th', { class: 'text-right', title: 'Fetches that actually reached the site' }, 'Fetches'),
+            h('th', { class: 'text-right', title: 'Share of those fetches that failed' }, 'Failed'),
+            h('th', { class: 'text-right', title: 'Fetches not attempted because the site was being backed off' }, 'Skipped'),
+            h('th', { class: 'text-right', title: 'When this site last returned a feed' }, 'Last OK'),
+            h('th', { title: 'The most recent failure message' }, 'Last error'))),
+        h('tbody', {}, shown.map(hostRow)))),
+    hosts.length > RELIABILITY_ROW_LIMIT
+      ? h('button', {
+          class: 'btn btn-ghost btn-sm self-center',
+          onclick: () => { reliabilityShowAll = !reliabilityShowAll; rerenderReliabilityTable(); },
+        }, reliabilityShowAll ? 'Show problem sites only' : `Show all ${fmtInt(hosts.length)} sites`)
+      : null);
+}
+
+function reliabilitySection() {
+  if (!sourceStats || !sourceStats.hosts.length) return null;
+
+  const { summary, hosts, timeline, days } = sourceStats;
+  reliabilityTableHost = h('div', {});
+  render(reliabilityTableHost, reliabilityTableBody(hosts));
+
+  const paused = summary.hosts_in_cooldown;
+
+  return h('div', {},
+    h('div', { class: 'stats stats-horizontal shadow-none border border-base-300 w-full mb-3' },
+      h('div', { class: 'stat py-3 px-4' },
+        h('div', { class: 'stat-title text-xs' }, 'Fetches'),
+        h('div', { class: 'stat-value text-lg' }, fmtInt(summary.attempts)),
+        h('div', { class: 'stat-desc' }, `last ${days} days`)),
+      h('div', { class: 'stat py-3 px-4' },
+        h('div', { class: 'stat-title text-xs' }, 'Failed'),
+        h('div', { class: `stat-value text-lg ${rateClass(summary.error_rate, false)}` },
+          fmtRate(summary.error_rate)),
+        h('div', { class: 'stat-desc' }, `${fmtInt(summary.failures)} of ${fmtInt(summary.attempts)}`)),
+      h('div', { class: 'stat py-3 px-4' },
+        h('div', { class: 'stat-title text-xs' }, 'Sites paused'),
+        h('div', { class: `stat-value text-lg ${paused ? 'text-error' : ''}` }, fmtInt(paused)),
+        h('div', { class: 'stat-desc' },
+          paused ? 'backing off, retried automatically' : 'all sites responding'))),
+    statsCard(`Failed fetches per day (last ${days} days)`,
+      'The share of each day’s source fetches that came back an error. A site that stops ' +
+      'answering shows up here long before you notice its articles have gone quiet.',
+      reliabilityChart(timeline)),
+    statsCard('By site',
+      'Worst first. A paused site has failed enough times in a row that Aggy has stopped ' +
+      'asking for a while — it probes again on its own, so nothing needs doing here.',
+      reliabilityTableHost));
 }

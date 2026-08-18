@@ -1,6 +1,6 @@
 import json
 import random
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import StringConstraints, HttpUrl
 from typing_extensions import Annotated
@@ -24,6 +24,7 @@ FEED_SOURCE_URL_PREFIX = "https://feed.aggy.local/"
 
 def feed_source_url(feed_hash: str) -> str:
     return f"{FEED_SOURCE_URL_PREFIX}{feed_hash}"
+
 
 # Default palette for per-source colors: distinct mid-tone hues that read
 # well as badge accents on both light and dark surfaces.
@@ -62,6 +63,13 @@ class Source(ItemCollection):
     # When set, this source mirrors another of the user's feeds instead of an
     # RSS URL (see propagation.py). Ordinary RSS sources leave it None.
     source_feed_hash: Optional[str] = None
+    # Which ingest backend turns this source into items (see ingest/backends).
+    # "rss" fetches the URL and parses it as a feed, which is what every source
+    # did before the other backends existed.
+    kind: str = "rss"
+    # Backend-specific settings: CSS selectors for "html", an entry limit and
+    # cookie for "ytdlp", and so on. None for plain RSS sources.
+    config: Optional[Dict[str, Any]] = None
 
     @property
     def name_hash(self):
@@ -124,8 +132,9 @@ class Source(ItemCollection):
             cur.execute(
                 "INSERT INTO sources (user_hash, feed_hash, name_hash, name, url, "
                 "template_name_hash, template_parameters, ingest_interval_minutes, "
-                "color, source_feed_hash, next_ingest_at) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, {next_ingest_sql})",
+                "color, source_feed_hash, kind, config, next_ingest_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                f"{next_ingest_sql})",
                 (
                     self.user_hash,
                     self.feed_hash,
@@ -139,6 +148,8 @@ class Source(ItemCollection):
                     self.ingest_interval_minutes,
                     self.color,
                     self.source_feed_hash,
+                    self.kind,
+                    json.dumps(self.config) if self.config is not None else None,
                 ),
             )
 
@@ -149,6 +160,7 @@ class Source(ItemCollection):
         template_parameters=None,
         ingest_interval=_UNSET,
         color=_UNSET,
+        config=_UNSET,
     ):
         """Update this source in place. Renaming changes name_hash; the
         source_items FK cascades so existing items stay attached. Resets
@@ -166,6 +178,11 @@ class Source(ItemCollection):
         if color is not _UNSET and color is not None:
             interval_sql += "color = %s, "
             interval_params = interval_params + (color,)
+        if config is not _UNSET:
+            interval_sql += "config = %s, "
+            interval_params = interval_params + (
+                json.dumps(config) if config is not None else None,
+            )
         with self.db_con() as cur:
             cur.execute(
                 "UPDATE sources SET name = %s, name_hash = %s, url = %s, "
@@ -196,6 +213,8 @@ class Source(ItemCollection):
             self.ingest_interval_minutes = ingest_interval
         if color is not _UNSET and color is not None:
             self.color = color
+        if config is not _UNSET:
+            self.config = config
 
     def delete(self):
         with self.db_con() as cur:
@@ -262,7 +281,7 @@ class Source(ItemCollection):
         with cls.db_con() as cur:
             cur.execute(
                 "SELECT name, url, template_name_hash, template_parameters, "
-                "ingest_interval_minutes, color, source_feed_hash "
+                "ingest_interval_minutes, color, source_feed_hash, kind, config "
                 "FROM sources "
                 "WHERE user_hash = %s AND feed_hash = %s AND name_hash = %s",
                 (user_hash, feed_hash, source_hash),
@@ -280,6 +299,8 @@ class Source(ItemCollection):
                 ingest_interval_minutes=row["ingest_interval_minutes"],
                 color=row["color"],
                 source_feed_hash=row["source_feed_hash"],
+                kind=row["kind"],
+                config=row["config"],
             )
         raise ValueError("Source not found")
 
