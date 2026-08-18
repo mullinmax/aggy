@@ -6,19 +6,17 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A hung step (an apt mirror that never answers, a build that stalls)
+    # otherwise sits here until the 6-hour job limit.
+    timeout-minutes: 30
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-
-    - name: Install Docker Compose
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y docker-compose
-
+    # The runner image ships Compose v2 as the `docker compose` CLI plugin, so
+    # there is nothing to install -- `apt-get install docker-compose` pulled the
+    # EOL v1 wrapper, and its `apt-get update` is what hung this job for hours.
     - name: Build and run tests
       # `up --abort-on-container-exit` stopped the stack the moment the flyway
       # container finished migrating, which is before pytest has run at all --
@@ -29,17 +27,19 @@ jobs:
       working-directory: src/api
       run: |
         compose_file="docker-compose.test.yml"
-        docker-compose -f $compose_file up --build -d
+        docker compose -f $compose_file up --build -d
 
-        container=$(docker-compose -f $compose_file ps -q test-aggy-api)
+        # -a: Compose v2 hides exited containers from `ps` by default, and
+        # a fast pytest run can finish before this line.
+        container=$(docker compose -f $compose_file ps -aq test-aggy-api)
         if [ -z "$container" ]; then
           echo "test container never started"
-          docker-compose -f $compose_file logs
+          docker compose -f $compose_file logs
           exit 1
         fi
 
         status=$(docker wait "$container")
         docker logs "$container"
 
-        docker-compose -f $compose_file down
+        docker compose -f $compose_file down
         exit "$status"
