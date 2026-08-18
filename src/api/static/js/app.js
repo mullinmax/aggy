@@ -12,7 +12,8 @@ let currentList = null; // the list being browsed in the list-detail view
 let itemSkip = 0;
 let lastItemBand = null; // sort-band of the last rendered item, for threshold dividers
 // filter/sort state for the current feed; sources: null means "all sources"
-const defaultFilters = () => ({ sort: 'predicted', includeRead: false, textOnly: '', sources: null });
+const defaultFilters = () =>
+  ({ sort: 'predicted', includeRead: false, textOnly: '', maxAge: 'all', sources: null });
 let feedFilters = defaultFilters();
 let feedSourceList = []; // sources of the current feed, for the filter panel
 let selectedTemplate = null;
@@ -72,6 +73,7 @@ function bindControls() {
   $('rerankBtn').onclick = handleRerank;
   $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
   $('filterMedia').onchange = (e) => { feedFilters.textOnly = e.target.value; reloadItems(); };
+  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
   $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
@@ -422,6 +424,7 @@ function confirmDeleteList() {
 function syncFilterControls() {
   $('filterSort').value = feedFilters.sort;
   $('filterMedia').value = feedFilters.textOnly;
+  $('filterDate').value = feedFilters.maxAge;
   $('filterIncludeRead').checked = feedFilters.includeRead;
 }
 
@@ -672,6 +675,7 @@ async function loadFeedItems() {
       include_read: feedFilters.includeRead,
       sources: feedFilters.sources === null ? null : feedFilters.sources.join(','),
       text_only: feedFilters.textOnly === '' ? null : feedFilters.textOnly,
+      max_age: feedFilters.maxAge,
     });
     if (seq !== itemsRequestSeq) return; // a newer request superseded this one
     if (itemSkip === 0) render(list);

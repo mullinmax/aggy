@@ -24,6 +24,16 @@ ITEM_SORTS = {
 # these sorts skip the round-robin source interleaving the browse sorts use.
 MONOTONIC_SORTS = {"predicted", "predicted_asc", "controversial", "confident"}
 
+# date-filter name -> postgres interval. "all" (or None) means no cutoff.
+# The cutoff runs against the item's publish date, falling back to when the
+# feed picked it up for items that never carried one.
+ITEM_AGE_WINDOWS = {
+    "day": "1 day",
+    "week": "7 days",
+    "month": "30 days",
+    "year": "365 days",
+}
+
 
 class Feed(ItemCollection):
     user_hash: str
@@ -130,6 +140,7 @@ class Feed(ItemCollection):
         include_read: bool = True,
         source_hashes: Optional[List[str]] = None,
         text_only: Optional[bool] = None,
+        max_age: Optional[str] = None,
     ):
         """Like ``query_items`` but pairs each item with its source name and
         the user's item state / model prediction.
@@ -141,6 +152,9 @@ class Feed(ItemCollection):
         - ``source_hashes`` restricts to items produced by those sources.
         - ``text_only=True`` keeps only items with no image or media;
           ``False`` keeps only items that have some; ``None`` keeps all.
+        - ``max_age`` is a key of ``ITEM_AGE_WINDOWS`` ("day", "week",
+          "month", "year") keeping only items published within that window;
+          ``None`` (or "all") keeps every item.
 
         Browse sorts interleave sources within the sort order: each source's
         best item first (ordered by the sort key), then each source's
@@ -208,6 +222,14 @@ class Feed(ItemCollection):
             sql += f" AND NOT {has_visual}"
         elif text_only is False:
             sql += f" AND {has_visual}"
+
+        # Items with no publish date fall back to when the feed picked them
+        # up, so a date filter never silently drops undated items that only
+        # just arrived.
+        window = ITEM_AGE_WINDOWS.get(max_age) if max_age else None
+        if window is not None:
+            sql += " AND COALESCE(i.date_published, c.added_at) >= NOW() - %s::interval"
+            params = params + (window,)
 
         # Prediction-ranked sorts stay strictly monotonic (see MONOTONIC_SORTS);
         # the browse sorts interleave sources by round-robin rank first.

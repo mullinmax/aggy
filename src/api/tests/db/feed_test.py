@@ -289,6 +289,63 @@ def test_query_items_text_only_counts_media_list(unique_feed, unique_item_strict
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_max_age_windows(unique_feed, unique_item_strict):
+    """max_age keeps only items published inside the window."""
+    from datetime import datetime, timedelta, timezone
+
+    unique_feed.create()
+    now = datetime.now(timezone.utc)
+    today = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/today",
+        2,
+        date_published=now - timedelta(hours=1),
+    )
+    last_month = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/last-month",
+        1,
+        date_published=now - timedelta(days=20),
+    )
+
+    day = unique_feed.query_items_with_sources(max_age="day")
+    assert [item.url_hash for item, _ in day] == [today.url_hash]
+
+    month = unique_feed.query_items_with_sources(max_age="month")
+    assert {item.url_hash for item, _ in month} == {
+        today.url_hash,
+        last_month.url_hash,
+    }
+
+    assert len(unique_feed.query_items_with_sources(max_age=None)) == 2
+    assert len(unique_feed.query_items_with_sources(max_age="all")) == 2
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_max_age_uses_added_at_when_undated(
+    unique_feed, unique_item_strict
+):
+    """Undated items fall back to when the feed added them, so they stay
+    visible under a date filter instead of vanishing."""
+    unique_feed.create()
+    undated = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/undated",
+        1,
+        date_published=None,
+    )
+
+    day = unique_feed.query_items_with_sources(max_age="day")
+    assert [item.url_hash for item, _ in day] == [undated.url_hash]
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_query_items_interleaves_sources(unique_feed, unique_item_strict):
     """Items alternate between sources while respecting the sort order."""
     unique_feed.create()
