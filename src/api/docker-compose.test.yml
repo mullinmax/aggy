@@ -30,8 +30,8 @@ services:
 
   test-aggy-api:
     build:
-      context: .
-      dockerfile: dockerfile.test
+      context: ../..
+      dockerfile: src/api/dockerfile.test
     environment:
       - DB_HOST=test-aggy-db
       - DB_PORT=5432

@@ -18,9 +18,29 @@ export const DEFAULTS = {
   shareCookies: false,
 };
 
+/**
+ * The instance this copy of the extension was downloaded from.
+ *
+ * A build served by an aggy instance carries a config.json naming it, so the
+ * user never has to type their own URL. A copy loaded straight from the
+ * repository has none, and the field simply starts empty.
+ */
+async function bundledInstanceUrl() {
+  try {
+    const response = await fetch(chrome.runtime.getURL("config.json"));
+    if (!response.ok) return "";
+    const config = await response.json();
+    return normalizeInstanceUrl(config.instanceUrl);
+  } catch (e) {
+    return "";
+  }
+}
+
 export async function getSettings() {
   const stored = await chrome.storage.local.get(Object.keys(DEFAULTS));
-  return { ...DEFAULTS, ...stored };
+  const settings = { ...DEFAULTS, ...stored };
+  if (!settings.instanceUrl) settings.instanceUrl = await bundledInstanceUrl();
+  return settings;
 }
 
 export async function setSettings(patch) {

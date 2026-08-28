@@ -1,0 +1,16 @@
+# The API image is built from the repository root (it serves the browser
+# extension, which lives outside src/api), so keep the context to source.
+.git
+.github
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.ruff_cache
+**/node_modules
+.coverage
+coverage.xml
+**/.DS_Store
+.env
+.env*.local
+src/api/static/css/tailwind.css
+src/api/tailwind/output.css

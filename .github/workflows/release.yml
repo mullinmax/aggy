@@ -21,8 +21,11 @@ jobs:
     strategy:
       matrix:
         include:
+          # the API image ships the browser extension it serves, so it is
+          # built from the repository root rather than from src/api
           - service: api
-            context: ./src/api
+            context: .
+            dockerfile: ./src/api/dockerfile
           - service: bridge
             context: ./src/bridge
           - service: migrations
@@ -76,7 +79,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
-          file: ${{ matrix.context }}/dockerfile
+          file: ${{ matrix.dockerfile || format('{0}/dockerfile', matrix.context) }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
