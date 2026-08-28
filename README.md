@@ -36,6 +36,7 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 - **Any website as a source**: paste a URL and a local Ollama model works out the CSS selectors, with a live preview to fine-tune before saving. Pages that build themselves in the browser are rendered headlessly first, so client-side listings and lazy-loaded thumbnails work too
 - **Pluggable ingest backends**: every source names how it is read (`rss`, `ytdlp`, `html`), so reaching a new kind of site means adding a backend rather than bending everything through a feed
 - **Bulk subscription import** from Reddit, YouTube, Bluesky, and any OPML export (Feedly, Inoreader, podcast apps), with per-source feed assignment
+- **[Browser extension](./src/extension)** (Chrome/Chromium): from the page you're on, save it into a feed as an article — with an optional up- or downvote — or start following the site. It asks the instance how that page is best read (its subreddit, its channel, a feed the page advertises, a template, or a scraped feed as the fallback) and previews the items before anything is created
 - **Embedding generation** for text to improve content relevance
 
 ### In the works:

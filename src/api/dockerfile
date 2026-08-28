@@ -1,10 +1,12 @@
+# Built from the repository root, not src/api: the API serves the browser
+# extension as a download, so src/extension has to be in the build context too.
 FROM node:20-alpine AS css-builder
 WORKDIR /build
-COPY tailwind/package.json ./
+COPY src/api/tailwind/package.json ./
 RUN npm install --no-audit --no-fund
-COPY tailwind/tailwind.config.js tailwind/input.css ./
-COPY templates ./templates
-COPY static/js ./static/js
+COPY src/api/tailwind/tailwind.config.js src/api/tailwind/input.css ./
+COPY src/api/templates ./templates
+COPY src/api/static/js ./static/js
 RUN npx tailwindcss -i ./input.css -o ./output.css --minify
 
 FROM python:3.11-slim AS aggy-api
@@ -20,11 +22,14 @@ ENV OPENBLAS_NUM_THREADS=1 \
 # On this glibc base numpy/scipy/scikit-learn and psycopg2-binary all install
 # from prebuilt manylinux wheels (psycopg2-binary bundles libpq), so no
 # compiler toolchain or system libs are needed.
-COPY requirements.txt .
+COPY src/api/requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /src/api
+COPY src/api /src/api
+# Served as a zip from /extension.zip, and read from ../extension relative to
+# the API, exactly as in a checkout.
+COPY src/extension /src/extension
 COPY --from=css-builder /build/output.css /src/api/static/css/tailwind.css
 
 # Set version

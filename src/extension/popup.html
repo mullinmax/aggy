@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Add to Aggy</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon-32.png" alt="" width="20" height="20" />
+      <span class="title">Aggy</span>
+      <span class="spacer"></span>
+      <span id="account" class="muted"></span>
+      <button id="open-options" class="link" type="button" title="Settings">⚙</button>
+    </header>
+
+    <!-- Sign in -->
+    <section id="signin" hidden>
+      <p class="muted">Point this at your aggy instance and sign in.</p>
+      <label>Instance URL<input id="instance-url" type="url" placeholder="https://aggy.example.com" /></label>
+      <label>Username<input id="username" type="text" autocomplete="username" /></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" /></label>
+      <button id="signin-button" class="primary" type="button">Sign in</button>
+      <p id="signin-error" class="error" hidden></p>
+    </section>
+
+    <!-- Main -->
+    <section id="main" hidden>
+      <div class="page">
+        <div id="page-title" class="page-title"></div>
+        <div id="page-url" class="page-url muted"></div>
+      </div>
+
+      <div id="known" class="known" hidden></div>
+
+      <label class="row">
+        <span>Feed</span>
+        <select id="feed-select"></select>
+      </label>
+
+      <nav class="tabs">
+        <button id="tab-save" class="tab active" type="button">Save this page</button>
+        <button id="tab-follow" class="tab" type="button">Follow this site</button>
+      </nav>
+
+      <!-- Save a single page -->
+      <div id="panel-save" class="panel">
+        <div id="item-preview" class="preview">
+          <p class="muted">Reading the page…</p>
+        </div>
+        <div class="actions">
+          <button id="save-down" class="vote" type="button" title="Save and downvote">👎</button>
+          <button id="save-plain" class="primary grow" type="button">Save article</button>
+          <button id="save-up" class="vote" type="button" title="Save and upvote">👍</button>
+        </div>
+      </div>
+
+      <!-- Follow the site -->
+      <div id="panel-follow" class="panel" hidden>
+        <div id="options-list" class="options">
+          <p class="muted">Working out how to follow this page…</p>
+        </div>
+        <div id="option-detail" hidden>
+          <div id="source-preview" class="preview"></div>
+          <label class="row">
+            <span>Name</span>
+            <input id="source-name" type="text" />
+          </label>
+          <div class="actions">
+            <button id="back-to-options" class="link" type="button">← Other options</button>
+            <span class="spacer"></span>
+            <button id="create-source" class="primary" type="button">Add source</button>
+          </div>
+        </div>
+      </div>
+
+      <label class="row checkbox" id="cookie-row">
+        <input id="share-cookies" type="checkbox" />
+        <span
+          >Let aggy use this site's cookies
+          <span class="muted">(so it fetches the page as you see it)</span></span
+        >
+      </label>
+
+      <p id="status" class="status" hidden></p>
+    </section>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

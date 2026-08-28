@@ -250,11 +250,11 @@ def _pull_model_in_background(model: str) -> None:
     threading.Thread(target=pull, daemon=True).start()
 
 
-def _chat(client, model: str, prompt: str):
+def _chat(client, model: str, prompt: str, schema: dict = None):
     chat_kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "format": _SUGGESTION_SCHEMA,
+        "format": schema if schema is not None else _SUGGESTION_SCHEMA,
         "options": {
             "temperature": 0,
             "num_ctx": config.get_int("OLLAMA_ANALYSIS_NUM_CTX"),

@@ -1,7 +1,9 @@
 from pathlib import Path
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
+
+import extension_bundle
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -33,6 +35,47 @@ async def login_page(request: Request):
 @web_router.get("/app", response_class=HTMLResponse, include_in_schema=False)
 async def app_page(request: Request):
     return templates.TemplateResponse(request=request, name="app.html")
+
+
+@web_router.get(
+    "/browser-extension", response_class=HTMLResponse, include_in_schema=False
+)
+async def browser_extension_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="extension.html",
+        context={
+            "available": extension_bundle.is_available(),
+            "version": extension_bundle.version(),
+        },
+    )
+
+
+@web_router.get("/extension.zip", include_in_schema=False)
+async def browser_extension_zip(request: Request):
+    """The extension, zipped for "Load unpacked".
+
+    Deliberately unauthenticated: it is the same open-source files as the
+    repository, and the only thing this build adds is the address of the
+    instance the user just downloaded it from.
+    """
+    instance_url = str(request.base_url).rstrip("/")
+
+    try:
+        data = extension_bundle.build_zip(instance_url)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{extension_bundle.filename()}"',
+            # the bundle carries this instance's URL, so a shared cache must
+            # not hand it to someone who asked a different host
+            "Cache-Control": "private, no-cache",
+        },
+    )
 
 
 @web_router.get("/favicon.ico", include_in_schema=False)

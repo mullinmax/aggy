@@ -22,6 +22,7 @@ def build_app():
     from fastapi import FastAPI
     from routers.admin import admin_router
     from routers.auth import auth_router
+    from routers.extension import extension_router
     from routers.feed import feed_router
     from routers.source_template import source_template_router
     from routers.source import source_router
@@ -44,6 +45,9 @@ def build_app():
     )
     app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
     app.include_router(item_router, prefix="/item", tags=["Items"])
+    app.include_router(
+        extension_router, prefix="/extension", tags=["Browser Extension"]
+    )
     app.include_router(list_router, prefix="/list", tags=["Lists"])
     app.include_router(stats_router, prefix="/stats", tags=["Stats"])
     return app

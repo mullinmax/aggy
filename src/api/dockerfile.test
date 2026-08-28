@@ -1,3 +1,5 @@
+# Built from the repository root, matching dockerfile: src/extension is part
+# of what the API serves, so it has to be in the build context.
 FROM python:3.11-slim AS aggy-api
 WORKDIR /src
 
@@ -9,11 +11,13 @@ ENV OPENBLAS_NUM_THREADS=1 \
 
 # glibc base: numpy/scipy/scikit-learn and psycopg2-binary all ship manylinux
 # wheels, so no build toolchain is required.
-COPY requirements.txt .
+COPY src/api/requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /src/api
+COPY src/api /src/api
+# the download endpoint zips these, so the tests need them too
+COPY src/extension /src/extension
 
 EXPOSE 8000
 

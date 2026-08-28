@@ -70,6 +70,36 @@ class AggySDK {
     return this._request("GET", "/auth/user_info");
   }
 
+  /** Create the source behind a recommended option */
+  async extensionCreateSource({ body }) {
+    return this._request("POST", "/extension/create_source", { body });
+  }
+
+  /** Extract a single page's article content without saving it */
+  async extensionPreviewItem({ body }) {
+    return this._request("POST", "/extension/preview_item", { body });
+  }
+
+  /** Preview the items a recommended option would produce */
+  async extensionPreviewSource({ body }) {
+    return this._request("POST", "/extension/preview_source", { body });
+  }
+
+  /** Rank the ways a page could become a source */
+  async extensionRecommend({ body }) {
+    return this._request("POST", "/extension/recommend", { body });
+  }
+
+  /** Save a single page into a feed as an article */
+  async extensionSaveItem({ body }) {
+    return this._request("POST", "/extension/save_item", { body });
+  }
+
+  /** What aggy already knows about this page and its site */
+  async extensionStatus({ url }) {
+    return this._request("GET", "/extension/status", { query: { url } });
+  }
+
   /** Create a feed */
   async feedCreate({ feed_name }) {
     return this._request("POST", "/feed/create", { query: { feed_name } });
