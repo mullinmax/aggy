@@ -3,7 +3,7 @@ import pytest
 from db.item import ItemLoose
 from db.source import Source
 from ingest import source as ingest_source_module
-from ingest.backends import get_backend
+from ingest.backends import UNSCHEDULED_KINDS, get_backend
 from ingest.backends import html as html_backend
 from ingest.backends import rss as rss_backend
 from ingest.backends import ytdlp as ytdlp_backend
@@ -16,6 +16,15 @@ def test_get_backend_rejects_unknown_kind():
 
 def test_rss_stays_the_default_backend():
     assert get_backend("rss").enrich is True
+
+
+def test_manual_sources_are_never_polled():
+    """A saved-links source has no URL to fetch; queueing it would only mark
+    it failed for returning no entries."""
+    assert get_backend("manual").scheduled is False
+    assert "manual" in UNSCHEDULED_KINDS
+    assert get_backend("rss").scheduled is True
+    assert UNSCHEDULED_KINDS == ["manual"]
 
 
 def test_video_backend_skips_per_item_scraping():

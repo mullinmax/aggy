@@ -1,0 +1,288 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1b1f1c;
+  --muted: #66736a;
+  --line: #dfe5e0;
+  --accent: #3e9e55;
+  --accent-fg: #ffffff;
+  --card: #f5f8f6;
+  --error: #c0392b;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191a;
+    --fg: #e8ece9;
+    --muted: #93a09a;
+    --line: #2c3230;
+    --card: #1e2223;
+    --error: #ef7a6d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 380px;
+  margin: 0;
+  padding: 0 12px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--error);
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+input[type="text"],
+input[type="url"],
+input[type="password"],
+select {
+  width: 100%;
+  margin-top: 3px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+label.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+label.row > span:first-child {
+  flex: 0 0 42px;
+}
+
+label.row input,
+label.row select {
+  margin-top: 0;
+}
+
+label.checkbox {
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+label.checkbox input {
+  margin-top: 2px;
+}
+
+button {
+  font: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 2px 4px;
+}
+
+button.grow {
+  flex: 1;
+}
+
+button.vote {
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 10px;
+}
+
+.page-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-url {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 8px;
+}
+
+.known {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 8px;
+}
+
+.tab {
+  flex: 1;
+  background: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+
+.tab.active {
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.preview {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.preview img.thumb {
+  float: right;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
+.preview h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.preview p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.preview ol {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.preview li {
+  margin-bottom: 4px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.option {
+  text-align: left;
+  padding: 8px;
+  line-height: 1.35;
+}
+
+.option .label {
+  font-weight: 600;
+  display: block;
+}
+
+.option .reason {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.badge {
+  float: right;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.badge.high {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.status {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+.status.ok {
+  color: var(--accent);
+}
+
+.status.bad {
+  color: var(--error);
+}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aggy extension settings</title>
+    <link rel="stylesheet" href="popup.css" />
+    <style>
+      body {
+        width: auto;
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 24px 16px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      section {
+        margin-top: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Aggy</h1>
+    <p class="muted">Where this extension sends the pages you save.</p>
+
+    <section>
+      <label
+        >Instance URL
+        <input id="instance-url" type="url" placeholder="https://aggy.example.com" />
+      </label>
+      <label>Username <input id="username" type="text" autocomplete="username" /></label>
+      <label
+        >Password
+        <input id="password" type="password" autocomplete="current-password" />
+      </label>
+      <div class="actions">
+        <button id="save" class="primary" type="button">Sign in and save</button>
+        <button id="signout" type="button">Sign out</button>
+      </div>
+      <p id="status" class="status" hidden></p>
+    </section>
+
+    <section>
+      <label class="row">
+        <span style="flex: 0 0 120px">Default feed</span>
+        <select id="feed-select"></select>
+      </label>
+      <p class="muted">
+        The feed the keyboard shortcuts and the right-click menu save into.
+      </p>
+    </section>
+
+    <section>
+      <label class="checkbox">
+        <input id="share-cookies" type="checkbox" />
+        <span>
+          Share the current site's cookies with my aggy instance
+          <br />
+          <span class="muted">
+            Lets aggy fetch members-only and age-gated pages the way you see them.
+            The cookies go only to the instance URL above, and only for the site
+            you are on when you use the extension.
+          </span>
+        </span>
+      </label>
+    </section>
+
+    <section>
+      <p class="muted">
+        Shortcuts can be rebound at <code>chrome://extensions/shortcuts</code>.
+      </p>
+    </section>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

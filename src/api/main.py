@@ -13,6 +13,7 @@ threading.stack_size(4 * 1024 * 1024)
 
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
@@ -25,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 from config import config
 from routers.admin import admin_router
 from routers.auth import auth_router
+from routers.extension import extension_router
 from routers.feed import feed_router
 from routers.source_template import source_template_router
 from routers.source import source_router
@@ -189,6 +191,24 @@ async def app_lifespan(app: FastAPI):
 # create app with lifespan context manager
 app = FastAPI(lifespan=app_lifespan, version=config.get("BUILD_VERSION"))
 
+# The browser extension calls this API from its own origin
+# (chrome-extension://<id>), which makes every one of its requests cross-origin.
+# Only extension origins are allowed by default -- a web page on some other
+# site still cannot read a user's feeds -- and EXTRA_CORS_ORIGINS lets an
+# operator add their own (a Firefox moz-extension origin, a separate frontend).
+extra_origins = [
+    origin.strip()
+    for origin in config.get("EXTRA_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=extra_origins,
+    allow_origin_regex=r"^(chrome|moz)-extension://[A-Za-z0-9\-]+$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # static files
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
@@ -205,6 +225,7 @@ app.include_router(
 )
 app.include_router(bulk_import_router, prefix="/import", tags=["Bulk Import"])
 app.include_router(item_router, prefix="/item", tags=["Items"])
+app.include_router(extension_router, prefix="/extension", tags=["Browser Extension"])
 app.include_router(list_router, prefix="/list", tags=["Lists"])
 app.include_router(stats_router, prefix="/stats", tags=["Stats"])
 app.include_router(web_router)

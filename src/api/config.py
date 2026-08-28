@@ -72,6 +72,9 @@ KNOWN_CONFIG_VALUES = [
     "HOST_MAX_COOLDOWN_SECONDS",
     "SOURCE_ATTEMPT_HISTORY_DAYS",
     "ATTEMPT_PRUNE_INTERVAL_MINUTES",
+    # Comma-separated extra origins allowed to call the API cross-origin.
+    # Browser-extension origins are always allowed; this is for anything else.
+    "EXTRA_CORS_ORIGINS",
 ]
 
 DEFAULT_CONFIG = {

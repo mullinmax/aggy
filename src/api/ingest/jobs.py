@@ -24,7 +24,7 @@ from db.source_attempt import (
     record_attempt,
 )
 from ingest import host_circuit
-from ingest.backends import get_backend
+from ingest.backends import UNSCHEDULED_KINDS, get_backend
 from ingest.host_circuit import HostUnavailable, source_host
 from ingest.source import ingest_source
 from ingest.item.reddit import ingest_reddit_item
@@ -55,6 +55,9 @@ def source_ingestion_scheduling_job() -> None:
     for user in users:
         for feed in user.feeds:
             for source in feed.sources:
+                # a manual source (saved links) has no URL to poll
+                if not get_backend(source.kind).scheduled:
+                    continue
                 source.trigger_ingest(now=False)
 
 
@@ -74,7 +77,9 @@ def source_ingestion_job() -> None:
         cur.execute(
             "SELECT user_hash, feed_hash, name_hash FROM sources "
             "WHERE next_ingest_at <= NOW() + interval '1 minute' "
-            "ORDER BY next_ingest_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+            "AND kind <> ALL(%s) "
+            "ORDER BY next_ingest_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+            (UNSCHEDULED_KINDS,),
         )
         row = cur.fetchone()
 
