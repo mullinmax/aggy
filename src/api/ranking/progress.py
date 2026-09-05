@@ -24,9 +24,10 @@ STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_ERROR = "error"
 
-# Phases a run moves through, in order. "evaluating" covers the bulk of the
-# work — one step per model — and the last two steps fit the winner on every
-# vote and write its predictions back to the feed.
+# Phases a run moves through, in order: read the votes, cross-validate the
+# zoo against them (the bulk of the work, one step per model), fit the winner
+# on every vote, then score the feed's articles with it and save the result.
+PHASE_LOADING = "loading"
 PHASE_EVALUATING = "evaluating"
 PHASE_TRAINING = "training"
 PHASE_PREDICTING = "predicting"
@@ -67,9 +68,10 @@ def start(user_hash: str, feed_hash: str, total_steps: int) -> bool:
             return False
         _runs[key] = {
             "status": STATUS_RUNNING,
-            "phase": PHASE_EVALUATING,
+            "phase": PHASE_LOADING,
             "model_name": None,
-            "step": 0,
+            "note": None,
+            "step": 0.0,
             "total_steps": max(1, total_steps),
             "started_at": now,
             "finished_at": None,
@@ -82,23 +84,32 @@ def update(
     user_hash: str,
     feed_hash: str,
     *,
-    step: Optional[int] = None,
+    step: Optional[float] = None,
     phase: Optional[str] = None,
     model_name: Optional[str] = None,
+    note: Optional[str] = None,
 ) -> None:
     """Advance a run. A no-op when no run is registered, so the engine can be
-    called directly (tests, a script) without one."""
+    called directly (tests, a script) without one.
+
+    `step` is fractional on purpose: the slowest models take tens of seconds
+    to cross-validate, and a bar that only moves between models looks stuck.
+    `note` says what is happening inside the current step ("fold 3 of 5",
+    "scoring 4,812 articles").
+    """
     with _lock:
         run = _runs.get(_key(user_hash, feed_hash))
         if run is None or run["status"] != STATUS_RUNNING:
             return
         if step is not None:
-            run["step"] = min(step, run["total_steps"])
+            run["step"] = max(0.0, min(float(step), run["total_steps"]))
         if phase is not None:
             run["phase"] = phase
-        # model_name is cleared deliberately between phases, so an explicit
-        # None is meaningful and only an omitted argument leaves it alone
+        # model_name and note are cleared deliberately between phases, so an
+        # explicit None is meaningful and only an omitted argument would leave
+        # them alone — which is why neither has a "keep" sentinel
         run["model_name"] = model_name
+        run["note"] = note
 
 
 def finish(user_hash: str, feed_hash: str, error: Optional[str] = None) -> None:
@@ -111,8 +122,9 @@ def finish(user_hash: str, feed_hash: str, error: Optional[str] = None) -> None:
         run["error"] = error
         run["finished_at"] = now
         if not error:
-            run["step"] = run["total_steps"]
+            run["step"] = float(run["total_steps"])
             run["model_name"] = None
+            run["note"] = None
         _prune(now)
 
 
@@ -130,6 +142,7 @@ def status(user_hash: str, feed_hash: str) -> Optional[dict]:
             "status": run["status"],
             "phase": run["phase"],
             "model_name": run["model_name"],
+            "note": run["note"],
             "step": run["step"],
             "total_steps": run["total_steps"],
             "elapsed_seconds": round(elapsed, 1),

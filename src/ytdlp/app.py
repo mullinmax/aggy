@@ -13,6 +13,7 @@ in the bundled compose file.
 """
 
 import logging
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -41,6 +42,21 @@ BASE_OPTIONS = {
     "socket_timeout": 30,
     "retries": 3,
     "extractor_retries": 2,
+}
+
+# Resolving one video happens while a viewer waits with a spinner on screen,
+# which makes it a different job from walking a listing in the background.
+# Retries that are worth it for ingest just turn a dead site into a request
+# that outlives the reverse proxy in front of the API — and a gateway timeout
+# tells the viewer nothing. Fail in seconds instead, and let them retry by
+# pressing play again.
+RESOLVE_OPTIONS = {
+    "socket_timeout": 10,
+    "retries": 1,
+    "extractor_retries": 1,
+    # a listing tolerates a bad entry; a single resolve has nothing to salvage
+    # and the error is what the viewer needs to see
+    "ignoreerrors": False,
 }
 
 
@@ -222,8 +238,11 @@ def resolve(request: ResolveRequest) -> dict:
     """
     _validate(request.url)
 
+    started = time.monotonic()
     try:
-        with YoutubeDL(_options(request.cookie, noplaylist=True)) as ydl:
+        with YoutubeDL(
+            _options(request.cookie, noplaylist=True, **RESOLVE_OPTIONS)
+        ) as ydl:
             info = ydl.sanitize_info(ydl.extract_info(request.url, download=False))
     except DownloadError as e:
         raise HTTPException(status_code=422, detail=str(e)[:500])
@@ -235,6 +254,17 @@ def resolve(request: ResolveRequest) -> dict:
         raise HTTPException(status_code=422, detail="Nothing could be extracted")
 
     resolved = playable_url(info)
+    logging.info(
+        f"resolved {request.url} in {time.monotonic() - started:.1f}s: "
+        + (
+            f"{resolved['protocol'] or 'direct'}"
+            f"{' (hls)' if resolved['is_hls'] else ''}"
+            f" {resolved['height'] or '?'}p"
+            if resolved
+            else f"no playable rendition among "
+            f"{len(info.get('formats') or [])} formats"
+        )
+    )
     if resolved is None:
         raise HTTPException(
             status_code=422,

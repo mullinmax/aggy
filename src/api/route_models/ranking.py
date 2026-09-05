@@ -24,12 +24,18 @@ class TrainingProgressResponse(BaseRouteModel):
 
     # running, done or error
     status: str
-    # evaluating (cross-validating the zoo), training (fitting the winner on
-    # every vote) or predicting (writing its scores back to the feed)
+    # loading (reading the votes), evaluating (cross-validating the zoo),
+    # training (fitting the winner on every vote) or predicting (scoring the
+    # feed's articles with it and saving the result)
     phase: str
     # the model being worked on right now, when there is one
     model_name: Optional[str] = None
-    step: int
+    # what is happening inside the current step: "fold 3 of 5", "scoring 4812
+    # articles". Free text, for display only.
+    note: Optional[str] = None
+    # fractional: a single model can take tens of seconds to cross-validate,
+    # and the fold-by-fold fraction is what keeps the bar moving inside one
+    step: float
     total_steps: int
     elapsed_seconds: float = 0.0
     error: Optional[str] = None

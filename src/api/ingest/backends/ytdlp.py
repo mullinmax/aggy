@@ -27,6 +27,25 @@ from db.source import Source
 EXTRACT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_ENTRIES = 30
 
+# Resolving one video runs inside a request a viewer is waiting on, so it gets
+# a much tighter budget than a background listing walk: a reverse proxy in
+# front of the API typically gives up around 60s and answers with its own
+# gateway error, which reaches the browser as an opaque 502 and tells nobody
+# anything. Fail first, with a reason.
+RESOLVE_TIMEOUT_SECONDS = 40
+
+
+class StreamUnavailable(Exception):
+    """No playable stream, with an HTTP status describing why.
+
+    502 the service could not be reached, 504 it took too long, 422 the site
+    or the item simply has nothing this browser could play.
+    """
+
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 def is_configured() -> bool:
     return config.get("YTDLP_HOST", None) is not None
@@ -213,20 +232,60 @@ def resolve_stream(url: str, cookie: Optional[str] = None) -> dict:
     typically signed and short-lived, so it is deliberately never persisted.
     Carries ``is_hls`` when the site only publishes an adaptive stream, which
     the player has to load itself rather than hand to a bare `video` tag.
+
+    Raises `StreamUnavailable`, which names both what went wrong and the
+    status the API should answer with — a viewer who presses play and gets
+    nothing deserves better than a blanket 502.
     """
     if not is_configured():
-        raise Exception("The aggy-ytdlp service isn't configured (set YTDLP_HOST)")
+        raise StreamUnavailable(
+            "This server has no video extraction service configured "
+            "(set YTDLP_HOST)",
+            status_code=501,
+        )
 
     payload = {"url": url}
     if cookie:
         payload["cookie"] = cookie
 
-    response = requests.post(
-        _service_url("/resolve"), json=payload, timeout=EXTRACT_TIMEOUT_SECONDS
-    )
-    if response.status_code != 200:
-        detail = response.text.strip()[:300]
-        raise Exception(
-            f"Could not resolve a playable URL (HTTP {response.status_code}): {detail}"
+    try:
+        response = requests.post(
+            _service_url("/resolve"), json=payload, timeout=RESOLVE_TIMEOUT_SECONDS
         )
-    return response.json()
+    except requests.Timeout:
+        raise StreamUnavailable(
+            f"The site took longer than {RESOLVE_TIMEOUT_SECONDS}s to answer",
+            status_code=504,
+        ) from None
+    except requests.RequestException as e:
+        raise StreamUnavailable(
+            f"Could not reach the extraction service: {e}", status_code=502
+        ) from e
+
+    if response.status_code != 200:
+        detail = _service_error_detail(response)
+        # 4xx from the sidecar is about this item (unsupported, gone, age
+        # gated); 5xx is the service itself falling over.
+        status = 422 if 400 <= response.status_code < 500 else 502
+        raise StreamUnavailable(detail, status_code=status)
+
+    try:
+        return response.json()
+    except ValueError as e:
+        raise StreamUnavailable(
+            "The extraction service returned something unreadable", status_code=502
+        ) from e
+
+
+def _service_error_detail(response) -> str:
+    """The sidecar's own explanation, which is a FastAPI `detail` when it
+    raised and plain text when something else did."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    text = detail or response.text.strip()
+    # yt-dlp errors carry an ANSI-coloured prefix and a "please report this"
+    # tail that mean nothing to a viewer
+    text = text.replace("ERROR: ", "").strip()
+    return text[:300] or f"The extraction service failed (HTTP {response.status_code})"

@@ -12,6 +12,8 @@ from typing import List, Optional
 
 import numpy as np
 
+from psycopg2.extras import execute_values
+
 from db.base import get_db_con
 from db.feed import Feed
 from utils import is_playable_media_url
@@ -106,9 +108,27 @@ _FEED_ITEMS_SQL = (
 )
 
 
-def load_feed_features(feed: Feed) -> List[ItemFeatures]:
+# The labeled subset, for training. A feed holds thousands of articles and
+# each carries a full embedding vector, so pulling the lot to learn from a few
+# dozen votes is most of what a retrain used to spend its time on — and all of
+# it was wasted before a winner was even chosen.
+_LABELED_ONLY_SQL = (
+    " AND (v.score IS NOT NULL OR EXISTS (SELECT 1 FROM list_items li"
+    "  WHERE li.user_hash = c.user_hash"
+    "   AND li.item_url_hash = c.item_url_hash))"
+)
+
+
+def load_feed_features(feed: Feed, labeled_only: bool = False) -> List[ItemFeatures]:
+    """Every article in the feed as model features.
+
+    `labeled_only` keeps just the ones the user has voted on or listed — the
+    rows training actually learns from. The full set is only needed once a
+    model has been picked and the feed is being scored.
+    """
+    sql = _FEED_ITEMS_SQL + (_LABELED_ONLY_SQL if labeled_only else "")
     with get_db_con() as cur:
-        cur.execute(_FEED_ITEMS_SQL, (feed.user_hash, feed.name_hash))
+        cur.execute(sql, (feed.user_hash, feed.name_hash))
         rows = cur.fetchall()
     return [_row_to_features(row) for row in rows]
 
@@ -184,54 +204,95 @@ def training_summary(feed: Feed) -> dict:
     }
 
 
+# Rows written per statement when the feed's predictions are saved. One
+# UPDATE per article meant a round trip per article — thousands of them, and
+# the database is a separate container, so the trips were most of the cost.
+PREDICTION_WRITE_BATCH = 500
+
+
 def _write_predictions(
     feed: Feed, items: List[ItemFeatures], scores, confs, model_name: str
 ) -> None:
+    """Save the winner's score for every article, in batches.
+
+    `execute_values` takes exactly one placeholder for its rows, so the
+    constants ride along in each row rather than as separate parameters —
+    a few repeated bytes per row against a round trip per row, which on a
+    feed of thousands of articles is the whole difference.
+    """
+    rows = [
+        (
+            item.url_hash,
+            float(score),
+            float(conf),
+            model_name,
+            feed.user_hash,
+            feed.name_hash,
+        )
+        for item, score, conf in zip(items, scores, confs)
+    ]
+    if not rows:
+        return
     with get_db_con() as cur:
-        for item, score, conf in zip(items, scores, confs):
-            cur.execute(
-                "UPDATE feed_items SET predicted_score = %s, "
-                "predicted_confidence = %s, predicted_model = %s, "
-                "predicted_at = NOW() "
-                "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
-                (
-                    float(score),
-                    float(conf),
-                    model_name,
-                    feed.user_hash,
-                    feed.name_hash,
-                    item.url_hash,
-                ),
-            )
+        execute_values(
+            cur,
+            "UPDATE feed_items SET predicted_score = v.score, "
+            "predicted_confidence = v.confidence, predicted_model = v.model, "
+            "predicted_at = NOW() FROM (VALUES %s) AS v"
+            " (item_url_hash, score, confidence, model, user_hash, feed_hash) "
+            "WHERE feed_items.user_hash = v.user_hash "
+            "AND feed_items.feed_hash = v.feed_hash "
+            "AND feed_items.item_url_hash = v.item_url_hash",
+            rows,
+            template="(%s, %s::double precision, %s::double precision, %s, %s, %s)",
+            page_size=PREDICTION_WRITE_BATCH,
+        )
 
 
 def training_steps() -> int:
-    """Steps a full training run reports: one per model evaluated, plus
-    fitting the winner and writing its predictions."""
-    return len(all_models()) + 2
+    """Steps a full training run reports: reading the votes, one per model
+    cross-validated, fitting the winner, then scoring the feed with it."""
+    return len(all_models()) + 3
+
+
+def _evaluation_step(model_index: int) -> int:
+    """Reading the votes is step 0, so model `i` is step `i + 1`."""
+    return model_index + 1
 
 
 def rank_feed(feed: Feed) -> List[ModelStats]:
     """Evaluate all models on this feed's votes, persist their stats, then
     predict a vote for every item with the winner. Returns the stats.
 
+    Only the winner ever scores the feed, and the feed's articles are only
+    read once there is a winner to score them with: cross-validation learns
+    from the labeled rows alone, which is a few dozen out of thousands.
+
     Progress is reported to `ranking.progress` as it goes; that is a no-op
     unless a run was registered for this feed (see `train_feed`), so calling
     this directly stays a plain synchronous operation.
     """
-    features = load_feed_features(feed)
-    labeled = [f for f in features if f.label is not None]
+    report = _reporter(feed)
 
-    def report_model(index: int, total: int, model_name: str) -> None:
-        progress.update(
-            feed.user_hash,
-            feed.name_hash,
-            step=index,
-            phase=progress.PHASE_EVALUATING,
+    # the phase label already says what this is; a note would only repeat it
+    report(progress.PHASE_LOADING, 0)
+    labeled = load_feed_features(feed, labeled_only=True)
+    labeled = [f for f in labeled if f.label is not None]
+
+    def on_progress(index, count, model_name, folds_done, fold_count):
+        # A fold-level fraction keeps the bar moving inside one model: the
+        # tree models take tens of seconds to cross-validate on their own.
+        fraction = folds_done / fold_count if fold_count else 0.0
+        report(
+            progress.PHASE_EVALUATING,
+            _evaluation_step(index) + fraction,
             model_name=model_name,
+            # only the fold count adds anything here: the phase names the
+            # work and model_name names the model
+            note=f"fold {folds_done} of {fold_count}" if fold_count > 1 else None,
         )
 
-    stats = evaluate_models(labeled, on_model=report_model)
+    stats = evaluate_models(labeled, on_progress=on_progress)
     save_model_stats(feed, stats)
 
     if len(labeled) < MIN_LABELS_TO_RANK:
@@ -242,25 +303,41 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
         return stats
     winner = next(m for m in all_models() if m.name == winner_name)
 
-    progress.update(
-        feed.user_hash,
-        feed.name_hash,
-        step=training_steps() - 2,
-        phase=progress.PHASE_TRAINING,
+    report(
+        progress.PHASE_TRAINING,
+        _evaluation_step(len(all_models())),
         model_name=winner_name,
+        note=f"on all {len(labeled)} votes",
     )
     winner.fit(labeled)
-    # candidate items get fresh predictions; labeled ones too, so the
-    # "include read" view still sorts sensibly
+
+    # Only now is the whole feed worth reading: the winner scores every
+    # article, the labeled ones included, so the "include voted" view still
+    # sorts sensibly.
+    predict_step = _evaluation_step(len(all_models())) + 1
+    report(
+        progress.PHASE_PREDICTING,
+        predict_step,
+        model_name=winner_name,
+        note="reading the feed's articles",
+    )
+    features = load_feed_features(feed)
     for f in features:
         f.label_date = None  # predict ages as-of now
-    scores, confs = winner.predict(features)
-    progress.update(
-        feed.user_hash,
-        feed.name_hash,
-        step=training_steps() - 1,
-        phase=progress.PHASE_PREDICTING,
+
+    report(
+        progress.PHASE_PREDICTING,
+        predict_step,
         model_name=winner_name,
+        note=f"scoring {len(features)} articles",
+    )
+    scores, confs = winner.predict(features)
+
+    report(
+        progress.PHASE_PREDICTING,
+        predict_step + 0.5,
+        model_name=winner_name,
+        note=f"saving {len(features)} predictions",
     )
     _write_predictions(feed, features, scores, confs, winner_name)
     logging.info(
@@ -268,6 +345,22 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
         f"({len(labeled)} labels, {len(features)} items)"
     )
     return stats
+
+
+def _reporter(feed: Feed):
+    """A progress callback bound to this feed."""
+
+    def report(phase, step, model_name=None, note=None):
+        progress.update(
+            feed.user_hash,
+            feed.name_hash,
+            step=step,
+            phase=phase,
+            model_name=model_name,
+            note=note,
+        )
+
+    return report
 
 
 def start_training(feed: Feed) -> bool:

@@ -555,6 +555,7 @@ const modelLabel = (name) => MODEL_LABELS[name] || name || '';
 
 // What each phase of a run is actually doing, in the user's terms.
 const TRAINING_PHASES = {
+  loading: 'Reading your votes',
   evaluating: 'Testing models against your votes',
   training: 'Training the winning model',
   predicting: 'Scoring the articles in this feed',
@@ -652,8 +653,13 @@ function renderTrainingPanel(status) {
         `${pending} new vote${pending === 1 ? '' : 's'} since — retrain to use ${pending === 1 ? 'it' : 'them'}`)
     : h('span', { class: 'text-success' }, 'Up to date with your votes');
 
-  // Progress is reported in steps (one per model, then the fit and the
-  // scoring pass), so the bar is a real measure rather than a guess.
+  // Progress is reported in steps — reading the votes, one per model
+  // cross-validated, the winner's fit, then the scoring pass — and the step
+  // is fractional within a model, so the bar keeps moving through the slow
+  // ones instead of sitting still for half a minute.
+  const step = Math.min(Math.floor(run ? run.step : 0) + 1, run ? run.total_steps : 1);
+  const elapsed = run && run.elapsed_seconds >= 1
+    ? `${Math.round(run.elapsed_seconds)}s` : null;
   const progress = running
     ? h('div', { class: 'mt-2' },
         h('progress', {
@@ -663,9 +669,13 @@ function renderTrainingPanel(status) {
         h('div', { class: 'flex flex-wrap justify-between gap-2 text-xs mt-1' },
           h('span', {},
             TRAINING_PHASES[run.phase] || 'Training',
-            run.model_name ? h('span', { class: 'font-medium' }, ` · ${modelLabel(run.model_name)}`) : null),
-          h('span', { class: 'text-base-content/50' },
-            `step ${Math.min(run.step + 1, run.total_steps)} of ${run.total_steps}`)))
+            run.model_name ? h('span', { class: 'font-medium' }, ` · ${modelLabel(run.model_name)}`) : null,
+            // what it is doing inside this step: "fold 3 of 5", "scoring 4812
+            // articles" — the long steps are otherwise indistinguishable from
+            // a stall
+            run.note ? h('span', { class: 'text-base-content/50' }, ` · ${run.note}`) : null),
+          h('span', { class: 'text-base-content/50 whitespace-nowrap' },
+            `step ${step} of ${run.total_steps}${elapsed ? ` · ${elapsed}` : ''}`)))
     : null;
 
   render(host,
@@ -1386,14 +1396,29 @@ function streamPlayer(m, item) {
       video.play().catch(() => { /* autoplay blocked: the controls are there */ });
     } catch (err) {
       // Not every item has a rendition a browser can play, and a site can
-      // simply refuse the lookup.
-      showUnplayable("Can't play here — open on the site");
+      // simply refuse the lookup. Say which of those it was when the API told
+      // us — a bare "can't play here" leaves nothing to act on. A gateway
+      // error in front of the API carries no message of its own, so that one
+      // keeps the generic wording.
+      showUnplayable(streamFailureLabel(err));
       console.warn('stream playback failed', err);
     } finally {
       wrap._loading = false;
     }
   };
   return wrap;
+}
+
+// The one line shown in place of the player when nothing can be played.
+// Keeps the reason short enough for a card, and always offers the page.
+function streamFailureLabel(err) {
+  const reason = (err && err.message) || '';
+  // the SDK's fallback message when the response body was not the API's own
+  // JSON — i.e. something between the browser and the API answered instead
+  const isGatewayError = /^Request failed \(\d+\)$/.test(reason);
+  if (!reason || isGatewayError) return "Can't play here — open on the site";
+  const trimmed = reason.length > 90 ? `${reason.slice(0, 89)}…` : reason;
+  return `${trimmed} — open on the site`;
 }
 
 // ---------- HLS ----------
