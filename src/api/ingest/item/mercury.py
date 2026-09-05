@@ -18,9 +18,12 @@ def ingest_mercury_item(item: ItemLoose) -> Optional[ItemLoose]:
         )
 
         if res.status_code != 200:
-            logging.error(
-                f"Mercury ingestion failed for {item.url}: "
-                f"{res.status_code} {res.text}"
+            # The extractor answers non-200 for any page it cannot read, which
+            # is a routine outcome for one article among many; its body is
+            # often a whole HTML error page, so only the start of it is useful.
+            logging.info(
+                f"No extracted content for {item.url}: "
+                f"HTTP {res.status_code} {res.text.strip()[:200]}"
             )
             return None
 
@@ -28,6 +31,10 @@ def ingest_mercury_item(item: ItemLoose) -> Optional[ItemLoose]:
         item_dict["url"] = item.url  # make sure url matches the entry
 
         return ItemLoose(**item_dict)
+    except (requests.RequestException, ValueError) as e:
+        # unreachable extractor, or an answer that wasn't the JSON it promised
+        logging.info(f"No extracted content for {item.url}: {e}")
+        return None
     except Exception as e:
-        logging.exception(f"Error extracting content for {item.url}: {e}")
+        logging.exception(f"Extracting content for {item.url} failed: {e}")
         return None

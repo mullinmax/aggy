@@ -21,6 +21,7 @@ import requests
 from config import config
 from db.item import ItemLoose
 from db.source import Source
+from ingest.errors import IngestError
 
 # Fetching the listing is slower than an RSS GET: the sidecar may walk several
 # pages of results, each needing its own request to the site.
@@ -128,7 +129,7 @@ def is_supported(url: str) -> dict:
 
 def fetch_items(source: Source) -> List[ItemLoose]:
     if not is_configured():
-        raise Exception(
+        raise IngestError(
             "This source needs the aggy-ytdlp service, which isn't configured "
             "(set YTDLP_HOST)"
         )
@@ -148,15 +149,15 @@ def fetch_items(source: Source) -> List[ItemLoose]:
             timeout=EXTRACT_TIMEOUT_SECONDS,
         )
     except requests.RequestException as e:
-        raise Exception(f"Could not reach the extraction service: {e}") from e
+        raise IngestError(f"Could not reach the extraction service: {e}") from e
 
     if response.status_code != 200:
         detail = response.text.strip()[:300]
-        raise Exception(f"Extraction failed (HTTP {response.status_code}): {detail}")
+        raise IngestError(f"Extraction failed (HTTP {response.status_code}): {detail}")
 
     entries = response.json().get("entries") or []
     if not entries:
-        raise Exception(
+        raise IngestError(
             "No entries found at that URL. It may need a channel, playlist, or "
             "search-results page rather than a single item."
         )

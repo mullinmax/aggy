@@ -236,6 +236,14 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    # APScheduler narrates every job it starts and finishes. The ingest queue
+    # runs every fifteen seconds, so that is four lines a minute saying only
+    # that the scheduler is working -- and the jobs already log what they
+    # actually did. Keep its warnings (a job overrunning its interval, a
+    # missed run), drop the running commentary.
+    logging.getLogger("apscheduler.executors").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
     uvicorn.run(
         app,
         host="0.0.0.0",

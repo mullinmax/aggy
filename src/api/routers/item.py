@@ -103,7 +103,9 @@ def stream_url(
     except ytdlp.StreamUnavailable as e:
         # Logged as well as returned: the viewer sees the short reason on the
         # card, and the operator can see which item and how long it took.
-        logging.info(
+        # A warning rather than info — someone pressed play and got nothing,
+        # which is exactly what you go to the log to find.
+        logging.warning(
             f"stream_url for {item.url} failed after "
             f"{time.monotonic() - started:.1f}s ({e.status_code}): {e}"
         )

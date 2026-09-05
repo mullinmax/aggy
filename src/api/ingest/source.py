@@ -6,6 +6,7 @@ from db.source import Source
 from db.feed import Feed
 from db.propagation import propagate_items
 from ingest.backends import get_backend
+from ingest.errors import IngestError
 from ingest.item.reddit import ingest_reddit_item, is_reddit_post
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
@@ -36,7 +37,7 @@ def ingest_source(source: Source) -> None:
     candidates = backend.fetch_items(source)
 
     if not candidates:
-        raise Exception("Source returned no entries")
+        raise IngestError("Source returned no entries")
 
     feed = Feed.read(user_hash=source.user_hash, name_hash=source.feed_hash)
     ingested_url_hashes: list[str] = []

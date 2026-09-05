@@ -15,6 +15,7 @@ from bridge.extract import extract_entries
 from bridge.render import render_page
 from db.item import ItemLoose
 from db.source import Source
+from ingest.errors import IngestError
 
 
 def fetch_items(source: Source) -> List[ItemLoose]:
@@ -29,7 +30,7 @@ def fetch_items(source: Source) -> List[ItemLoose]:
 
     entries = extract_entries(html, url, source_config)
     if not entries:
-        raise Exception(
+        raise IngestError(
             "The page had no entries matching this source's selectors. "
             "The site's markup may have changed."
         )
