@@ -4,6 +4,28 @@ on:
   pull_request:
 
 jobs:
+  # The extraction sidecar's rendition picker is a plain function of the info
+  # dict yt-dlp returns, so it needs neither the service nor a database --
+  # just pytest.
+  ytdlp-formats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run format-selection tests
+      working-directory: src/ytdlp
+      run: |
+        pip install pytest
+        pytest formats_test.py
+
   test:
     runs-on: ubuntu-latest
     # A hung step (an apt mirror that never answers, a build that stalls)

@@ -223,8 +223,9 @@ def _add_item(feed, source, item, url, score, **overrides):
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
-def test_query_items_text_only_counts_content_images(unique_feed, unique_item_strict):
-    """A content-embedded <img> counts as visual media for text_only."""
+def test_query_items_post_type_counts_content_images(unique_feed, unique_item_strict):
+    """A content-embedded <img> makes an item an image post — plenty of feeds
+    only ever put their pictures inside the body."""
     unique_feed.create()
 
     visual = _add_item(
@@ -248,19 +249,21 @@ def test_query_items_text_only_counts_content_images(unique_feed, unique_item_st
         content="<p>just words</p>",
     )
 
-    with_media = unique_feed.query_items_with_sources(text_only=False)
-    assert [item.url_hash for item, _ in with_media] == [visual.url_hash]
+    imaged = unique_feed.query_items_with_sources(post_types=["image"])
+    assert [item.url_hash for item, _ in imaged] == [visual.url_hash]
 
-    text_only = unique_feed.query_items_with_sources(text_only=True)
-    assert [item.url_hash for item, _ in text_only] == [text.url_hash]
+    # neither has enough of a body to read, so both are bare pointers; only
+    # the one without a picture is nothing *but* a pointer
+    links = unique_feed.query_items_with_sources(post_types=["link"])
+    assert [item.url_hash for item, _ in links] == [text.url_hash]
 
-    everything = unique_feed.query_items_with_sources(text_only=None)
+    everything = unique_feed.query_items_with_sources(post_types=None)
     assert len(everything) == 2
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
-def test_query_items_text_only_counts_media_list(unique_feed, unique_item_strict):
-    """Ingested media counts as visual; an empty media list does not."""
+def test_query_items_post_type_counts_media_list(unique_feed, unique_item_strict):
+    """Ingested media makes a video post; an empty media list does not."""
     unique_feed.create()
 
     gif = _add_item(
@@ -284,8 +287,56 @@ def test_query_items_text_only_counts_media_list(unique_feed, unique_item_strict
         content="<p>words</p>",
     )
 
-    with_media = unique_feed.query_items_with_sources(text_only=False)
-    assert [item.url_hash for item, _ in with_media] == [gif.url_hash]
+    videos = unique_feed.query_items_with_sources(post_types=["video"])
+    assert [item.url_hash for item, _ in videos] == [gif.url_hash]
+    # a gif is a moving picture, so it answers to "image" too
+    imaged = unique_feed.query_items_with_sources(post_types=["image"])
+    assert [item.url_hash for item, _ in imaged] == [gif.url_hash]
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_query_items_post_type_text_needs_a_body(unique_feed, unique_item_strict):
+    """An article reads as text; a headline pointing off-site does not."""
+    unique_feed.create()
+
+    article = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/article",
+        2,
+        image_url=None,
+        media=None,
+        content="<p>" + ("Something worth reading. " * 10) + "</p>",
+    )
+    _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/headline",
+        1,
+        image_url=None,
+        media=None,
+        content="<p>A headline</p>",
+        excerpt="A headline",
+    )
+
+    text = unique_feed.query_items_with_sources(post_types=["text"])
+    assert [item.url_hash for item, _ in text] == [article.url_hash]
+    # markup doesn't count towards the body: a wall of tags is not an article
+    tagged = _add_item(
+        unique_feed,
+        None,
+        unique_item_strict,
+        "http://example.com/tag-soup",
+        0,
+        image_url=None,
+        media=None,
+        content="<div><span></span><span></span></div>" * 6,
+        excerpt="",
+    )
+    text = unique_feed.query_items_with_sources(post_types=["text"])
+    assert tagged.url_hash not in [item.url_hash for item, _ in text]
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")

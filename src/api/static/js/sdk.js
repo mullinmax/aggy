@@ -121,8 +121,8 @@ class AggySDK {
   }
 
   /** List all items in a feed */
-  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, text_only, max_age }) {
-    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, text_only, max_age } });
+  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age }) {
+    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age } });
   }
 
   /** List feeds a user has created */
@@ -140,7 +140,7 @@ class AggySDK {
     return this._request("POST", "/feed/rename", { query: { feed_name_hash, new_name } });
   }
 
-  /** Re-evaluate prediction models and re-rank a feed now */
+  /** Start re-evaluating prediction models and re-ranking a feed */
   async feedRerank({ feed_name_hash }) {
     return this._request("POST", "/feed/rerank", { query: { feed_name_hash } });
   }
@@ -148,6 +148,11 @@ class AggySDK {
   /** List all sources in a feed */
   async feedSources({ feed_name_hash }) {
     return this._request("GET", "/feed/sources", { query: { feed_name_hash } });
+  }
+
+  /** Progress of a feed's model training, and how stale its models are */
+  async feedTrainingStatus({ feed_name_hash }) {
+    return this._request("GET", "/feed/training_status", { query: { feed_name_hash } });
   }
 
   /** Health */

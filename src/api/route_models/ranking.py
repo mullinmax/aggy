@@ -17,7 +17,41 @@ class ModelStatsResponse(BaseRouteModel):
     computed_at: Optional[datetime] = None
 
 
-class RankingStatsResponse(BaseRouteModel):
+class TrainingProgressResponse(BaseRouteModel):
+    """A training run in flight, or the one that just finished."""
+
+    model_config = {"protected_namespaces": ()}
+
+    # running, done or error
+    status: str
+    # evaluating (cross-validating the zoo), training (fitting the winner on
+    # every vote) or predicting (writing its scores back to the feed)
+    phase: str
+    # the model being worked on right now, when there is one
+    model_name: Optional[str] = None
+    step: int
+    total_steps: int
+    elapsed_seconds: float = 0.0
+    error: Optional[str] = None
+
+
+class TrainingStatusResponse(BaseRouteModel):
+    """Everything the UI needs to describe the state of a feed's models
+    without pulling the full per-model stats table."""
+
+    model_config = {"protected_namespaces": ()}
+
+    # null when no run has happened (or finished) recently
+    training: Optional[TrainingProgressResponse] = None
+    last_trained_at: Optional[datetime] = None
+    # the model the last training run picked, and how many votes it learned from
+    trained_model: Optional[str] = None
+    trained_labels: int = 0
+    # votes cast since that run — how far behind the live predictions are
+    votes_since_training: int = 0
+
+
+class RankingStatsResponse(TrainingStatusResponse):
     models: List[ModelStatsResponse]
     up_votes: int
     down_votes: int

@@ -15,6 +15,7 @@ from tests.fixtures.client import client  # noqa
 from tests.fixtures.token import token  # noqa
 
 from db.base import db_init
+from ranking import progress
 
 
 db_init()
@@ -24,4 +25,7 @@ db_init()
 def _wipe_db_between_tests():
     """Truncate all aggy tables between tests for isolation."""
     db_init(flush=True)
+    # training runs are tracked in memory and outlive the tables they were
+    # started against, so a finished run must not leak into the next test
+    progress.reset()
     yield

@@ -22,6 +22,8 @@ from yt_dlp import YoutubeDL
 from yt_dlp.extractor import gen_extractor_classes
 from yt_dlp.utils import DownloadError
 
+from formats import playable_url
+
 app = FastAPI(title="aggy-ytdlp")
 
 MAX_LIMIT = 200
@@ -211,35 +213,6 @@ def metadata(request: ResolveRequest) -> dict:
     }
 
 
-def _progressive_url(info: dict) -> Optional[dict]:
-    """A single URL playable in a browser `video` element.
-
-    Skips the split video-only/audio-only renditions that would need muxing,
-    and HLS/DASH manifests, neither of which a plain `video` tag can play
-    everywhere.
-    """
-    candidates = []
-    for fmt in info.get("formats") or []:
-        if not fmt.get("url"):
-            continue
-        if fmt.get("vcodec") in (None, "none") or fmt.get("acodec") in (None, "none"):
-            continue
-        if (fmt.get("protocol") or "") not in ("https", "http"):
-            continue
-        candidates.append(fmt)
-
-    if not candidates:
-        return None
-
-    best = max(candidates, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
-    return {
-        "url": best["url"],
-        "ext": best.get("ext"),
-        "height": best.get("height"),
-        "protocol": best.get("protocol"),
-    }
-
-
 @app.post("/resolve")
 def resolve(request: ResolveRequest) -> dict:
     """A currently-playable media URL for one page URL.
@@ -261,7 +234,7 @@ def resolve(request: ResolveRequest) -> dict:
     if not info:
         raise HTTPException(status_code=422, detail="Nothing could be extracted")
 
-    resolved = _progressive_url(info)
+    resolved = playable_url(info)
     if resolved is None:
         raise HTTPException(
             status_code=422,

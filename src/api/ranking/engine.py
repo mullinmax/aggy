@@ -15,6 +15,7 @@ import numpy as np
 from db.base import get_db_con
 from db.feed import Feed
 from utils import is_playable_media_url
+from . import progress
 from .models import (
     ItemFeatures,
     ModelStats,
@@ -147,6 +148,42 @@ def load_model_stats(feed: Feed) -> List[dict]:
         return cur.fetchall()
 
 
+def training_summary(feed: Feed) -> dict:
+    """When this feed's models were last trained, on how many votes, with
+    which model — and how many votes have been cast since.
+
+    A count above zero means the live predictions are behind the user's
+    votes; the scheduled ranking job picks that up on its next pass, and the
+    stats UI shows it so a retrain is an informed choice rather than a guess.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT MAX(computed_at) AS last_trained_at, MAX(n_labels) AS n_labels, "
+            "MAX(model_name) FILTER (WHERE chosen) AS chosen_model "
+            "FROM ranking_model_stats WHERE user_hash = %s AND feed_hash = %s",
+            (feed.user_hash, feed.name_hash),
+        )
+        row = cur.fetchone() or {}
+        last_trained_at = row.get("last_trained_at")
+        # Shared votes again: a vote cast on this item in another feed trains
+        # this one too, so it counts as new here as well.
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM feed_items c "
+            "JOIN user_item_votes v ON v.user_hash = c.user_hash "
+            " AND v.item_url_hash = c.item_url_hash "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s "
+            "AND (%s::timestamptz IS NULL OR v.score_date > %s::timestamptz)",
+            (feed.user_hash, feed.name_hash, last_trained_at, last_trained_at),
+        )
+        votes_since = cur.fetchone()["n"]
+    return {
+        "last_trained_at": last_trained_at,
+        "trained_model": row.get("chosen_model"),
+        "trained_labels": row.get("n_labels") or 0,
+        "votes_since_training": votes_since,
+    }
+
+
 def _write_predictions(
     feed: Feed, items: List[ItemFeatures], scores, confs, model_name: str
 ) -> None:
@@ -168,13 +205,33 @@ def _write_predictions(
             )
 
 
+def training_steps() -> int:
+    """Steps a full training run reports: one per model evaluated, plus
+    fitting the winner and writing its predictions."""
+    return len(all_models()) + 2
+
+
 def rank_feed(feed: Feed) -> List[ModelStats]:
     """Evaluate all models on this feed's votes, persist their stats, then
-    predict a vote for every item with the winner. Returns the stats."""
+    predict a vote for every item with the winner. Returns the stats.
+
+    Progress is reported to `ranking.progress` as it goes; that is a no-op
+    unless a run was registered for this feed (see `train_feed`), so calling
+    this directly stays a plain synchronous operation.
+    """
     features = load_feed_features(feed)
     labeled = [f for f in features if f.label is not None]
 
-    stats = evaluate_models(labeled)
+    def report_model(index: int, total: int, model_name: str) -> None:
+        progress.update(
+            feed.user_hash,
+            feed.name_hash,
+            step=index,
+            phase=progress.PHASE_EVALUATING,
+            model_name=model_name,
+        )
+
+    stats = evaluate_models(labeled, on_model=report_model)
     save_model_stats(feed, stats)
 
     if len(labeled) < MIN_LABELS_TO_RANK:
@@ -185,18 +242,61 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
         return stats
     winner = next(m for m in all_models() if m.name == winner_name)
 
+    progress.update(
+        feed.user_hash,
+        feed.name_hash,
+        step=training_steps() - 2,
+        phase=progress.PHASE_TRAINING,
+        model_name=winner_name,
+    )
     winner.fit(labeled)
     # candidate items get fresh predictions; labeled ones too, so the
     # "include read" view still sorts sensibly
     for f in features:
         f.label_date = None  # predict ages as-of now
     scores, confs = winner.predict(features)
+    progress.update(
+        feed.user_hash,
+        feed.name_hash,
+        step=training_steps() - 1,
+        phase=progress.PHASE_PREDICTING,
+        model_name=winner_name,
+    )
     _write_predictions(feed, features, scores, confs, winner_name)
     logging.info(
         f"Ranked feed {feed.name} with model '{winner_name}' "
         f"({len(labeled)} labels, {len(features)} items)"
     )
     return stats
+
+
+def start_training(feed: Feed) -> bool:
+    """Claim this feed for a training run, so the UI can show it as running
+    the moment it is asked for. False when one is already in flight — a second
+    click, or the scheduler reaching a feed the user just asked to retrain.
+
+    The caller must then call `run_training`, on this thread or another.
+    """
+    return progress.start(feed.user_hash, feed.name_hash, training_steps())
+
+
+def run_training(feed: Feed) -> List[ModelStats]:
+    """Do the training claimed by `start_training`, reporting its progress."""
+    try:
+        stats = rank_feed(feed)
+    except Exception as e:
+        progress.finish(feed.user_hash, feed.name_hash, error=str(e))
+        raise
+    progress.finish(feed.user_hash, feed.name_hash)
+    return stats
+
+
+def train_feed(feed: Feed) -> Optional[List[ModelStats]]:
+    """`rank_feed` with progress tracking, for anything the UI can watch.
+    Returns None when a run for this feed is already in flight."""
+    if not start_training(feed):
+        return None
+    return run_training(feed)
 
 
 def feeds_needing_rank() -> List[Feed]:
@@ -242,10 +342,14 @@ def feeds_needing_rank() -> List[Feed]:
 
 
 def feed_ranking_job() -> None:
-    """Scheduled job: re-rank every feed whose votes or items changed."""
+    """Scheduled job: re-rank every feed whose votes or items changed.
+
+    Goes through `train_feed` so a scheduled retrain shows up in the UI's
+    training progress exactly like one the user asked for.
+    """
     for feed in feeds_needing_rank():
         try:
-            rank_feed(feed)
+            train_feed(feed)
         except Exception as e:
             logging.exception(f"Ranking feed {feed.name} failed: {e}")
 

@@ -31,7 +31,7 @@ import hashlib
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
@@ -552,19 +552,27 @@ class ModelStats:
 
 
 def evaluate_models(
-    labeled: Sequence[ItemFeatures], models: Optional[List[VoteModel]] = None
+    labeled: Sequence[ItemFeatures],
+    models: Optional[List[VoteModel]] = None,
+    on_model: Optional[Callable[[int, int, str], None]] = None,
 ) -> List[ModelStats]:
     """Cross-validate every eligible model on the labeled items.
 
     Uses leave-one-out below 40 labels (make the most of scarce votes),
     5-fold above. Models whose `min_labels` isn't met are reported with null
     metrics so the stats UI can show why they're not competing yet.
+
+    `on_model(index, total, model_name)` is called as each model comes up, so
+    a caller can report which one is training — this is the slow part of a
+    retrain, and the progress bar in the UI is driven from here.
     """
     models = models if models is not None else all_models()
     n = len(labeled)
     results: List[ModelStats] = []
 
-    for model in models:
+    for index, model in enumerate(models):
+        if on_model is not None:
+            on_model(index, len(models), model.name)
         if n < max(model.min_labels, 2):
             results.append(ModelStats(model_name=model.name, n_labels=n))
             continue

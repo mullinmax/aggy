@@ -211,6 +211,8 @@ def resolve_stream(url: str, cookie: Optional[str] = None) -> dict:
 
     Called per playback rather than at ingest time; the returned URL is
     typically signed and short-lived, so it is deliberately never persisted.
+    Carries ``is_hls`` when the site only publishes an adaptive stream, which
+    the player has to load itself rather than hand to a bare `video` tag.
     """
     if not is_configured():
         raise Exception("The aggy-ytdlp service isn't configured (set YTDLP_HOST)")

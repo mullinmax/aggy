@@ -1,5 +1,7 @@
 """Integration tests for feed item filters/sorts and the ranking endpoints."""
 
+import time
+
 from pydantic import HttpUrl
 
 from db.item_state import ItemState
@@ -30,6 +32,42 @@ def _get_items(client, token, feed, **params):
     response = client.get(**args)
     assert response.status_code == 200
     return response.json()
+
+
+def _rerank(client, token, feed):
+    args = build_api_request_args(
+        path="/feed/rerank",
+        params={"feed_name_hash": feed.name_hash},
+        token=token,
+    )
+    response = client.post(**args)
+    assert response.status_code == 200
+    return response.json()
+
+
+def _training_status(client, token, feed):
+    args = build_api_request_args(
+        path="/feed/training_status",
+        params={"feed_name_hash": feed.name_hash},
+        token=token,
+    )
+    response = client.get(**args)
+    assert response.status_code == 200
+    return response.json()
+
+
+def _wait_for_training(client, token, feed, timeout=60.0):
+    """Block until the feed's background training run reports a result."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = _training_status(client, token, feed)
+        run = status["training"]
+        assert run is not None, "the training run went missing"
+        if run["status"] != "running":
+            assert run["status"] == "done", run["error"]
+            return status
+        time.sleep(0.05)
+    raise AssertionError("training did not finish in time")
 
 
 def test_items_exclude_read(
@@ -73,16 +111,93 @@ def test_items_neutral_vote_counts_as_read(
     assert everything[0]["item_user_score"] == 0
 
 
-def test_items_text_only_filter(
+# Comfortably past db.feed.TEXT_BODY_MIN_CHARS, so the item reads as a post
+# with a body of its own rather than a bare pointer at another page.
+LONG_BODY = "A properly written article body, with something to say. " * 4
+
+
+def _post_type_items(existing_feed, existing_source, unique_item_strict):
+    """One item of each shape the post-type filter is meant to tell apart."""
+    shapes = {
+        # an illustrated article: a picture and a body, so image *and* text
+        "article": {"content": LONG_BODY, "excerpt": LONG_BODY},
+        # a picture post: a photo with a caption, nothing to read
+        "photo": {},
+        # a video listing entry: playable, no picture of its own
+        "video": {
+            "image_url": None,
+            "media": [{"type": "stream", "url": "http://example.com/video/"}],
+        },
+        # a link post pointing off-site
+        "link": {
+            "image_url": None,
+            "media": [{"type": "link", "url": "http://elsewhere.example.com/story"}],
+        },
+        # no picture, no media and nothing to read: a bare pointer
+        "stub": {"image_url": None, "excerpt": "click here", "content": "click here"},
+    }
+    for name, overrides in shapes.items():
+        item = unique_item_strict.model_copy()
+        item.url = HttpUrl(f"http://example.com/{name}/")
+        for field, value in overrides.items():
+            setattr(item, field, value)
+        item.create()
+        existing_source.add_items(item)
+        existing_feed.add_items(item)
+    return {name: f"http://example.com/{name}/" for name in shapes}
+
+
+def test_items_post_type_filter(
     client, existing_user, existing_feed, existing_source, unique_item_strict, token
 ):
-    _make_items(existing_feed, existing_source, unique_item_strict)
+    url = _post_type_items(existing_feed, existing_source, unique_item_strict)
 
-    text = _get_items(client, token, existing_feed, text_only=True)
-    assert text and all(i["item_image_url"] is None for i in text)
+    def urls(**params):
+        items = _get_items(client, token, existing_feed, **params)
+        return {i["item_url"] for i in items}
 
-    visual = _get_items(client, token, existing_feed, text_only=False)
-    assert visual and all(i["item_image_url"] is not None for i in visual)
+    assert urls(post_types="image") == {url["article"], url["photo"]}
+    assert urls(post_types="video") == {url["video"]}
+    assert urls(post_types="text") == {url["article"]}
+    # a link card, and a post that is nothing but a pointer, both read as links
+    assert urls(post_types="link") == {url["link"], url["stub"]}
+
+    # ticked types add up rather than narrow each other down
+    assert urls(post_types="video,link") == {url["video"], url["link"], url["stub"]}
+    # and every item answers to at least one type, so ticking them all is the
+    # same view as ticking none
+    assert urls(post_types="image,video,link,text") == urls()
+
+
+def test_items_youtube_url_counts_as_video(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    """A YouTube link plays inline with no stored media entry, so it counts as
+    a video post even though nothing was ingested for it."""
+    unique_item_strict.url = HttpUrl("https://www.youtube.com/watch?v=abcdefghijk")
+    unique_item_strict.create()
+    existing_source.add_items(unique_item_strict)
+    existing_feed.add_items(unique_item_strict)
+
+    assert len(_get_items(client, token, existing_feed, post_types="video")) == 1
+
+
+def test_items_no_post_types_selected_is_empty(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    """Clearing every box shows nothing, which is what the panel then says."""
+    _make_items(existing_feed, existing_source, unique_item_strict, n=2)
+
+    assert _get_items(client, token, existing_feed, post_types="") == []
+
+
+def test_items_bad_post_type_rejected(client, existing_user, existing_feed, token):
+    args = build_api_request_args(
+        path="/feed/items",
+        params={"feed_name_hash": existing_feed.name_hash, "post_types": "hologram"},
+        token=token,
+    )
+    assert client.get(**args).status_code == 422
 
 
 def test_items_source_filter(
@@ -198,19 +313,22 @@ def test_rerank_and_stats(
             is_read=True,
         )
 
-    args = build_api_request_args(
-        path="/feed/rerank",
-        params={"feed_name_hash": existing_feed.name_hash},
-        token=token,
-    )
-    response = client.post(**args)
-    assert response.status_code == 200
-    body = response.json()
+    body = _rerank(client, token, existing_feed)
     assert body["up_votes"] == 2
     assert body["down_votes"] == 2
     assert body["total_items"] == len(items)
-    assert body["predicted_items"] == len(items)
-    assert sum(1 for m in body["models"] if m["chosen"]) == 1
+    # training runs in the background, so the snapshot the request returns is
+    # the state it started from; the votes are all newer than the last (never)
+    # training run
+    assert body["votes_since_training"] == 4
+
+    status = _wait_for_training(client, token, existing_feed)
+    assert status["training"]["status"] == "done"
+    assert status["last_trained_at"] is not None
+    assert status["trained_model"]
+    assert status["trained_labels"] == 4
+    # everything the models learned from is now accounted for
+    assert status["votes_since_training"] == 0
 
     # stats endpoint returns the persisted evaluation
     args = build_api_request_args(
@@ -227,6 +345,8 @@ def test_rerank_and_stats(
         "knn_embedding",
     }
     assert any(m["chosen"] for m in stats["models"])
+    assert stats["predicted_items"] == len(items)
+    assert sum(1 for m in stats["models"] if m["chosen"]) == 1
 
     # predictions now drive the predicted sorts
     ranked = _get_items(client, token, existing_feed, sort="predicted")

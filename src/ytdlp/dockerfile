@@ -5,7 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+# formats.py holds the rendition picker app.py imports
+COPY app.py formats.py ./
 
 EXPOSE 8000
 
