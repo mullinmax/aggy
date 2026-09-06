@@ -26,6 +26,28 @@ jobs:
         pip install -r requirements.txt pytest
         pytest
 
+    # The image builds happily with a module missing from it: nothing notices
+    # until the container starts, in the deployment, and takes the service off
+    # the network with it. Start the real image and ask it whether it is
+    # alive, which is the only check that covers that.
+    - name: The built image actually starts
+      working-directory: src/ytdlp
+      run: |
+        docker build -t aggy-ytdlp-check .
+        docker run --rm -d --name ytdlp-check -p 8000:8000 aggy-ytdlp-check
+        for attempt in $(seq 30); do
+          if curl -fsS http://localhost:8000/health; then
+            echo "\nthe service answered"
+            docker rm -f ytdlp-check
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "the service never answered:"
+        docker logs ytdlp-check
+        docker rm -f ytdlp-check
+        exit 1
+
   test:
     runs-on: ubuntu-latest
     # A hung step (an apt mirror that never answers, a build that stalls)
