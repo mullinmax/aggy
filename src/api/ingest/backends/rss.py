@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from config import config
 from db.item import ItemLoose
 from db.source import Source
+from ingest.errors import IngestError
 from ingest.item.rss import ingest_rss_item
 from ingest.reddit_rate_limit import is_reddit_url, reddit_get
 
@@ -75,19 +76,19 @@ def fetch_items(source: Source) -> List[ItemLoose]:
     try:
         response = fetch(str(source.url), timeout=60, headers=feed_headers())
     except requests.RequestException as e:
-        raise Exception(f"Could not fetch feed: {e}") from e
+        raise IngestError(f"Could not fetch feed: {e}") from e
 
     if response.status_code == 429:
         retry_after = response.headers.get("Retry-After")
         detail = f", retry after {retry_after}s" if retry_after else ""
-        raise Exception(f"Rate limited by feed server (HTTP 429{detail})")
+        raise IngestError(f"Rate limited by feed server (HTTP 429{detail})")
 
     if response.status_code != 200:
         # Bridges put the real reason in the body — "this route is empty",
         # "route not found", a stack trace — and the status code alone
         # ("HTTP 503") tells a user nothing they can act on.
         detail = _response_message(response)
-        raise Exception(
+        raise IngestError(
             f"Feed request returned HTTP {response.status_code}"
             + (f": {detail}" if detail else "")
         )
@@ -99,7 +100,12 @@ def fetch_items(source: Source) -> List[ItemLoose]:
         detail = ""
         if parsed.bozo and parsed.get("bozo_exception"):
             detail = f" ({parsed.bozo_exception})"
-        raise Exception(f"Feed returned no entries{detail}")
+        elif is_reddit_url(source.url):
+            # reddit answers a throttled or blocked request with a valid but
+            # empty feed rather than an error, so an empty listing from a
+            # subreddit that clearly has posts is almost always the throttle
+            detail = " (reddit serves an empty feed when it is throttling)"
+        raise IngestError(f"Feed returned no entries{detail}")
 
     # rss-bridge reports bridge failures as a 200 OK feed containing a single
     # item titled "Bridge returned error <code>! (<id>)". Treat that as a
@@ -110,7 +116,7 @@ def fetch_items(source: Source) -> List[ItemLoose]:
         if str(e.get("title", "")).startswith("Bridge returned error")
     ]
     if bridge_errors:
-        raise Exception(f"rss-bridge failed: {bridge_errors[0].get('title')}")
+        raise IngestError(f"rss-bridge failed: {bridge_errors[0].get('title')}")
 
     logging.info(f"Source '{source.name}': feed has {len(entries)} entries")
 

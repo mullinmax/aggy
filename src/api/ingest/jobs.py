@@ -24,6 +24,7 @@ from db.source_attempt import (
     record_attempt,
 )
 from ingest import host_circuit
+from ingest.errors import IngestError
 from ingest.backends import UNSCHEDULED_KINDS, get_backend
 from ingest.host_circuit import HostUnavailable, source_host
 from ingest.source import ingest_source
@@ -115,11 +116,31 @@ def source_ingestion_job() -> None:
         logging.info(f"Skipping source '{source.name}': {e}")
         source.mark_ingest_error(str(e))
         return
-    except Exception as e:
-        logging.exception(f"Ingesting of source {row['name_hash']} failed: {e}")
+    except IngestError as e:
+        # An ordinary bad day on the open web: the site is down, the feed came
+        # back empty, a bridge complained. One line, no traceback — the reason
+        # is already written for a person, and it is stored on the source and
+        # shown beside it in the UI.
+        logging.warning(f"{_source_label(source, row)}: {e}")
         if source is not None:
             source.mark_ingest_error(str(e))
         return
+    except Exception as e:
+        # Anything that isn't an IngestError got here without being explained,
+        # which makes it a bug — that one keeps its traceback.
+        logging.exception(f"{_source_label(source, row)} failed unexpectedly: {e}")
+        if source is not None:
+            source.mark_ingest_error(str(e))
+        return
+
+
+def _source_label(source, row) -> str:
+    """How a source is named in the log. The name and URL are what identify
+    it to a person; the hash is a last resort for a source we couldn't even
+    read back."""
+    if source is None:
+        return f"Source {row['name_hash']}"
+    return f"Source '{source.name}' ({source.url})"
 
 
 def _ingest_with_circuit(source: Source) -> None:
@@ -193,8 +214,11 @@ def ingest_source_now(source: Source) -> None:
         logging.info(f"Ingesting new source '{source.name}' ({source.url})")
         ingest_source(source=source)
         source.mark_ingested()
+    except IngestError as e:
+        logging.warning(f"First check of source '{source.name}' ({source.url}): {e}")
+        source.mark_ingest_error(str(e))
     except Exception as e:
-        logging.exception(f"Initial ingest of source '{source.name}' failed: {e}")
+        logging.exception(f"First check of source '{source.name}' failed: {e}")
         source.mark_ingest_error(str(e))
 
 
@@ -304,6 +328,8 @@ def rescrape_source(source: Source) -> None:
             # a changed, voted-on item means the models that trained on its old
             # features are now stale — schedule those feeds to retrain
             feeds_to_rerank |= _feeds_with_votes_on(item.url_hash)
+        except IngestError as e:
+            logging.warning(f"Re-scrape of {item.url}: {e}")
         except Exception as e:
             logging.exception(f"Re-scrape of item {item.url} failed: {e}")
 

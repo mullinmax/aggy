@@ -75,6 +75,17 @@
   border-color: transparent transparent transparent #fff;
 }
 
+/* Compact variant for the one-line "play video" strip a card falls back to
+   when it has no thumbnail worth showing. */
+.aggy-play-badge-sm {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+}
+.aggy-play-badge-sm::after {
+  border-width: 0.3rem 0 0.3rem 0.45rem;
+}
+
 /* SponsorBlock countdown chip: top-centre, shown only in the ~5s before a
    skip. It's a button — tapping it cancels that skip. */
 .aggy-sb-chip {

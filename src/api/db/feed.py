@@ -34,6 +34,77 @@ ITEM_AGE_WINDOWS = {
     "year": "365 days",
 }
 
+# The `media` entry types the ingest backends produce, grouped by the kind of
+# post they make. A single item can land in more than one group on purpose —
+# a clip carries a poster image, a link post carries a preview — so the post
+# type filter is a set of overlapping tags rather than one label per item.
+MEDIA_TYPES_VIDEO = ("video", "gif", "stream", "embed")
+MEDIA_TYPES_IMAGE = ("image", "gif")
+
+# Hosts and file extensions the UI plays inline from the item URL alone, with
+# no stored media entry (kept in step with utils.is_playable_media_url and the
+# frontend's youtubeId/isVideoFile).
+_PLAYABLE_URL_SQL = (
+    "i.url ~* '^https?://(www\\.|m\\.)?"
+    "(youtube\\.com|youtu\\.be|youtube-nocookie\\.com)/'"
+    " OR i.url ~* '\\.(mp4|webm)(\\?|$)'"
+)
+
+# An item has a picture if it carries a card image, an image media entry, or
+# an <img> inside its (sanitized) content — many feeds only put pictures in
+# the content body.
+_HAS_IMAGE_SQL = "i.image_url IS NOT NULL OR i.content ~* '<img\\s'"
+
+# Enough body text to be worth reading, rather than a bare pointer at another
+# page. Reddit link posts and video listings sit well under this; even a
+# one-paragraph article clears it.
+TEXT_BODY_MIN_CHARS = 120
+_BODY_TEXT_SQL = (
+    "length(btrim(regexp_replace(COALESCE(i.content, i.excerpt, ''),"
+    " '<[^>]*>', ' ', 'g')))"
+)
+
+
+def _media_has_type_sql(types) -> str:
+    """SQL testing whether the item's JSONB media array holds any of `types`.
+
+    Containment (`@>`) rather than `jsonb_array_elements`, because `media` is
+    NULL on most items and holds a bare JSON `null` on some, and unnesting
+    either one raises.
+    """
+    tests = " OR ".join(
+        f"""i.media @> '[{{"type": "{media_type}"}}]'::jsonb""" for media_type in types
+    )
+    return f"COALESCE({tests}, FALSE)"
+
+
+def post_type_sql(post_type: str) -> Optional[str]:
+    """SQL predicate for one post type, or None when the name is unknown.
+
+    The types overlap by design: an article with a photo is both `image` and
+    `text`, and a video keeps its `image` tag when it has a thumbnail, so
+    ticking a box adds posts to the view instead of carving them up.
+    """
+    if post_type == "video":
+        return f"({_media_has_type_sql(MEDIA_TYPES_VIDEO)} OR {_PLAYABLE_URL_SQL})"
+    if post_type == "image":
+        return f"({_media_has_type_sql(MEDIA_TYPES_IMAGE)} OR {_HAS_IMAGE_SQL})"
+    if post_type == "link":
+        # a link card, or a post that is nothing but a pointer: no picture, no
+        # video, and no body of its own
+        return (
+            f"({_media_has_type_sql(('link',))}"
+            f" OR (NOT ({post_type_sql('image')}) AND NOT ({post_type_sql('video')})"
+            f" AND {_BODY_TEXT_SQL} < {TEXT_BODY_MIN_CHARS}))"
+        )
+    if post_type == "text":
+        return f"({_BODY_TEXT_SQL} >= {TEXT_BODY_MIN_CHARS})"
+    return None
+
+
+# Post types offered by the feed filter, in the order the UI shows them.
+POST_TYPES = ("image", "video", "link", "text")
+
 
 class Feed(ItemCollection):
     user_hash: str
@@ -139,7 +210,7 @@ class Feed(ItemCollection):
         sort: str = "best",
         include_read: bool = True,
         source_hashes: Optional[List[str]] = None,
-        text_only: Optional[bool] = None,
+        post_types: Optional[List[str]] = None,
         max_age: Optional[str] = None,
     ):
         """Like ``query_items`` but pairs each item with its source name and
@@ -150,8 +221,10 @@ class Feed(ItemCollection):
 
         - ``include_read=False`` hides items the user has already voted on.
         - ``source_hashes`` restricts to items produced by those sources.
-        - ``text_only=True`` keeps only items with no image or media;
-          ``False`` keeps only items that have some; ``None`` keeps all.
+        - ``post_types`` keeps items matching any of ``POST_TYPES`` ("image",
+          "video", "link", "text"); the types overlap, so an illustrated
+          article answers to both "image" and "text". ``None`` (or every type)
+          keeps all.
         - ``max_age`` is a key of ``ITEM_AGE_WINDOWS`` ("day", "week",
           "month", "year") keeping only items published within that window;
           ``None`` (or "all") keeps every item.
@@ -210,18 +283,16 @@ class Feed(ItemCollection):
                 " AND sf.source_hash = ANY(%s))"
             )
             params = params + (list(source_hashes),)
-        # An item counts as visual if it has a card image, ingested media,
-        # or an image embedded in its (sanitized) content HTML — many feeds
-        # only carry images inside the content body.
-        has_visual = (
-            "(i.image_url IS NOT NULL OR (i.media IS NOT NULL"
-            " AND i.media::text NOT IN ('null', '[]'))"
-            " OR i.content ~* '<img\\s')"
-        )
-        if text_only is True:
-            sql += f" AND NOT {has_visual}"
-        elif text_only is False:
-            sql += f" AND {has_visual}"
+        # Post-type filter: keep items matching any ticked type. An empty list
+        # would match nothing, which is what an all-boxes-cleared filter panel
+        # should show, so it is honoured rather than treated as "no filter".
+        if post_types is not None:
+            predicates = [
+                clause
+                for clause in (post_type_sql(post_type) for post_type in post_types)
+                if clause is not None
+            ]
+            sql += f" AND ({' OR '.join(predicates)})" if predicates else " AND FALSE"
 
         # Items with no publish date fall back to when the feed picked them
         # up, so a date filter never silently drops undated items that only

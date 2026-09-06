@@ -31,7 +31,7 @@ import hashlib
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
@@ -379,7 +379,12 @@ class RandomForestModel(_SklearnModel):
             max_depth=self.max_depth,
             min_samples_leaf=1,
             random_state=self.seed,
-            n_jobs=1,
+            # Fit the trees across every core. This is joblib parallelism over
+            # independent trees, not BLAS threading, so it does not fight the
+            # OPENBLAS/OMP thread pinning the container sets — and it is the
+            # difference between ~13s and ~4s per cross-validation pass on a
+            # four-core box, for bit-identical predictions.
+            n_jobs=-1,
         )
 
 
@@ -552,19 +557,33 @@ class ModelStats:
 
 
 def evaluate_models(
-    labeled: Sequence[ItemFeatures], models: Optional[List[VoteModel]] = None
+    labeled: Sequence[ItemFeatures],
+    models: Optional[List[VoteModel]] = None,
+    on_progress: Optional[Callable[[int, int, str, int, int], None]] = None,
 ) -> List[ModelStats]:
     """Cross-validate every eligible model on the labeled items.
 
     Uses leave-one-out below 40 labels (make the most of scarce votes),
     5-fold above. Models whose `min_labels` isn't met are reported with null
     metrics so the stats UI can show why they're not competing yet.
+
+    `on_progress(model_index, model_count, model_name, folds_done, fold_count)`
+    is called as each model comes up and again after every fold it completes.
+    This is by far the slowest part of a retrain — a single model can take
+    tens of seconds — so the UI's progress bar is driven from here, and the
+    per-fold call is what keeps it moving inside one model rather than
+    freezing between them.
     """
     models = models if models is not None else all_models()
     n = len(labeled)
     results: List[ModelStats] = []
 
-    for model in models:
+    def report(index: int, model_name: str, done: int, total: int) -> None:
+        if on_progress is not None:
+            on_progress(index, len(models), model_name, done, total)
+
+    for index, model in enumerate(models):
+        report(index, model.name, 0, 0)
         if n < max(model.min_labels, 2):
             results.append(ModelStats(model_name=model.name, n_labels=n))
             continue
@@ -578,7 +597,7 @@ def evaluate_models(
 
         preds = np.zeros(n)
         try:
-            for fold in folds:
+            for fold_number, fold in enumerate(folds, start=1):
                 if len(fold) == 0:
                     continue
                 train = [labeled[i] for i in indices if i not in set(fold)]
@@ -586,6 +605,7 @@ def evaluate_models(
                 model.fit(train)
                 scores, _ = model.predict(test)
                 preds[fold] = scores
+                report(index, model.name, fold_number, len(folds))
         except Exception:
             results.append(ModelStats(model_name=model.name, n_labels=n))
             continue

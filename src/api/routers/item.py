@@ -1,3 +1,6 @@
+import logging
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import confloat
 from typing import Optional
@@ -94,9 +97,21 @@ def stream_url(
             status_code=422, detail="This item has no resolvable stream"
         )
 
+    started = time.monotonic()
     try:
         resolved = ytdlp.resolve_stream(str(item.url))
+    except ytdlp.StreamUnavailable as e:
+        # Logged as well as returned: the viewer sees the short reason on the
+        # card, and the operator can see which item and how long it took.
+        # A warning rather than info — someone pressed play and got nothing,
+        # which is exactly what you go to the log to find.
+        logging.warning(
+            f"stream_url for {item.url} failed after "
+            f"{time.monotonic() - started:.1f}s ({e.status_code}): {e}"
+        )
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        logging.exception(f"stream_url for {item.url} failed unexpectedly")
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     return StreamUrlResponse(**resolved)

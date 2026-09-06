@@ -142,10 +142,13 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 4.5h18l-7 8.5v6l-4 2v-8L3 4.5z"/>
         </svg>
       </button>
-      <button class="btn btn-ghost btn-sm btn-square" id="statsBtn" title="Model stats">
+      <button class="btn btn-ghost btn-sm btn-square relative" id="statsBtn" title="Model training">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 20V10M10 20V4M16 20v-7M20 20H3"/>
         </svg>
+        <!-- lit while a training run is going, so leaving this screen doesn't
+             mean losing track of it -->
+        <span class="hidden absolute top-1 right-1 w-2 h-2 rounded-full bg-primary animate-pulse" id="statsTrainingDot"></span>
       </button>
       <button class="btn btn-ghost btn-sm btn-square" id="manageSourcesBtn" title="Manage sources">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -172,12 +175,28 @@
             </select>
           </div>
           <div class="form-control">
-            <label class="label py-1" for="filterMedia"><span class="label-text text-xs">Post type</span></label>
-            <select class="select select-bordered select-sm" id="filterMedia">
-              <option value="">All posts</option>
-              <option value="true">Text only</option>
-              <option value="false">With image / media</option>
-            </select>
+            <span class="label-text text-xs py-1" id="filterPostTypesLabel">Post type</span>
+            <!-- Overlapping tags, not one label per post: an illustrated
+                 article answers to both "image" and "text", so ticking boxes
+                 adds posts to the view. All clear means every post. -->
+            <div class="flex flex-wrap gap-2 mt-1" id="filterPostTypes" role="group" aria-labelledby="filterPostTypesLabel">
+              <label class="label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100">
+                <input type="checkbox" class="checkbox checkbox-xs checkbox-primary" data-post-type="image">
+                <span class="label-text text-xs">Image</span>
+              </label>
+              <label class="label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100">
+                <input type="checkbox" class="checkbox checkbox-xs checkbox-primary" data-post-type="video">
+                <span class="label-text text-xs">Video</span>
+              </label>
+              <label class="label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100">
+                <input type="checkbox" class="checkbox checkbox-xs checkbox-primary" data-post-type="link">
+                <span class="label-text text-xs">Link</span>
+              </label>
+              <label class="label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100">
+                <input type="checkbox" class="checkbox checkbox-xs checkbox-primary" data-post-type="text">
+                <span class="label-text text-xs">Text</span>
+              </label>
+            </div>
           </div>
           <div class="form-control">
             <label class="label py-1" for="filterDate"><span class="label-text text-xs">Published</span></label>
@@ -247,6 +266,8 @@
     <div id="readerMedia" class="mb-4 empty:hidden"></div>
     <div class="prose prose-sm max-w-none" id="readerContent"></div>
     <div class="flex flex-wrap items-center gap-3 text-xs text-base-content/50 mt-4 pt-3 border-t border-base-300" id="readerMeta"></div>
+    <!-- Vote on the article without closing it first -->
+    <div class="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-base-300" id="readerVotes"></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
@@ -277,15 +298,16 @@
 <dialog class="modal" id="statsModal">
   <div class="modal-box max-w-2xl">
     <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
-    <h3 class="text-lg font-bold mb-1">Prediction Model Stats</h3>
+    <h3 class="text-lg font-bold mb-1">Model Training</h3>
     <p class="text-xs text-base-content/60 mb-4">
       Aggy cross-validates several models on your votes and ranks this feed with the best one.
-      Vote more to unlock the smarter models.
+      Vote more to unlock the smarter models. Training runs in the background — you can close
+      this and keep browsing.
     </p>
     <div id="statsBody"></div>
     <div class="modal-action">
       <button type="button" class="btn btn-ghost btn-sm" data-close-modal>Close</button>
-      <button class="btn btn-primary btn-sm" id="rerankBtn">Recompute now</button>
+      <button class="btn btn-primary btn-sm" id="rerankBtn">Retrain now</button>
     </div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>

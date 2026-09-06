@@ -11,9 +11,14 @@ let currentFeed = null;
 let currentList = null; // the list being browsed in the list-detail view
 let itemSkip = 0;
 let lastItemBand = null; // sort-band of the last rendered item, for threshold dividers
-// filter/sort state for the current feed; sources: null means "all sources"
+// filter/sort state for the current feed; sources and postTypes: null means
+// "everything" (no filter), an array means only those
 const defaultFilters = () =>
-  ({ sort: 'predicted', includeRead: false, textOnly: '', maxAge: 'all', sources: null });
+  ({ sort: 'predicted', includeRead: false, postTypes: null, maxAge: 'all', sources: null });
+// Post types a feed can be filtered by, matching the API's post_types values.
+// They overlap on purpose — an illustrated article is both an image post and
+// a text post — so ticking boxes widens the view rather than slicing it up.
+const POST_TYPES = ['image', 'video', 'link', 'text'];
 let feedFilters = defaultFilters();
 let feedSourceList = []; // sources of the current feed, for the filter panel
 let selectedTemplate = null;
@@ -72,7 +77,17 @@ function bindControls() {
   $('statsBtn').onclick = openStatsModal;
   $('rerankBtn').onclick = handleRerank;
   $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
-  $('filterMedia').onchange = (e) => { feedFilters.textOnly = e.target.value; reloadItems(); };
+  postTypeCheckboxes().forEach((box) => {
+    box.onchange = () => {
+      const picked = postTypeCheckboxes()
+        .filter((b) => b.checked)
+        .map((b) => b.dataset.postType);
+      // every type ticked is the same view as none ticked; keep the state as
+      // "no filter" so the request stays clean
+      feedFilters.postTypes = picked.length === POST_TYPES.length ? null : picked;
+      reloadItems();
+    };
+  });
   $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
   $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
@@ -104,6 +119,7 @@ function bindControls() {
   $('readerModal').addEventListener('close', () => {
     destroyPlayersIn($('readerMedia'));
     render($('readerMedia'));
+    render($('readerVotes'));
     updateGifPlayback();
   });
 
@@ -339,6 +355,10 @@ async function showFeed(hash) {
   $('feedTitle').textContent = currentFeed.feed_name;
   $('feedBreadcrumb').textContent = currentFeed.feed_name;
 
+  // A scheduled retrain may be running already; light the indicator rather
+  // than making the user open the panel to find out.
+  checkTrainingOnFeedOpen(currentFeed.feed_name_hash);
+
   // Continue first-run onboarding: land the user on the next step (adding
   // a source) instead of an empty articles list.
   if (onboardingContinue) {
@@ -421,16 +441,39 @@ function confirmDeleteList() {
 }
 
 // ---------- filters ----------
+function postTypeCheckboxes() {
+  return Array.from($('filterPostTypes').querySelectorAll('input[data-post-type]'));
+}
+
 function syncFilterControls() {
   $('filterSort').value = feedFilters.sort;
-  $('filterMedia').value = feedFilters.textOnly;
   $('filterDate').value = feedFilters.maxAge;
   $('filterIncludeRead').checked = feedFilters.includeRead;
+  const types = feedFilters.postTypes; // null = every type
+  postTypeCheckboxes().forEach((box) => {
+    box.checked = types === null || types.includes(box.dataset.postType);
+  });
 }
 
 function reloadItems() {
   itemSkip = 0;
   loadFeedItems();
+}
+
+// Whether anything but the sort is currently hiding articles.
+function isFiltered() {
+  return feedFilters.postTypes !== null
+    || feedFilters.sources !== null
+    || feedFilters.maxAge !== 'all';
+}
+
+function clearFilters() {
+  const sort = feedFilters.sort;
+  const includeRead = feedFilters.includeRead;
+  feedFilters = { ...defaultFilters(), sort, includeRead };
+  syncFilterControls();
+  renderFilterSources();
+  reloadItems();
 }
 
 async function toggleFilterPanel() {
@@ -488,7 +531,7 @@ function renderFilterSources() {
       : h('span', { class: 'text-xs text-base-content/40' }, 'No sources in this feed'));
 }
 
-// ---------- model stats ----------
+// ---------- model training ----------
 function formatMetric(v, digits = 3) {
   return v == null ? '—' : Number(v).toFixed(digits);
 }
@@ -508,12 +551,147 @@ const MODEL_LABELS = {
   deep_neural_net: 'Deep neural net',
 };
 
+const modelLabel = (name) => MODEL_LABELS[name] || name || '';
+
+// What each phase of a run is actually doing, in the user's terms.
+const TRAINING_PHASES = {
+  loading: 'Reading your votes',
+  evaluating: 'Testing models against your votes',
+  training: 'Training the winning model',
+  predicting: 'Scoring the articles in this feed',
+};
+
+// How often the training progress is re-read while a run is going.
+const TRAINING_POLL_MS = 1500;
+
+// A run outlives this screen: the poll keeps going while the modal is closed
+// (and while the user is off browsing another feed), so the indicator on the
+// stats button stays honest and the feed reloads itself when the new ranking
+// lands.
+let trainingTimer = null;
+let trainingFeedHash = null;
+
+function trainingDot(on) {
+  const dot = $('statsTrainingDot');
+  if (dot) dot.classList.toggle('hidden', !on);
+}
+
+function stopTrainingWatch() {
+  if (trainingTimer) clearInterval(trainingTimer);
+  trainingTimer = null;
+  trainingFeedHash = null;
+  trainingDot(false);
+}
+
+// Follow a run to its end. Safe to call whenever a run might be in flight —
+// it replaces any watch on another feed and does nothing on a second call for
+// the same one.
+function watchTraining(feedHash) {
+  if (trainingTimer && trainingFeedHash === feedHash) return;
+  stopTrainingWatch();
+  trainingFeedHash = feedHash;
+  trainingDot(true);
+  trainingTimer = setInterval(async () => {
+    if (!currentFeed || currentFeed.feed_name_hash !== feedHash) { stopTrainingWatch(); return; }
+    let status;
+    try {
+      status = await sdk.feedTrainingStatus({ feed_name_hash: feedHash });
+    } catch {
+      stopTrainingWatch(); // the feed went away, or the session did
+      return;
+    }
+    const run = status.training;
+    if (run && run.status === 'running') {
+      if ($('statsModal').open) renderTrainingPanel(status);
+      return;
+    }
+    stopTrainingWatch();
+    if (run && run.status === 'error') {
+      toast(`Training failed: ${run.error}`, 'alert-error');
+    } else if (run) {
+      toast(`Models retrained${status.trained_model ? ` — now using ${modelLabel(status.trained_model)}` : ''}`);
+      // the ranking the feed is sorted by has just changed underneath it
+      reloadItems();
+    }
+    if ($('statsModal').open) loadStats();
+  }, TRAINING_POLL_MS);
+}
+
+// Called when a feed is opened: a scheduled retrain may already be running,
+// and the indicator should show it without the user going looking.
+async function checkTrainingOnFeedOpen(feedHash) {
+  try {
+    const status = await sdk.feedTrainingStatus({ feed_name_hash: feedHash });
+    if (status.training && status.training.status === 'running') watchTraining(feedHash);
+  } catch { /* not worth surfacing: the feed itself has already loaded */ }
+}
+
+// The block at the top of the stats modal: when the models were last built,
+// how far behind the votes they are, and the progress of a run in flight.
+function renderTrainingPanel(status) {
+  const host = $('statsTraining');
+  if (!host) return;
+  const run = status.training;
+  const running = !!run && run.status === 'running';
+  $('rerankBtn').disabled = running;
+  $('rerankBtn').textContent = running ? 'Training…' : 'Retrain now';
+
+  const lastTrained = status.last_trained_at
+    ? h('span', { title: new Date(status.last_trained_at).toLocaleString() },
+        `Last trained ${timeAgo(status.last_trained_at)}`)
+    : h('span', {}, 'Not trained yet');
+
+  const trainedOn = status.last_trained_at
+    ? h('span', { class: 'text-base-content/60' },
+        `${status.trained_model ? `${modelLabel(status.trained_model)} · ` : ''}`
+        + `learned from ${status.trained_labels} vote${status.trained_labels === 1 ? '' : 's'}`)
+    : null;
+
+  const pending = status.votes_since_training;
+  const pendingLine = pending > 0
+    ? h('span', { class: 'text-warning' },
+        `${pending} new vote${pending === 1 ? '' : 's'} since — retrain to use ${pending === 1 ? 'it' : 'them'}`)
+    : h('span', { class: 'text-success' }, 'Up to date with your votes');
+
+  // Progress is reported in steps — reading the votes, one per model
+  // cross-validated, the winner's fit, then the scoring pass — and the step
+  // is fractional within a model, so the bar keeps moving through the slow
+  // ones instead of sitting still for half a minute.
+  const step = Math.min(Math.floor(run ? run.step : 0) + 1, run ? run.total_steps : 1);
+  const elapsed = run && run.elapsed_seconds >= 1
+    ? `${Math.round(run.elapsed_seconds)}s` : null;
+  const progress = running
+    ? h('div', { class: 'mt-2' },
+        h('progress', {
+          class: 'progress progress-primary w-full h-2',
+          value: String(run.step), max: String(run.total_steps),
+        }),
+        h('div', { class: 'flex flex-wrap justify-between gap-2 text-xs mt-1' },
+          h('span', {},
+            TRAINING_PHASES[run.phase] || 'Training',
+            run.model_name ? h('span', { class: 'font-medium' }, ` · ${modelLabel(run.model_name)}`) : null,
+            // what it is doing inside this step: "fold 3 of 5", "scoring 4812
+            // articles" — the long steps are otherwise indistinguishable from
+            // a stall
+            run.note ? h('span', { class: 'text-base-content/50' }, ` · ${run.note}`) : null),
+          h('span', { class: 'text-base-content/50 whitespace-nowrap' },
+            `step ${step} of ${run.total_steps}${elapsed ? ` · ${elapsed}` : ''}`)))
+    : null;
+
+  render(host,
+    h('div', { class: 'rounded-lg border border-base-300 p-3 text-xs flex flex-col gap-1' },
+      h('div', { class: 'flex flex-wrap items-center gap-x-2 gap-y-1 font-medium' },
+        lastTrained, trainedOn),
+      pendingLine,
+      progress));
+}
+
 function renderStats(stats) {
   const votes = stats.up_votes + stats.down_votes + stats.neutral_votes;
   const row = (m) =>
     h('tr', { class: m.chosen ? 'bg-primary/10' : '' },
       h('td', { class: 'text-sm' },
-        MODEL_LABELS[m.model_name] || m.model_name,
+        modelLabel(m.model_name),
         m.chosen ? h('span', { class: 'badge badge-primary badge-xs ml-2' }, 'in use') : null),
       h('td', { class: 'text-sm text-right' }, formatMetric(m.mae)),
       h('td', { class: 'text-sm text-right' }, formatMetric(m.rmse)),
@@ -521,6 +699,7 @@ function renderStats(stats) {
         m.sign_accuracy == null ? '—' : `${Math.round(m.sign_accuracy * 100)}%`));
 
   render($('statsBody'),
+    h('div', { id: 'statsTraining', class: 'mb-4' }),
     h('div', { class: 'stats stats-horizontal shadow-none border border-base-300 w-full mb-4' },
       h('div', { class: 'stat py-2' },
         h('div', { class: 'stat-title text-xs' }, 'Votes'),
@@ -540,31 +719,41 @@ function renderStats(stats) {
                 h('th', { class: 'text-right', title: 'How often the predicted vote direction matches yours' }, 'Direction'))),
             h('tbody', {}, stats.models.map(row))))
       : h('p', { class: 'text-sm text-base-content/50' },
-          'No model stats yet — vote on a few articles, then hit "Recompute now".'));
+          'No model stats yet — vote on a few articles, then hit "Retrain now".'));
+
+  renderTrainingPanel(stats);
 }
 
-async function openStatsModal() {
-  showModal('statsModal');
-  render($('statsBody'), spinner());
+async function loadStats() {
   try {
-    renderStats(await sdk.feedRankingStats({ feed_name_hash: currentFeed.feed_name_hash }));
+    const stats = await sdk.feedRankingStats({ feed_name_hash: currentFeed.feed_name_hash });
+    renderStats(stats);
+    if (stats.training && stats.training.status === 'running') {
+      watchTraining(currentFeed.feed_name_hash);
+    }
   } catch (err) {
     render($('statsBody'), h('p', { class: 'text-sm text-error' }, err.message));
   }
 }
 
+async function openStatsModal() {
+  showModal('statsModal');
+  render($('statsBody'), spinner());
+  await loadStats();
+}
+
 async function handleRerank() {
   const btn = $('rerankBtn');
   btn.disabled = true;
-  btn.textContent = 'Computing…';
+  btn.textContent = 'Training…';
   try {
+    // the run happens on the server; this returns as soon as it has started
     renderStats(await sdk.feedRerank({ feed_name_hash: currentFeed.feed_name_hash }));
-    reloadItems();
+    watchTraining(currentFeed.feed_name_hash);
   } catch (err) {
     toast(err.message, 'alert-error');
-  } finally {
     btn.disabled = false;
-    btn.textContent = 'Recompute now';
+    btn.textContent = 'Retrain now';
   }
 }
 
@@ -674,16 +863,24 @@ async function loadFeedItems() {
       sort: feedFilters.sort,
       include_read: feedFilters.includeRead,
       sources: feedFilters.sources === null ? null : feedFilters.sources.join(','),
-      text_only: feedFilters.textOnly === '' ? null : feedFilters.textOnly,
+      // an empty string is meaningful here: no post type ticked shows nothing
+      post_types: feedFilters.postTypes === null ? null : feedFilters.postTypes.join(','),
       max_age: feedFilters.maxAge,
     });
     if (seq !== itemsRequestSeq) return; // a newer request superseded this one
     if (itemSkip === 0) render(list);
 
     if (!items.length && itemSkip === 0) {
-      render(list, emptyState('\u{1F4F0}', 'No articles yet',
-        'Add some sources and articles will appear here once ingested',
-        h('button', { class: 'btn btn-primary btn-sm', onclick: openAddSourceModal }, '+ Add Source')));
+      // "nothing here" and "nothing matches what you asked for" are different
+      // problems; offering to add a source when the filter is doing the
+      // hiding sends the user off in the wrong direction
+      render(list, isFiltered()
+        ? emptyState('\u{1F50D}', 'No articles match these filters',
+            'Widen the post types, sources or date range to see more',
+            h('button', { class: 'btn btn-ghost btn-sm', onclick: clearFilters }, 'Clear filters'))
+        : emptyState('\u{1F4F0}', 'No articles yet',
+            'Add some sources and articles will appear here once ingested',
+            h('button', { class: 'btn btn-primary btn-sm', onclick: openAddSourceModal }, '+ Add Source')));
       $('loadMoreBtn').classList.add('hidden');
       return;
     }
@@ -1015,6 +1212,15 @@ function destroyPlayersIn(host) {
     ytPlayerObserver.unobserve(wrap);
     if (wrap._plyr) { try { wrap._plyr.destroy(); } catch { /* already gone */ } wrap._plyr = null; }
   });
+  host.querySelectorAll('.aggy-stream').forEach(destroyStream);
+}
+
+// Release an hls.js instance: it keeps a worker and a buffer of downloaded
+// segments alive, which outlast the `video` element it was feeding.
+function destroyStream(wrap) {
+  if (!wrap._hls) return;
+  try { wrap._hls.destroy(); } catch { /* already gone */ }
+  wrap._hls = null;
 }
 
 // Gif playback policy: pause everything offscreen, and of the gifs on
@@ -1090,46 +1296,112 @@ function linkCard(m) {
 // and expire within hours, so one stored at ingest time would already be dead.
 // The thumbnail stands in until the viewer presses play, and only then does
 // the API resolve a stream that plays straight from the origin.
-function streamPlayer(m, itemHash) {
-  const wrap = h('div', { class: 'relative aspect-video w-full bg-base-300 cursor-pointer' });
+//
+// Everything here has a way to fail politely. A site can refuse the lookup, a
+// thumbnail can 404, a resolved stream can be region-locked or in a format
+// this browser won't take — and in each case the frame steps down to the next
+// best thing it has (another thumbnail, a compact play strip, a link to the
+// page) rather than leaving a dead play button on an empty grey box.
+function streamPlayer(m, item) {
+  const pageUrl = m.url || (item && item.item_url) || null;
+  // thumbnails to try, best first: the media entry's own poster, then the
+  // item's picture, which a re-scrape may have filled in later
+  const posters = [m.poster, item && item.item_image_url].filter(Boolean);
+  const wrap = h('div', { class: 'relative w-full' });
+  wrap.classList.add('aggy-stream');
 
-  const poster = () => [
-    m.poster && h('img', {
+  const openOnSiteLink = (label) =>
+    pageUrl
+      ? h('a', {
+          class: 'flex items-center gap-1.5 bg-base-100 hover:bg-base-300 '
+            + 'text-xs text-primary px-3 py-2',
+          href: pageUrl, target: '_blank', rel: 'noopener',
+          onclick: (e) => e.stopPropagation(),
+        }, openInNewTabIcon(), h('span', { class: 'truncate' }, label))
+      : null;
+
+  // Last-resort preview: one line with a play glyph. No poster to show, so
+  // showing a 16:9 grey rectangle would only take up the screen a card's
+  // title and link could use.
+  const playStrip = () =>
+    h('div', { class: 'flex items-center gap-2 bg-base-100 px-3 py-2 text-sm' },
+      h('span', { class: 'aggy-play-badge aggy-play-badge-sm' }),
+      h('span', {}, 'Play video'));
+
+  // The poster, stepping through the candidates as they fail.
+  const posterFrame = () => {
+    let index = 0;
+    const img = h('img', {
       class: 'absolute inset-0 w-full h-full object-cover',
-      src: m.poster, alt: '', loading: 'lazy',
-      onerror: (e) => e.target.remove(),
-    }),
-    h('div', { class: 'absolute inset-0 grid place-items-center pointer-events-none' },
-      h('div', { class: 'aggy-play-badge' })),
-  ];
+      src: posters[0], alt: '', loading: 'lazy',
+      onerror: (e) => {
+        index += 1;
+        if (index < posters.length) { e.target.src = posters[index]; return; }
+        posterFailed = true; // out of thumbnails: step the frame down
+        paint();
+      },
+    });
+    return h('div', { class: 'aspect-video w-full bg-base-300 relative overflow-hidden' },
+      img,
+      h('div', { class: 'absolute inset-0 grid place-items-center pointer-events-none' },
+        h('div', { class: 'aggy-play-badge' })));
+  };
 
-  render(wrap, poster());
+  // How far the frame has had to step down: a thumbnail if one loads, else a
+  // one-line play strip, and with no thumbnail *and* nothing playable, just
+  // the link — which the card's own title sits above.
+  let posterFailed = !posters.length;
+  let failLabel = null;
+
+  const paint = () => {
+    const preview = posterFailed
+      ? (failLabel ? null : playStrip())
+      : posterFrame();
+    render(wrap, preview, failLabel ? openOnSiteLink(failLabel) : null);
+  };
+
+  // Nothing playable here: offer the page itself rather than a play button
+  // that does nothing.
+  const showUnplayable = (label) => {
+    failLabel = label;
+    destroyStream(wrap);
+    wrap.onclick = null;
+    wrap.classList.remove('cursor-pointer');
+    paint();
+  };
+
+  wrap.classList.add('cursor-pointer');
+  paint();
+
   wrap.onclick = async (e) => {
     e.stopPropagation(); // don't open the reader behind the player
     if (wrap._loading || wrap._playing) return;
     wrap._loading = true;
-    render(wrap, h('div', { class: 'absolute inset-0 grid place-items-center' }, spinner()));
+    render(wrap, h('div', { class: 'aspect-video w-full grid place-items-center' }, spinner()));
     try {
-      const stream = await sdk.itemStreamUrl({ item_url_hash: itemHash });
+      const stream = await sdk.itemStreamUrl({ item_url_hash: item && item.item_hash });
+      const video = h('video', {
+        class: 'w-full aspect-video bg-black',
+        poster: stream.poster || posters[0] || null,
+        controls: true, playsinline: true,
+        onclick: (ev) => ev.stopPropagation(),
+        // A resolved URL can still be refused by the origin (an expired
+        // signature, a region lock) or be in a codec this browser lacks.
+        onerror: () => showUnplayable("Can't play here — open on the site"),
+      });
+      wrap._hls = await attachStream(video, stream);
       wrap._playing = true;
       wrap.classList.remove('cursor-pointer');
-      render(wrap, h('video', {
-        class: 'absolute inset-0 w-full h-full', src: stream.url,
-        poster: stream.poster || m.poster || null,
-        controls: true, autoplay: true, playsinline: true,
-        onclick: (ev) => ev.stopPropagation(),
-      }));
+      render(wrap, video);
+      video.play().catch(() => { /* autoplay blocked: the controls are there */ });
     } catch (err) {
       // Not every item has a rendition a browser can play, and a site can
-      // simply refuse the lookup. Offer the page itself rather than leaving
-      // a play button that does nothing.
-      render(wrap, poster(),
-        h('a', {
-          class: 'absolute inset-x-0 bottom-0 bg-base-100/90 text-xs text-primary px-3 py-2 flex items-center gap-1.5',
-          href: m.url, target: '_blank', rel: 'noopener',
-          onclick: (ev) => ev.stopPropagation(),
-        }, openInNewTabIcon(), h('span', {}, "Can't play here — open on the site")));
-      toast(err.message, 'alert-error');
+      // simply refuse the lookup. Say which of those it was when the API told
+      // us — a bare "can't play here" leaves nothing to act on. A gateway
+      // error in front of the API carries no message of its own, so that one
+      // keeps the generic wording.
+      showUnplayable(streamFailureLabel(err));
+      console.warn('stream playback failed', err);
     } finally {
       wrap._loading = false;
     }
@@ -1137,16 +1409,77 @@ function streamPlayer(m, itemHash) {
   return wrap;
 }
 
+// The one line shown in place of the player when nothing can be played.
+// Keeps the reason short enough for a card, and always offers the page.
+function streamFailureLabel(err) {
+  const reason = (err && err.message) || '';
+  // the SDK's fallback message when the response body was not the API's own
+  // JSON — i.e. something between the browser and the API answered instead
+  const isGatewayError = /^Request failed \(\d+\)$/.test(reason);
+  if (!reason || isGatewayError) return "Can't play here — open on the site";
+  const trimmed = reason.length > 90 ? `${reason.slice(0, 89)}…` : reason;
+  return `${trimmed} — open on the site`;
+}
+
+// ---------- HLS ----------
+
+// Sites increasingly publish only adaptive streams, which a bare `video` tag
+// plays on Safari and nowhere else. hls.js fills that gap; it is loaded the
+// first time a stream actually needs it rather than shipped with every page,
+// since most media in a feed is a plain file.
+const HLS_SCRIPT_URL = '/static/vendor/hls.light.min.js';
+let hlsScript = null;
+
+function loadHls() {
+  if (window.Hls) return Promise.resolve(window.Hls);
+  if (!hlsScript) {
+    hlsScript = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = HLS_SCRIPT_URL;
+      script.onload = () => resolve(window.Hls);
+      script.onerror = () => {
+        hlsScript = null; // a later attempt may succeed (offline shell, flaky net)
+        reject(new Error('The video player could not be loaded'));
+      };
+      document.head.append(script);
+    });
+  }
+  return hlsScript;
+}
+
+// Point a `video` element at a resolved stream. Returns the hls.js instance
+// when one was needed, so the caller can tear it down with the player.
+async function attachStream(video, stream) {
+  const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
+  if (!stream.is_hls || nativeHls) {
+    video.src = stream.url;
+    return null;
+  }
+  const Hls = await loadHls();
+  if (!Hls || !Hls.isSupported()) throw new Error('This video format is not supported here');
+  const hls = new Hls({ enableWorker: true });
+  hls.on(Hls.Events.ERROR, (_event, data) => {
+    // Non-fatal errors are hls.js's normal recovery chatter; a fatal one means
+    // the stream is done for, and the `video` error handler takes it from here.
+    if (data && data.fatal) video.dispatchEvent(new Event('error'));
+  });
+  hls.loadSource(stream.url);
+  hls.attachMedia(video);
+  return hls;
+}
+
 // One media entry ({type, url, poster?}) -> element. Gifs autoplay muted
 // and loop like the reddit app; videos get controls, so their clicks must
-// reach the player instead of opening the reader.
-function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain', itemHash = null) {
+// reach the player instead of opening the reader. `item` is the article the
+// entry belongs to, which gives the stream player its hash and a fallback
+// thumbnail.
+function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain', item = null) {
   // reddit link posts point off-site: show a preview card, not a media frame
   if (m.type === 'link') return linkCard(m);
   // a video site's item: resolved to a playable URL on demand
-  if (m.type === 'stream') return streamPlayer(m, itemHash);
-  // third-party players (e.g. redgifs) embed as an iframe; their clicks
-  // never bubble, so they don't open the reader
+  if (m.type === 'stream') return streamPlayer(m, item);
+  // third-party players (e.g. an embedded clip host) embed as an iframe; their
+  // clicks never bubble, so they don't open the reader
   if (m.type === 'embed') {
     return h('div', { class: 'aspect-video w-full' },
       h('iframe', {
@@ -1161,6 +1494,9 @@ function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain', itemHash = 
       loop: isGif, autoplay: isGif, controls: !isGif,
       playsinline: true, preload: isGif ? 'auto' : 'metadata',
       onclick: isGif ? null : (e) => e.stopPropagation(),
+      // a video the browser can't fetch or decode leaves a black box behind;
+      // drop the frame and let the card stand on its title and link
+      onerror: (e) => { (e.target.closest('figure') || e.target).remove(); },
     });
     // autoplay is only allowed when the muted IDL property is set; the
     // attribute alone isn't enough in Chrome
@@ -1168,25 +1504,76 @@ function mediaElement(m, cls = 'w-full max-h-[70vh] object-contain', itemHash = 
     if (isGif) gifVisibility.observe(video);
     return video;
   }
-  return h('img', { class: cls, src: m.url, alt: '', loading: 'lazy' });
+  // a picture that 404s leaves an empty frame behind, so take the frame with
+  // it — the card keeps its title, excerpt and link
+  return h('img', {
+    class: cls, src: m.url, alt: '', loading: 'lazy',
+    onerror: (e) => { (e.target.closest('figure') || e.target).remove(); },
+  });
 }
 
 // A media list -> single element or a swipeable snap-scrolling gallery
 // strip with an index badge.
-function mediaGallery(mediaList, itemHash = null) {
-  if (mediaList.length === 1) return mediaElement(mediaList[0], undefined, itemHash);
+function mediaGallery(mediaList, item = null) {
+  if (mediaList.length === 1) return mediaElement(mediaList[0], undefined, item);
   const counter = h('div', {
     class: 'badge badge-neutral badge-sm absolute top-2 right-2 pointer-events-none',
   }, `1/${mediaList.length}`);
   const strip = h('div', { class: 'flex overflow-x-auto snap-x snap-mandatory' },
     mediaList.map((m) =>
       h('div', { class: 'w-full flex-none snap-center flex items-center justify-center bg-base-300' },
-        mediaElement(m, undefined, itemHash))));
+        mediaElement(m, undefined, item))));
   strip.addEventListener('scroll', () => {
     const index = Math.min(Math.round(strip.scrollLeft / strip.clientWidth) + 1, mediaList.length);
     counter.textContent = `${index}/${mediaList.length}`;
   }, { passive: true });
   return h('div', { class: 'relative' }, strip, counter);
+}
+
+// ---------- voting ----------
+
+// The three vote buttons, as one row. The same row is used by a feed card and
+// by the open article, and every copy on the page is refreshed together after
+// a vote (see refreshVoteRows), so they never disagree about what was voted.
+const VOTE_OPTIONS = [
+  { label: '\u25B2', score: 1, title: 'Upvote', cls: 'text-success' },
+  { label: '\u25CF', score: 0, title: 'Neutral — seen it, no strong feelings', cls: 'text-warning' },
+  { label: '\u25BC', score: -1, title: 'Downvote', cls: 'text-error' },
+];
+
+function voteRow(item, { size = 'btn-sm', padding = 'px-4' } = {}) {
+  const row = h('div', { class: 'flex items-center gap-1' },
+    VOTE_OPTIONS.map((option) =>
+      h('button', {
+        class: `btn btn-ghost ${size} ${padding}`,
+        'data-score': String(option.score),
+        title: option.title,
+        onclick: (e) => { e.stopPropagation(); voteItem(item, option.score); },
+      }, option.label)));
+  row.dataset.voteItem = item.item_hash;
+  paintVoteRow(row, item.item_user_score);
+  return row;
+}
+
+// Colour the button matching the current vote and clear the others.
+function paintVoteRow(row, score) {
+  row.querySelectorAll('button').forEach((button) => {
+    const option = VOTE_OPTIONS.find((o) => String(o.score) === button.dataset.score);
+    button.classList.remove('text-success', 'text-error', 'text-warning');
+    if (option && score != null && option.score === score) button.classList.add(option.cls);
+  });
+}
+
+// Every vote row on the page for this article — the card, and the reader when
+// it's open on the same one. Compared by value rather than by selector: an
+// item hash isn't guaranteed to be safe to embed in one.
+function voteRowsFor(item) {
+  return Array.from(document.querySelectorAll('[data-vote-item]'))
+    .filter((row) => row.dataset.voteItem === item.item_hash);
+}
+
+function refreshVoteRows(item) {
+  voteRowsFor(item).forEach((row) => paintVoteRow(row, item.item_user_score));
 }
 
 // Reddit-app-style card: meta row and title up top, full-feed-width media
@@ -1203,7 +1590,7 @@ function itemCard(item, { listMode = false } = {}) {
   const mediaBlock = ytId
     ? h('figure', { class: 'bg-base-300 aggy-card-media' }, youtubeEmbed(ytId))
     : media
-    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media, item.item_hash))
+    ? h('figure', { class: 'bg-base-300 aggy-card-media' }, mediaGallery(media, item))
     : imageUrl
       ? h('figure', { class: 'bg-base-300 aggy-card-media' },
           h('img', {
@@ -1211,15 +1598,6 @@ function itemCard(item, { listMode = false } = {}) {
             onerror: (e) => { e.target.closest('figure').remove(); },
           }))
       : null;
-
-  const voteClass = (score) => (score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
-  const voteButton = (label, score, title) =>
-    h('button', {
-      class: `btn btn-ghost btn-sm px-4${item.item_user_score === score ? ` ${voteClass(score)}` : ''}`,
-      'data-score': String(score),
-      title,
-      onclick: (e) => { e.stopPropagation(); voteItem(item, score, e.currentTarget); },
-    }, label);
 
   // model's take on this article, when a prediction exists
   const predicted = item.item_predicted_score;
@@ -1249,9 +1627,7 @@ function itemCard(item, { listMode = false } = {}) {
         listMode ? null : predictedBadge),
       h('div', { class: 'flex items-center gap-1 ml-auto' },
         listButton(item),
-        listMode ? null : voteButton('▲', 1, 'Upvote'),
-        listMode ? null : voteButton('●', 0, 'Neutral — seen it, no strong feelings'),
-        listMode ? null : voteButton('▼', -1, 'Downvote'))));
+        listMode ? null : voteRow(item))));
 }
 
 // ---------- why recommended ----------
@@ -1363,7 +1739,7 @@ function collapseCard(card) {
   setTimeout(() => card.remove(), 320);
 }
 
-async function voteItem(item, score, btn) {
+async function voteItem(item, score) {
   try {
     await sdk.itemSetState({
       feed_hash: currentFeed.feed_name_hash,
@@ -1372,13 +1748,16 @@ async function voteItem(item, score, btn) {
       is_read: true,
     });
     item.item_user_score = score;
-    btn.parentElement.querySelectorAll('button').forEach((b) =>
-      b.classList.remove('text-success', 'text-error', 'text-warning'));
-    btn.classList.add(score > 0 ? 'text-success' : score < 0 ? 'text-error' : 'text-warning');
-    // voted items leave the feed unless the user opted to keep them visible
+    refreshVoteRows(item);
+    // voted items leave the feed unless the user opted to keep them visible.
+    // Voting from the open article collapses the card behind it: the reader
+    // stays put so you can finish reading, and the feed has already moved on
+    // by the time you close it.
     if (!feedFilters.includeRead) {
-      const card = btn.closest('.card');
-      if (card) collapseCard(card);
+      voteRowsFor(item).forEach((row) => {
+        const card = row.closest('.card');
+        if (card) collapseCard(card);
+      });
     }
   } catch (err) {
     toast(err.message, 'alert-error');
@@ -1546,7 +1925,7 @@ function openReader(item) {
     // the content's thumbnails would just duplicate the player
     parsed.root.querySelectorAll('img').forEach((img) => (img.closest('a') || img).remove());
   } else if (media.length) {
-    render(mediaHost, mediaGallery(media, item.item_hash));
+    render(mediaHost, mediaGallery(media, item));
   } else if (heroUrl) {
     render(mediaHost, h('img', {
       src: heroUrl, class: 'rounded-lg max-w-full max-h-[60vh] object-contain mx-auto',
@@ -1569,6 +1948,14 @@ function openReader(item) {
   } else {
     render($('readerContent'));
   }
+  // Vote without closing the article first: the same row the card carries,
+  // at the foot of the piece you just read. A list has no recommendation
+  // engine behind it, so it gets no vote row.
+  render($('readerVotes'), currentFeed && !currentList
+    ? [h('span', { class: 'text-xs text-base-content/50' }, 'How was this article?'),
+      voteRow(item, { size: 'btn-md', padding: 'px-5' })]
+    : []);
+
   showModal('readerModal');
 
   if (currentFeed) {

@@ -15,6 +15,7 @@ from typing import List
 
 from db.item import ItemLoose
 from db.source import Source
+from ingest.errors import IngestError
 
 from . import html, manual, rss, ytdlp
 
@@ -72,7 +73,7 @@ UNSCHEDULED_KINDS = [
 def get_backend(kind: str) -> Backend:
     backend = BACKENDS.get(kind)
     if backend is None:
-        raise Exception(
+        raise IngestError(
             f"Unknown source kind '{kind}' "
             f"(expected one of {', '.join(sorted(BACKENDS))})"
         )

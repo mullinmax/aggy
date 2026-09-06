@@ -1,8 +1,11 @@
+import logging
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from typing import List, Optional, Union
 
-from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS
+from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
 from db.user import User
 from route_models.feed import FeedResponse
 from route_models.source import SourceRouteModel
@@ -14,9 +17,18 @@ from route_models.ranking import (
     ItemExplanationResponse,
     ModelStatsResponse,
     RankingStatsResponse,
+    TrainingProgressResponse,
+    TrainingStatusResponse,
 )
 from routers.auth import authenticate
-from ranking.engine import label_counts, load_model_stats, rank_feed
+from ranking import progress
+from ranking.engine import (
+    label_counts,
+    load_model_stats,
+    run_training,
+    start_training,
+    training_summary,
+)
 from ranking.explain import explain_item
 
 feed_router = APIRouter()
@@ -144,8 +156,11 @@ def get_feed_items(
     sources: Optional[str] = Query(
         None, description="Comma-separated source name hashes to include"
     ),
-    text_only: Optional[bool] = Query(
-        None, description="true: only text posts, false: only posts with media"
+    post_types: Optional[str] = Query(
+        None,
+        description="Comma-separated post types to keep: image, video, link, "
+        "text. The types overlap (an illustrated article is both image and "
+        "text), so an item is kept when it matches any of them. Omit for all.",
     ),
     max_age: str = Query(
         "all", description="Only items this recent: day, week, month, year, all"
@@ -167,6 +182,15 @@ def get_feed_items(
         [s for s in sources.split(",") if s] if sources is not None else None
     )
 
+    types = (
+        [t.strip() for t in post_types.split(",") if t.strip()]
+        if post_types is not None
+        else None
+    )
+    unknown = [t for t in types or [] if t not in POST_TYPES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown post type '{unknown[0]}'")
+
     return [
         ItemResponse.from_db_model(item, **meta)
         for item, meta in feed.query_items_with_sources(
@@ -175,10 +199,29 @@ def get_feed_items(
             sort=sort,
             include_read=include_read,
             source_hashes=source_hashes,
-            text_only=text_only,
+            post_types=types,
             max_age=None if max_age == "all" else max_age,
         )
     ]
+
+
+def _training_progress(feed: Feed) -> Optional[TrainingProgressResponse]:
+    run = progress.status(feed.user_hash, feed.name_hash)
+    return TrainingProgressResponse(**run) if run else None
+
+
+def _stats_fields(feed: Feed) -> dict:
+    """Everything in the stats response except the run in flight."""
+    counts = label_counts(feed)
+    return {
+        "models": [ModelStatsResponse(**row) for row in load_model_stats(feed)],
+        "up_votes": counts["up"],
+        "down_votes": counts["down"],
+        "neutral_votes": counts["neutral"],
+        "total_items": counts["total_items"],
+        "predicted_items": counts["predicted_items"],
+        **training_summary(feed),
+    }
 
 
 @feed_router.get(
@@ -190,46 +233,62 @@ def get_ranking_stats(
     feed_name_hash: str, user: User = Depends(authenticate)
 ) -> RankingStatsResponse:
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
-    counts = label_counts(feed)
     return RankingStatsResponse(
-        models=[ModelStatsResponse(**row) for row in load_model_stats(feed)],
-        up_votes=counts["up"],
-        down_votes=counts["down"],
-        neutral_votes=counts["neutral"],
-        total_items=counts["total_items"],
-        predicted_items=counts["predicted_items"],
+        **_stats_fields(feed), training=_training_progress(feed)
+    )
+
+
+@feed_router.get(
+    "/training_status",
+    summary="Progress of a feed's model training, and how stale its models are",
+    response_model=TrainingStatusResponse,
+)
+def get_training_status(
+    feed_name_hash: str, user: User = Depends(authenticate)
+) -> TrainingStatusResponse:
+    """Cheap enough to poll while a retrain runs: no per-model stats, just
+    where the run has got to and when the models were last rebuilt."""
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    return TrainingStatusResponse(
+        training=_training_progress(feed), **training_summary(feed)
     )
 
 
 @feed_router.post(
     "/rerank",
-    summary="Re-evaluate prediction models and re-rank a feed now",
+    summary="Start re-evaluating prediction models and re-ranking a feed",
     response_model=RankingStatsResponse,
 )
 def rerank_feed(
     feed_name_hash: str, user: User = Depends(authenticate)
 ) -> RankingStatsResponse:
+    """Kick off a training run and return straight away.
+
+    Cross-validating the whole model zoo takes long enough that holding the
+    request open would time out on a big feed and pin the UI to one screen.
+    The run happens on a background thread instead; poll `/training_status`
+    to follow it, and re-read `/ranking_stats` once it reports done. Asking
+    again while a run is in flight simply joins the existing one.
+    """
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
-    stats = rank_feed(feed)
-    counts = label_counts(feed)
-    return RankingStatsResponse(
-        models=[
-            ModelStatsResponse(
-                model_name=s.model_name,
-                n_labels=s.n_labels,
-                mae=s.mae,
-                rmse=s.rmse,
-                sign_accuracy=s.sign_accuracy,
-                chosen=s.chosen,
-            )
-            for s in stats
-        ],
-        up_votes=counts["up"],
-        down_votes=counts["down"],
-        neutral_votes=counts["neutral"],
-        total_items=counts["total_items"],
-        predicted_items=counts["predicted_items"],
-    )
+
+    # Read the "before" picture first: the run below can finish while this
+    # request is still being served on a small feed, and the caller asked for
+    # the state it started from.
+    fields = _stats_fields(feed)
+
+    def run() -> None:
+        try:
+            run_training(feed)
+        except Exception as e:
+            logging.exception(f"Ranking feed {feed.name} failed: {e}")
+
+    # The run is claimed here rather than on the thread, so the response
+    # already reports it as running however fast the thread gets going.
+    if start_training(feed):
+        threading.Thread(target=run, name="feed-rerank", daemon=True).start()
+
+    return RankingStatsResponse(**fields, training=_training_progress(feed))
 
 
 @feed_router.get(

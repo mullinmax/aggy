@@ -9,8 +9,14 @@ from db.item import ItemLoose
 def ingest_open_graph_item(item: ItemLoose) -> Optional[ItemLoose]:
     try:
         response = requests.get(str(item.url), timeout=10)
+    except requests.RequestException as e:
+        # A page that refuses us, times out, or has gone away is the ordinary
+        # case here, and it happens once per article: a stack trace each time
+        # would bury everything else in the log for a single dead site.
+        logging.info(f"No open graph data for {item.url}: {e}")
+        return None
     except Exception as e:
-        logging.exception(f"Error fetching open graph data for {item.url}: {e}")
+        logging.exception(f"Fetching open graph data for {item.url} failed: {e}")
         return None
     soup = BeautifulSoup(response.text, "html.parser")
     og_tags = soup.find_all(
