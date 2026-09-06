@@ -1328,15 +1328,31 @@ function streamPlayer(m, item) {
       h('span', { class: 'aggy-play-badge aggy-play-badge-sm' }),
       h('span', {}, 'Play video'));
 
-  // The poster, stepping through the candidates as they fail.
+  // The poster, stepping through the candidates as they fail. A video site
+  // signs its thumbnails and refuses them to pages it doesn't know, exactly
+  // as it does its streams, so a picture that won't load direct is worth one
+  // more ask: the API finds one that works and serves it from here.
+  let askedForAPicture = false;
   const posterFrame = () => {
     let index = 0;
     const img = h('img', {
       class: 'absolute inset-0 w-full h-full object-cover',
       src: posters[0], alt: '', loading: 'lazy',
-      onerror: (e) => {
+      onerror: async (e) => {
         index += 1;
         if (index < posters.length) { e.target.src = posters[index]; return; }
+        if (!askedForAPicture && item && item.item_hash) {
+          askedForAPicture = true;
+          try {
+            const found = await sdk.itemThumbnail({ item_url_hash: item.item_hash });
+            if (found && found.url) {
+              // the player's own poster too, so pressing play doesn't go blank
+              posters.unshift(found.url);
+              e.target.src = found.url;
+              return;
+            }
+          } catch { /* no picture to be had: fall through to the step down */ }
+        }
         posterFailed = true; // out of thumbnails: step the frame down
         paint();
       },
@@ -1373,6 +1389,38 @@ function streamPlayer(m, item) {
   wrap.classList.add('cursor-pointer');
   paint();
 
+  // Play a resolved stream, once directly and, if the site turns the browser
+  // away, once more through the API. The second route is slower and costs the
+  // server bandwidth, so it is a fallback rather than the way in.
+  const play = async (stream, viaProxy) => {
+    const source = viaProxy ? { ...stream, url: stream.proxy_url } : stream;
+    let handled = false; // a failing stream fires `error` more than once
+    const video = h('video', {
+      class: 'w-full aspect-video bg-black',
+      poster: stream.poster || posters[0] || null,
+      controls: true, playsinline: true,
+      onclick: (ev) => ev.stopPropagation(),
+      // The API found a stream, but the browser still has to fetch it from
+      // the site, and that is its own request with its own ways to fail.
+      onerror: (ev) => {
+        if (handled) return;
+        handled = true;
+        const label = playbackFailureLabel(ev.target, source, viaProxy);
+        if (!viaProxy && stream.proxy_url) {
+          play(stream, true).catch((err) => showUnplayable(streamFailureLabel(err)));
+          return;
+        }
+        showUnplayable(label);
+      },
+    });
+    destroyStream(wrap);
+    wrap._hls = await attachStream(video, source);
+    wrap._playing = true;
+    wrap.classList.remove('cursor-pointer');
+    render(wrap, video);
+    video.play().catch(() => { /* autoplay blocked: the controls are there */ });
+  };
+
   wrap.onclick = async (e) => {
     e.stopPropagation(); // don't open the reader behind the player
     if (wrap._loading || wrap._playing) return;
@@ -1380,20 +1428,7 @@ function streamPlayer(m, item) {
     render(wrap, h('div', { class: 'aspect-video w-full grid place-items-center' }, spinner()));
     try {
       const stream = await sdk.itemStreamUrl({ item_url_hash: item && item.item_hash });
-      const video = h('video', {
-        class: 'w-full aspect-video bg-black',
-        poster: stream.poster || posters[0] || null,
-        controls: true, playsinline: true,
-        onclick: (ev) => ev.stopPropagation(),
-        // A resolved URL can still be refused by the origin (an expired
-        // signature, a region lock) or be in a codec this browser lacks.
-        onerror: () => showUnplayable("Can't play here — open on the site"),
-      });
-      wrap._hls = await attachStream(video, stream);
-      wrap._playing = true;
-      wrap.classList.remove('cursor-pointer');
-      render(wrap, video);
-      video.play().catch(() => { /* autoplay blocked: the controls are there */ });
+      await play(stream, false);
     } catch (err) {
       // Not every item has a rendition a browser can play, and a site can
       // simply refuse the lookup. Say which of those it was when the API told
@@ -1419,6 +1454,49 @@ function streamFailureLabel(err) {
   if (!reason || isGatewayError) return "Can't play here — open on the site";
   const trimmed = reason.length > 90 ? `${reason.slice(0, 89)}…` : reason;
   return `${trimmed} — open on the site`;
+}
+
+// Why the browser could not play a stream the API resolved. The three cases
+// are worth telling apart because only one of them is about the video itself:
+// a site can hand this server a URL that the *viewer* is then refused (signed
+// URLs are often pinned to whoever asked for them), the page can be blocked
+// from loading it at all, or the format can genuinely be one this browser
+// does not have.
+const MEDIA_ERRORS = {
+  1: 'Playback was stopped',
+  2: "The stream would not load from the site",
+  3: "This video's format can't be decoded here",
+  4: 'The site refused the stream',
+};
+
+function playbackFailureLabel(video, stream, viaProxy) {
+  const error = video && video.error;
+  const label = (error && MEDIA_ERRORS[error.code]) || "Can't play here";
+  // Everything needed to tell the three apart, in one line, since the card
+  // has room for a sentence and not for a diagnosis.
+  let origin = null;
+  try { const parsed = new URL(stream.url); origin = `${parsed.protocol}//${parsed.hostname}`; }
+  catch { /* the label matters more than the diagnosis */ }
+  console.warn('playback failed', {
+    code: error && error.code,
+    message: error && error.message,
+    hls: !!(stream && stream.is_hls),
+    origin, // the URL itself is a signed credential; its shape is the useful part
+    page: location.protocol,
+    // which route this was: a direct failure is about to be retried through
+    // the API, a proxied one has already been
+    route: viaProxy ? 'proxied' : 'direct',
+  });
+  return `${label} — open on the site`;
+}
+
+// A page served over https cannot load media over http: the browser blocks it
+// before the request is made. Sites that answer on both get upgraded rather
+// than failing for a reason nobody can see from the card.
+function secureStreamUrl(url) {
+  if (location.protocol !== 'https:' || !url.startsWith('http://')) return url;
+  console.warn('upgrading an insecure stream URL to https', new URL(url).hostname);
+  return `https://${url.slice('http://'.length)}`;
 }
 
 // ---------- HLS ----------
@@ -1450,9 +1528,10 @@ function loadHls() {
 // Point a `video` element at a resolved stream. Returns the hls.js instance
 // when one was needed, so the caller can tear it down with the player.
 async function attachStream(video, stream) {
+  const url = secureStreamUrl(stream.url);
   const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
   if (!stream.is_hls || nativeHls) {
-    video.src = stream.url;
+    video.src = url;
     return null;
   }
   const Hls = await loadHls();
@@ -1461,9 +1540,16 @@ async function attachStream(video, stream) {
   hls.on(Hls.Events.ERROR, (_event, data) => {
     // Non-fatal errors are hls.js's normal recovery chatter; a fatal one means
     // the stream is done for, and the `video` error handler takes it from here.
-    if (data && data.fatal) video.dispatchEvent(new Event('error'));
+    if (data && data.fatal) {
+      // hls.js fetches the playlist and its segments over XHR, so unlike a
+      // plain `video` src it needs the CDN to allow this origin. Say which it
+      // was, since "no CORS header" and "the site refused us" look identical
+      // from the card.
+      console.warn('hls failed', { type: data.type, details: data.details, fatal: data.fatal });
+      video.dispatchEvent(new Event('error'));
+    }
   });
-  hls.loadSource(stream.url);
+  hls.loadSource(url);
   hls.attachMedia(video);
   return hls;
 }

@@ -168,6 +168,33 @@ def fetch_items(source: Source) -> List[ItemLoose]:
     return [item for item in items if item is not None]
 
 
+def poster_for(url: str) -> Optional[str]:
+    """Ask the site for a thumbnail it will serve right now.
+
+    Sites sign their thumbnail URLs the same way they sign their streams, so
+    the one stored at ingest time stops loading long before the item stops
+    being interesting. This is the way to get another one, and it costs a
+    visit to the item's page, so it is for when the stored picture has
+    actually failed rather than for every card.
+    """
+    if not is_configured():
+        return None
+
+    try:
+        response = requests.post(
+            _service_url("/metadata"),
+            json={"url": str(url)},
+            timeout=EXTRACT_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            logging.info(f"No fresh thumbnail for {url} (HTTP {response.status_code})")
+            return None
+        return response.json().get("thumbnail")
+    except (requests.RequestException, ValueError) as e:
+        logging.warning(f"Thumbnail lookup failed for {url}: {e}")
+        return None
+
+
 def enrich_item(item):
     """Fill in what a listing pass didn't carry, for an item just discovered.
 
@@ -240,8 +267,7 @@ def resolve_stream(url: str, cookie: Optional[str] = None) -> dict:
     """
     if not is_configured():
         raise StreamUnavailable(
-            "This server has no video extraction service configured "
-            "(set YTDLP_HOST)",
+            "This server has no video extraction service configured (set YTDLP_HOST)",
             status_code=501,
         )
 
