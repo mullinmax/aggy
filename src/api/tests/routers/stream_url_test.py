@@ -6,6 +6,7 @@ from pydantic import HttpUrl
 from db.item import ItemLoose
 from db.source import Source
 from ingest.backends import ytdlp
+from streaming import tickets
 from tests.testing_utils import build_api_request_args
 
 
@@ -159,3 +160,25 @@ def test_the_item_has_to_exist(client, token, existing_user):
         token=token,
     )
     assert client.get(**args).status_code == 404
+
+
+def test_a_fallback_route_comes_back_with_the_stream(
+    monkeypatch, client, token, existing_user, existing_feed, existing_source
+):
+    """The proxy address is minted up front rather than asked for later: the
+    browser learns it is refused mid-playback, with nowhere to go to find out
+    where else to look."""
+    item = _stream_item(existing_source, existing_feed)
+
+    monkeypatch.setattr(
+        ytdlp,
+        "resolve_stream",
+        lambda url, cookie=None: {"url": "http://cdn.example.com/v.mp4"},
+    )
+
+    body = _request(client, token, item).json()
+
+    claims = tickets.verify(body["proxy_url"].split("ticket=", 1)[1])
+    assert claims["url"] == "http://cdn.example.com/v.mp4"
+    assert claims["user"] == existing_user.name_hash
+    assert claims["item"] == item.url_hash

@@ -17,3 +17,7 @@ class StreamUrlResponse(BaseRouteModel):
     title: Optional[str] = None
     duration: Optional[float] = None
     poster: Optional[str] = None
+    # The same stream, fetched by this server and piped to the browser. Used
+    # only when the direct URL above is refused: sites often sign a URL for
+    # whoever asked for it, which is this server and not the viewer.
+    proxy_url: Optional[str] = None

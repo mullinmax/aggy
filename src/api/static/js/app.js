@@ -1373,6 +1373,38 @@ function streamPlayer(m, item) {
   wrap.classList.add('cursor-pointer');
   paint();
 
+  // Play a resolved stream, once directly and, if the site turns the browser
+  // away, once more through the API. The second route is slower and costs the
+  // server bandwidth, so it is a fallback rather than the way in.
+  const play = async (stream, viaProxy) => {
+    const source = viaProxy ? { ...stream, url: stream.proxy_url } : stream;
+    let handled = false; // a failing stream fires `error` more than once
+    const video = h('video', {
+      class: 'w-full aspect-video bg-black',
+      poster: stream.poster || posters[0] || null,
+      controls: true, playsinline: true,
+      onclick: (ev) => ev.stopPropagation(),
+      // The API found a stream, but the browser still has to fetch it from
+      // the site, and that is its own request with its own ways to fail.
+      onerror: (ev) => {
+        if (handled) return;
+        handled = true;
+        const label = playbackFailureLabel(ev.target, source, viaProxy);
+        if (!viaProxy && stream.proxy_url) {
+          play(stream, true).catch((err) => showUnplayable(streamFailureLabel(err)));
+          return;
+        }
+        showUnplayable(label);
+      },
+    });
+    destroyStream(wrap);
+    wrap._hls = await attachStream(video, source);
+    wrap._playing = true;
+    wrap.classList.remove('cursor-pointer');
+    render(wrap, video);
+    video.play().catch(() => { /* autoplay blocked: the controls are there */ });
+  };
+
   wrap.onclick = async (e) => {
     e.stopPropagation(); // don't open the reader behind the player
     if (wrap._loading || wrap._playing) return;
@@ -1380,20 +1412,7 @@ function streamPlayer(m, item) {
     render(wrap, h('div', { class: 'aspect-video w-full grid place-items-center' }, spinner()));
     try {
       const stream = await sdk.itemStreamUrl({ item_url_hash: item && item.item_hash });
-      const video = h('video', {
-        class: 'w-full aspect-video bg-black',
-        poster: stream.poster || posters[0] || null,
-        controls: true, playsinline: true,
-        onclick: (ev) => ev.stopPropagation(),
-        // The API found a stream, but the browser still has to fetch it from
-        // the site, and that is its own request with its own ways to fail.
-        onerror: (ev) => showUnplayable(playbackFailureLabel(ev.target, stream)),
-      });
-      wrap._hls = await attachStream(video, stream);
-      wrap._playing = true;
-      wrap.classList.remove('cursor-pointer');
-      render(wrap, video);
-      video.play().catch(() => { /* autoplay blocked: the controls are there */ });
+      await play(stream, false);
     } catch (err) {
       // Not every item has a rendition a browser can play, and a site can
       // simply refuse the lookup. Say which of those it was when the API told
@@ -1434,7 +1453,7 @@ const MEDIA_ERRORS = {
   4: 'The site refused the stream',
 };
 
-function playbackFailureLabel(video, stream) {
+function playbackFailureLabel(video, stream, viaProxy) {
   const error = video && video.error;
   const label = (error && MEDIA_ERRORS[error.code]) || "Can't play here";
   // Everything needed to tell the three apart, in one line, since the card
@@ -1448,6 +1467,9 @@ function playbackFailureLabel(video, stream) {
     hls: !!(stream && stream.is_hls),
     origin, // the URL itself is a signed credential; its shape is the useful part
     page: location.protocol,
+    // which route this was: a direct failure is about to be retried through
+    // the API, a proxied one has already been
+    route: viaProxy ? 'proxied' : 'direct',
   });
   return `${label} — open on the site`;
 }
