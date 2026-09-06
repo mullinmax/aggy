@@ -23,6 +23,9 @@ from yt_dlp import YoutubeDL
 from yt_dlp.extractor import gen_extractor_classes
 from yt_dlp.utils import DownloadError
 
+from failures import describe as describe_failure
+from failures import looks_blocked
+from failures import tidy as tidy_failure
 from formats import playable_url
 
 app = FastAPI(title="aggy-ytdlp")
@@ -58,6 +61,47 @@ RESOLVE_OPTIONS = {
     # and the error is what the viewer needs to see
     "ignoreerrors": False,
 }
+
+# Plenty of sites now decide whether to answer by looking at *how* the request
+# was made rather than what it asked for: the TLS handshake and the exact
+# header order of a real browser versus those of a Python HTTP client. A
+# request that fails that check is refused instantly with a 403, however
+# polite its User-Agent.
+#
+# yt-dlp can send a browser's fingerprint through curl_cffi, so a refusal is
+# worth one retry that way before giving up. It is a retry rather than the
+# default because it is slower, not every build has the dependency, and the
+# sites that answer a plain request are the majority.
+IMPERSONATE_TARGET = "chrome"
+
+try:  # yt-dlp >= 2024.05, and only with curl_cffi installed
+    from yt_dlp.networking.impersonate import ImpersonateTarget
+
+    _IMPERSONATE = ImpersonateTarget.from_str(IMPERSONATE_TARGET)
+except Exception:  # pragma: no cover - depends on the installed yt-dlp
+    _IMPERSONATE = None
+
+
+def _extract(url: str, options: dict, process: bool = True):
+    """Extract with the plain client, and once more as a browser if the site
+    turns us away.
+
+    Returns (info, impersonated). The second attempt's failure is swallowed in
+    favour of the first one's message: the plain client's error is the one that
+    describes the site's actual answer.
+    """
+    try:
+        with YoutubeDL(options) as ydl:
+            return ydl.extract_info(url, download=False, process=process), False
+    except DownloadError as first:
+        if _IMPERSONATE is None or not looks_blocked(first):
+            raise
+        logging.info(f"{url}: refused, retrying as a browser")
+        try:
+            with YoutubeDL(dict(options, impersonate=_IMPERSONATE)) as ydl:
+                return ydl.extract_info(url, download=False, process=process), True
+        except Exception:
+            raise first from None
 
 
 class ExtractRequest(BaseModel):
@@ -169,13 +213,13 @@ def extract(request: ExtractRequest) -> dict:
     )
 
     try:
-        with YoutubeDL(options) as ydl:
-            info = ydl.sanitize_info(ydl.extract_info(request.url, download=False))
+        info, _ = _extract(request.url, options)
+        info = YoutubeDL.sanitize_info(info)
     except DownloadError as e:
-        raise HTTPException(status_code=422, detail=str(e)[:500])
+        raise HTTPException(status_code=422, detail=describe_failure(e))
     except Exception as e:
         logging.exception(f"extract failed for {request.url}")
-        raise HTTPException(status_code=500, detail=str(e)[:500])
+        raise HTTPException(status_code=500, detail=describe_failure(e))
 
     if info is None:
         raise HTTPException(status_code=422, detail="Nothing could be extracted")
@@ -203,15 +247,15 @@ def metadata(request: ResolveRequest) -> dict:
     """
     _validate(request.url)
 
+    options = _options(request.cookie, noplaylist=True)
     try:
-        with YoutubeDL(_options(request.cookie, noplaylist=True)) as ydl:
-            info = ydl.extract_info(request.url, download=False, process=False)
-            info = ydl.sanitize_info(info)
+        info, _ = _extract(request.url, options, process=False)
+        info = YoutubeDL.sanitize_info(info)
     except DownloadError as e:
-        raise HTTPException(status_code=422, detail=str(e)[:500])
+        raise HTTPException(status_code=422, detail=describe_failure(e))
     except Exception as e:
         logging.exception(f"metadata lookup failed for {request.url}")
-        raise HTTPException(status_code=500, detail=str(e)[:500])
+        raise HTTPException(status_code=500, detail=describe_failure(e))
 
     if not info:
         raise HTTPException(status_code=422, detail="Nothing could be extracted")
@@ -239,23 +283,27 @@ def resolve(request: ResolveRequest) -> dict:
     _validate(request.url)
 
     started = time.monotonic()
+    options = _options(request.cookie, noplaylist=True, **RESOLVE_OPTIONS)
     try:
-        with YoutubeDL(
-            _options(request.cookie, noplaylist=True, **RESOLVE_OPTIONS)
-        ) as ydl:
-            info = ydl.sanitize_info(ydl.extract_info(request.url, download=False))
+        info, impersonated = _extract(request.url, options)
+        info = YoutubeDL.sanitize_info(info)
     except DownloadError as e:
-        raise HTTPException(status_code=422, detail=str(e)[:500])
+        logging.info(
+            f"resolve refused for {request.url} after "
+            f"{time.monotonic() - started:.1f}s: {tidy_failure(e)}"
+        )
+        raise HTTPException(status_code=422, detail=describe_failure(e))
     except Exception as e:
         logging.exception(f"resolve failed for {request.url}")
-        raise HTTPException(status_code=500, detail=str(e)[:500])
+        raise HTTPException(status_code=500, detail=describe_failure(e))
 
     if not info:
         raise HTTPException(status_code=422, detail="Nothing could be extracted")
 
     resolved = playable_url(info)
     logging.info(
-        f"resolved {request.url} in {time.monotonic() - started:.1f}s: "
+        f"resolved {request.url} in {time.monotonic() - started:.1f}s"
+        f"{' (as a browser)' if impersonated else ''}: "
         + (
             f"{resolved['protocol'] or 'direct'}"
             f"{' (hls)' if resolved['is_hls'] else ''}"

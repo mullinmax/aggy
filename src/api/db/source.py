@@ -224,6 +224,31 @@ class Source(ItemCollection):
                 (self.user_hash, self.feed_hash, self.name_hash),
             )
 
+    @classmethod
+    def cookie_for_item(cls, user_hash: str, item_url_hash: str) -> Optional[str]:
+        """The cookie of a source of this user's that carries this item.
+
+        Whatever gets a source past a site's door — an age gate, a consent
+        banner, a signed-in session — is configured once on the source, and
+        playback needs exactly the same thing: the listing and the video come
+        from the same site. Without this, a source that ingests perfectly well
+        still can't play any of its items.
+        """
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT s.config FROM source_items si "
+                "JOIN sources s ON s.user_hash = si.user_hash "
+                " AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash "
+                "WHERE si.user_hash = %s AND si.item_url_hash = %s "
+                " AND s.config IS NOT NULL",
+                (user_hash, item_url_hash),
+            )
+            for row in cur.fetchall():
+                cookie = (row["config"] or {}).get("cookie")
+                if cookie:
+                    return cookie
+        return None
+
     def trigger_ingest(self, now=False):
         # Compare against the database clock (next_ingest_at is TIMESTAMPTZ);
         # a naive Python datetime here breaks when app/DB timezones differ.

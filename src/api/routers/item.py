@@ -9,6 +9,7 @@ from routers.auth import authenticate
 from db.item import ItemLoose
 from db.item_state import ItemState
 from db.feed import Feed
+from db.source import Source
 from db.user import User
 from ingest.backends import ytdlp
 from route_models.stream import StreamUrlResponse
@@ -97,9 +98,14 @@ def stream_url(
             status_code=422, detail="This item has no resolvable stream"
         )
 
+    # Playback goes to the same site the listing came from, so it needs the
+    # same key to the door: a source configured with a cookie (an age gate, a
+    # consent banner, a signed-in session) lends it to its own items.
+    cookie = Source.cookie_for_item(user.name_hash, item_url_hash)
+
     started = time.monotonic()
     try:
-        resolved = ytdlp.resolve_stream(str(item.url))
+        resolved = ytdlp.resolve_stream(str(item.url), cookie=cookie)
     except ytdlp.StreamUnavailable as e:
         # Logged as well as returned: the viewer sees the short reason on the
         # card, and the operator can see which item and how long it took.

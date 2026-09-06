@@ -4,12 +4,12 @@ on:
   pull_request:
 
 jobs:
-  # The extraction sidecar's rendition picker is a plain function of the info
-  # dict yt-dlp returns, so it needs neither the service nor a database --
-  # just pytest.
-  ytdlp-formats:
+  # The extraction sidecar needs no database and no running service: its
+  # rendition picker, its failure wording and its retry decision are all plain
+  # functions of what yt-dlp handed back.
+  ytdlp:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
     - name: Checkout code
@@ -20,11 +20,11 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Run format-selection tests
+    - name: Run sidecar tests
       working-directory: src/ytdlp
       run: |
-        pip install pytest
-        pytest formats_test.py
+        pip install -r requirements.txt pytest
+        pytest
 
   test:
     runs-on: ubuntu-latest
