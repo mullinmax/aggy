@@ -1385,9 +1385,9 @@ function streamPlayer(m, item) {
         poster: stream.poster || posters[0] || null,
         controls: true, playsinline: true,
         onclick: (ev) => ev.stopPropagation(),
-        // A resolved URL can still be refused by the origin (an expired
-        // signature, a region lock) or be in a codec this browser lacks.
-        onerror: () => showUnplayable("Can't play here — open on the site"),
+        // The API found a stream, but the browser still has to fetch it from
+        // the site, and that is its own request with its own ways to fail.
+        onerror: (ev) => showUnplayable(playbackFailureLabel(ev.target, stream)),
       });
       wrap._hls = await attachStream(video, stream);
       wrap._playing = true;
@@ -1421,6 +1421,46 @@ function streamFailureLabel(err) {
   return `${trimmed} — open on the site`;
 }
 
+// Why the browser could not play a stream the API resolved. The three cases
+// are worth telling apart because only one of them is about the video itself:
+// a site can hand this server a URL that the *viewer* is then refused (signed
+// URLs are often pinned to whoever asked for them), the page can be blocked
+// from loading it at all, or the format can genuinely be one this browser
+// does not have.
+const MEDIA_ERRORS = {
+  1: 'Playback was stopped',
+  2: "The stream would not load from the site",
+  3: "This video's format can't be decoded here",
+  4: 'The site refused the stream',
+};
+
+function playbackFailureLabel(video, stream) {
+  const error = video && video.error;
+  const label = (error && MEDIA_ERRORS[error.code]) || "Can't play here";
+  // Everything needed to tell the three apart, in one line, since the card
+  // has room for a sentence and not for a diagnosis.
+  let origin = null;
+  try { const parsed = new URL(stream.url); origin = `${parsed.protocol}//${parsed.hostname}`; }
+  catch { /* the label matters more than the diagnosis */ }
+  console.warn('playback failed', {
+    code: error && error.code,
+    message: error && error.message,
+    hls: !!(stream && stream.is_hls),
+    origin, // the URL itself is a signed credential; its shape is the useful part
+    page: location.protocol,
+  });
+  return `${label} — open on the site`;
+}
+
+// A page served over https cannot load media over http: the browser blocks it
+// before the request is made. Sites that answer on both get upgraded rather
+// than failing for a reason nobody can see from the card.
+function secureStreamUrl(url) {
+  if (location.protocol !== 'https:' || !url.startsWith('http://')) return url;
+  console.warn('upgrading an insecure stream URL to https', new URL(url).hostname);
+  return `https://${url.slice('http://'.length)}`;
+}
+
 // ---------- HLS ----------
 
 // Sites increasingly publish only adaptive streams, which a bare `video` tag
@@ -1450,9 +1490,10 @@ function loadHls() {
 // Point a `video` element at a resolved stream. Returns the hls.js instance
 // when one was needed, so the caller can tear it down with the player.
 async function attachStream(video, stream) {
+  const url = secureStreamUrl(stream.url);
   const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
   if (!stream.is_hls || nativeHls) {
-    video.src = stream.url;
+    video.src = url;
     return null;
   }
   const Hls = await loadHls();
@@ -1461,9 +1502,16 @@ async function attachStream(video, stream) {
   hls.on(Hls.Events.ERROR, (_event, data) => {
     // Non-fatal errors are hls.js's normal recovery chatter; a fatal one means
     // the stream is done for, and the `video` error handler takes it from here.
-    if (data && data.fatal) video.dispatchEvent(new Event('error'));
+    if (data && data.fatal) {
+      // hls.js fetches the playlist and its segments over XHR, so unlike a
+      // plain `video` src it needs the CDN to allow this origin. Say which it
+      // was, since "no CORS header" and "the site refused us" look identical
+      // from the card.
+      console.warn('hls failed', { type: data.type, details: data.details, fatal: data.fatal });
+      video.dispatchEvent(new Event('error'));
+    }
   });
-  hls.loadSource(stream.url);
+  hls.loadSource(url);
   hls.attachMedia(video);
   return hls;
 }

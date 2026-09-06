@@ -13,6 +13,7 @@ different reactions from the person reading it.
 
 import re
 from typing import Optional
+from urllib.parse import parse_qsl, urlparse
 
 # "[SomeSite] abc123: Unable to download webpage: ..." — the leading bracket is
 # the extractor, the token after it the site's own id for the item.
@@ -93,3 +94,17 @@ def describe(message: str) -> str:
     if status is not None:
         return f"The site answered HTTP {status}"
     return text or "The site would not hand over this video"
+
+
+def describe_url(url: str) -> str:
+    """A resolved media URL, said out loud without giving it away.
+
+    These URLs are signed credentials, so the values never go in a log. The
+    host and the *names* of the query parameters are what is worth seeing:
+    they say which CDN answered and what the signature is pinned to. A
+    parameter naming an IP address means the URL was signed for whoever asked
+    for it, which is this server, not the browser that will play it.
+    """
+    parsed = urlparse(str(url))
+    keys = sorted({key for key, _ in parse_qsl(parsed.query)})
+    return f"{parsed.scheme}://{parsed.hostname} [{', '.join(keys) or 'no query'}]"

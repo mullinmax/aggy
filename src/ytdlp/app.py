@@ -24,6 +24,7 @@ from yt_dlp.extractor import gen_extractor_classes
 from yt_dlp.utils import DownloadError
 
 from failures import describe as describe_failure
+from failures import describe_url
 from failures import looks_blocked
 from failures import tidy as tidy_failure
 from formats import playable_url
@@ -307,7 +308,7 @@ def resolve(request: ResolveRequest) -> dict:
         + (
             f"{resolved['protocol'] or 'direct'}"
             f"{' (hls)' if resolved['is_hls'] else ''}"
-            f" {resolved['height'] or '?'}p"
+            f" {resolved['height'] or '?'}p " + describe_url(resolved["url"])
             if resolved
             else f"no playable rendition among "
             f"{len(info.get('formats') or [])} formats"
