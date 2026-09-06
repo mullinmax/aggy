@@ -185,6 +185,11 @@ class AggySDK {
     return this._request("GET", "/item/stream_url", { query: { item_url_hash } });
   }
 
+  /** A picture for a video item that loads right now */
+  async itemThumbnail({ item_url_hash }) {
+    return this._request("GET", "/item/thumbnail", { query: { item_url_hash } });
+  }
+
   /** Create a list */
   async listCreate({ list_name }) {
     return this._request("POST", "/list/create", { query: { list_name } });

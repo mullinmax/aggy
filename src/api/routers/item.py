@@ -15,6 +15,7 @@ from db.source import Source
 from db.user import User
 from ingest.backends import ytdlp
 from route_models.stream import StreamUrlResponse
+from route_models.thumbnail import ThumbnailResponse
 from streaming import manifest, tickets
 
 item_router = APIRouter()
@@ -41,6 +42,12 @@ FORWARDED_RESPONSE_HEADERS = (
     "last-modified",
 )
 PROXY_CHUNK_BYTES = 64 * 1024
+# Long enough to notice a picture is gone, short enough that a card waiting on
+# the answer is not left hanging.
+THUMBNAIL_CHECK_TIMEOUT_SECONDS = 8
+# Asking the site for a new thumbnail means visiting the item's page, so an
+# item whose picture is simply gone is not asked about again for a while.
+THUMBNAIL_REFRESH_COOLDOWN_SECONDS = 10 * 60
 PROXY_CONNECT_TIMEOUT_SECONDS = 10
 PROXY_READ_TIMEOUT_SECONDS = 30
 
@@ -154,10 +161,124 @@ def stream_url(
     # moment the browser is refused, without a second round trip to find out
     # where to go instead.
     if response.url:
-        response.proxy_url = tickets.url_for(
-            tickets.mint(response.url, user.name_hash, item_url_hash)
-        )
+        response.proxy_url = _proxy_url(response.url, user.name_hash, item_url_hash)
     return response
+
+
+@item_router.get(
+    "/thumbnail",
+    summary="A picture for a video item that loads right now",
+    response_model=ThumbnailResponse,
+)
+def thumbnail(
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> ThumbnailResponse:
+    """Find a working preview picture for an item whose stored one failed.
+
+    A video site signs its thumbnails much as it signs its streams, and
+    refuses anything hotlinked from a page it does not know, so the picture
+    saved when the item was ingested stops loading well before the item stops
+    being worth showing. The card only asks for this once its own attempt has
+    failed, and then in two steps: the stored picture fetched through this
+    server, which answers hotlinking, and failing that a fresh one from the
+    site, which answers expiry and is kept so the next reader pays nothing.
+    """
+    item = ItemLoose.read(url_hash=item_url_hash)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    cookie = Source.cookie_for_item(user.name_hash, item_url_hash)
+    stored = _stored_poster(item)
+    if stored and _picture_loads(stored, item, cookie):
+        return ThumbnailResponse(url=_proxy_url(stored, user.name_hash, item_url_hash))
+
+    fresh = _refreshed_poster(item)
+    if fresh:
+        return ThumbnailResponse(url=_proxy_url(fresh, user.name_hash, item_url_hash))
+
+    raise HTTPException(
+        status_code=404, detail="The site has no picture for this item any more"
+    )
+
+
+def _proxy_url(url: str, user_hash: str, item_url_hash: str) -> str:
+    return tickets.url_for(tickets.mint(url, user_hash, item_url_hash))
+
+
+def _stored_poster(item) -> Optional[str]:
+    """The picture the item was saved with: the stream's own, else the card's."""
+    for entry in item.media or []:
+        if (entry or {}).get("type") == "stream" and entry.get("poster"):
+            return entry["poster"]
+    return item.image_url
+
+
+def _picture_loads(url: str, item, cookie: Optional[str]) -> bool:
+    """Whether the stored picture is still there, asked as the site expects.
+
+    Only the first byte is wanted: this is about whether the URL still
+    answers, not about the picture itself, which the browser will fetch
+    through the proxy in a moment.
+    """
+    try:
+        response = requests.get(
+            url,
+            headers={
+                **_origin_headers(item, cookie, str(item.url)),
+                "Range": "bytes=0-0",
+            },
+            stream=True,
+            allow_redirects=True,
+            timeout=THUMBNAIL_CHECK_TIMEOUT_SECONDS,
+        )
+        response.close()
+    except requests.RequestException as e:
+        logging.info(f"Stored thumbnail for {item.url} could not be fetched: {e}")
+        return False
+    if response.status_code >= 400:
+        logging.info(
+            f"Stored thumbnail for {item.url} is gone "
+            f"(HTTP {response.status_code}); asking the site for another"
+        )
+        return False
+    return True
+
+
+# Items whose picture the site was recently asked about. Asking means visiting
+# the item's page, and an item whose thumbnail is simply gone would otherwise
+# be asked about again every time its card is drawn.
+_thumbnail_refreshed_at: dict = {}
+
+
+def _refreshed_poster(item) -> Optional[str]:
+    """A new thumbnail from the site, kept so this is paid for only once."""
+    asked_at = _thumbnail_refreshed_at.get(item.url_hash)
+    if asked_at is not None and (
+        time.monotonic() - asked_at < THUMBNAIL_REFRESH_COOLDOWN_SECONDS
+    ):
+        return None
+    _thumbnail_refreshed_at[item.url_hash] = time.monotonic()
+
+    fresh = ytdlp.poster_for(str(item.url))
+    if not fresh:
+        return None
+
+    updates = {"image_url": fresh}
+    if item.media:
+        updates["media"] = [
+            {**entry, "poster": fresh}
+            if (entry or {}).get("type") == "stream"
+            else entry
+            for entry in item.media
+        ]
+    try:
+        item.update(**updates)
+    except Exception:
+        # A picture the viewer can see now matters more than storing it; the
+        # next reader simply asks again.
+        logging.exception(f"Could not store the new thumbnail for {item.url}")
+    return fresh
 
 
 @item_router.get(
@@ -191,22 +312,12 @@ def stream(ticket: str, request: Request):
         raise HTTPException(status_code=400, detail="Unsupported stream address")
 
     item = ItemLoose.read(url_hash=claims.get("item"))
-    headers = {
-        "User-Agent": PROXY_USER_AGENT,
-        # Sites check where a request claims to come from; the item's own page
-        # is where a viewer would have been playing it.
-        "Referer": str(item.url) if item else url,
-        # Range responses and re-encoded bodies do not mix.
-        "Accept-Encoding": "identity",
-    }
+    cookie = Source.cookie_for_item(claims.get("user"), claims.get("item"))
+    headers = _origin_headers(item, cookie, fallback_referer=url)
     for name in FORWARDED_REQUEST_HEADERS:
         value = request.headers.get(name)
         if value:
             headers[name.title()] = value
-
-    cookie = Source.cookie_for_item(claims.get("user"), claims.get("item"))
-    if cookie:
-        headers["Cookie"] = cookie
 
     try:
         upstream = requests.get(
@@ -247,6 +358,26 @@ def stream(ticket: str, request: Request):
         headers=passthrough,
         media_type=upstream.headers.get("Content-Type"),
     )
+
+
+def _origin_headers(item, cookie, fallback_referer: str) -> dict:
+    """What to send a site so a request looks like the viewer's own.
+
+    Sites hand out URLs that only work for a request resembling the one that
+    asked for them, and hotlink protection turns away anything arriving from
+    somewhere it does not recognise. So the request keeps the item's own page
+    as its referer and the source's cookie, which is what got past the site's
+    door in the first place.
+    """
+    headers = {
+        "User-Agent": PROXY_USER_AGENT,
+        "Referer": str(item.url) if item else fallback_referer,
+        # Range responses and re-encoded bodies do not mix.
+        "Accept-Encoding": "identity",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+    return headers
 
 
 def _proxied_manifest(upstream, claims: dict, passthrough: dict) -> Response:

@@ -1328,15 +1328,31 @@ function streamPlayer(m, item) {
       h('span', { class: 'aggy-play-badge aggy-play-badge-sm' }),
       h('span', {}, 'Play video'));
 
-  // The poster, stepping through the candidates as they fail.
+  // The poster, stepping through the candidates as they fail. A video site
+  // signs its thumbnails and refuses them to pages it doesn't know, exactly
+  // as it does its streams, so a picture that won't load direct is worth one
+  // more ask: the API finds one that works and serves it from here.
+  let askedForAPicture = false;
   const posterFrame = () => {
     let index = 0;
     const img = h('img', {
       class: 'absolute inset-0 w-full h-full object-cover',
       src: posters[0], alt: '', loading: 'lazy',
-      onerror: (e) => {
+      onerror: async (e) => {
         index += 1;
         if (index < posters.length) { e.target.src = posters[index]; return; }
+        if (!askedForAPicture && item && item.item_hash) {
+          askedForAPicture = true;
+          try {
+            const found = await sdk.itemThumbnail({ item_url_hash: item.item_hash });
+            if (found && found.url) {
+              // the player's own poster too, so pressing play doesn't go blank
+              posters.unshift(found.url);
+              e.target.src = found.url;
+              return;
+            }
+          } catch { /* no picture to be had: fall through to the step down */ }
+        }
         posterFailed = true; // out of thumbnails: step the frame down
         paint();
       },
