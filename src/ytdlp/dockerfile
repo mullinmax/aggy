@@ -5,8 +5,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# formats.py holds the rendition picker app.py imports
-COPY app.py formats.py ./
+# Everything beside app.py, so a module added later ships with it; the tests
+# and caches are kept out by .dockerignore. Naming the files here instead is
+# how one gets left behind, and the image still builds fine -- the service
+# then dies at start up, in the deployment, with the whole thing unreachable.
+COPY . .
 
 EXPOSE 8000
 

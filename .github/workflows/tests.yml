@@ -4,12 +4,12 @@ on:
   pull_request:
 
 jobs:
-  # The extraction sidecar's rendition picker is a plain function of the info
-  # dict yt-dlp returns, so it needs neither the service nor a database --
-  # just pytest.
-  ytdlp-formats:
+  # The extraction sidecar needs no database and no running service: its
+  # rendition picker, its failure wording and its retry decision are all plain
+  # functions of what yt-dlp handed back.
+  ytdlp:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
     - name: Checkout code
@@ -20,11 +20,33 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Run format-selection tests
+    - name: Run sidecar tests
       working-directory: src/ytdlp
       run: |
-        pip install pytest
-        pytest formats_test.py
+        pip install -r requirements.txt pytest
+        pytest
+
+    # The image builds happily with a module missing from it: nothing notices
+    # until the container starts, in the deployment, and takes the service off
+    # the network with it. Start the real image and ask it whether it is
+    # alive, which is the only check that covers that.
+    - name: The built image actually starts
+      working-directory: src/ytdlp
+      run: |
+        docker build -t aggy-ytdlp-check .
+        docker run --rm -d --name ytdlp-check -p 8000:8000 aggy-ytdlp-check
+        for attempt in $(seq 30); do
+          if curl -fsS http://localhost:8000/health; then
+            echo "\nthe service answered"
+            docker rm -f ytdlp-check
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "the service never answered:"
+        docker logs ytdlp-check
+        docker rm -f ytdlp-check
+        exit 1
 
   test:
     runs-on: ubuntu-latest

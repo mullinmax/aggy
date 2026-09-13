@@ -1,0 +1,9 @@
+# The image copies the whole directory, so that a module added next to app.py
+# ships with it. Listing files one by one in the dockerfile instead is how a
+# new module gets left behind, and the image still builds: the service only
+# fails at start up, on the deployment.
+__pycache__/
+*.pyc
+*_test.py
+.pytest_cache/
+.ruff_cache/

@@ -1,3 +1,7 @@
+# A site that decides by TLS fingerprint refuses a plain Python client
+# outright; this lets yt-dlp make the request as a browser instead (see
+# IMPERSONATE_TARGET in app.py).
+curl_cffi
 fastapi
 uvicorn
 # Extractors break whenever a site changes; this image is meant to be pulled
