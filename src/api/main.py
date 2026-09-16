@@ -47,6 +47,7 @@ from ingest.jobs import (
     prune_ingest_attempts_job,
 )
 from ranking.engine import feed_ranking_job
+from dedup.detect import duplicate_detection_job
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
@@ -160,6 +161,24 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * config.get_int("IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES"),
         id="backfill_image_embeddings_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Group articles that are the same content reaching the user under several
+    # URLs. Runs at start up too, so an existing install starts working through
+    # its backlog straight away rather than after the first interval; a NULL
+    # dedup_computed_at just means "not in a group yet", so the feed keeps
+    # working throughout. A pass held up by a large backlog can outlast the
+    # interval, and since the job keeps its progress on the rows themselves,
+    # skipping the overlapping run and coalescing the missed ones loses nothing.
+    scheduler.add_job(
+        func=duplicate_detection_job,
+        trigger="interval",
+        seconds=60 * config.get_int("DUPLICATE_DETECTION_INTERVAL_MINUTES"),
+        id="duplicate_detection_job",
         replace_existing=False,
         next_run_time=datetime.now(),
         max_instances=1,

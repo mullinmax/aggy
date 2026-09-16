@@ -9,7 +9,11 @@ from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
 from db.user import User
 from route_models.feed import FeedResponse
 from route_models.source import SourceRouteModel
-from route_models.item import ItemResponse
+from route_models.item import (
+    DuplicateMemberResponse,
+    ItemDuplicatesResponse,
+    ItemResponse,
+)
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.ranking import (
     FieldContributionResponse,
@@ -165,6 +169,13 @@ def get_feed_items(
     max_age: str = Query(
         "all", description="Only items this recent: day, week, month, year, all"
     ),
+    collapse_duplicates: Optional[bool] = Query(
+        None,
+        description="Show one member of each duplicate group -- the one the "
+        "current model scores highest -- with item_duplicate_count saying how "
+        "many others it stands for. False returns every member. Omit for the "
+        "server default.",
+    ),
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
@@ -201,6 +212,7 @@ def get_feed_items(
             source_hashes=source_hashes,
             post_types=types,
             max_age=None if max_age == "all" else max_age,
+            collapse_duplicates=collapse_duplicates,
         )
     ]
 
@@ -338,6 +350,48 @@ def get_item_explanation(
                 preview=_preview(f.preview),
             )
             for f in explanation.fields
+        ],
+    )
+
+
+@feed_router.get(
+    "/item_duplicates",
+    summary="The items a duplicate badge stands for",
+    response_model=ItemDuplicatesResponse,
+)
+def get_item_duplicates(
+    feed_name_hash: str,
+    group_hash: str,
+    user: User = Depends(authenticate),
+) -> ItemDuplicatesResponse:
+    """Every member of a duplicate group, in the order the feed ranks them.
+
+    The feed shows one member per group, so this is how the UI expands the
+    badge into the copies it is standing in for. The first member is the one
+    being shown; it is included rather than filtered out so the UI can mark it
+    without having to work out which one it already has.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    rows = feed.duplicate_group_members(group_hash)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Duplicate group not found")
+
+    return ItemDuplicatesResponse(
+        duplicate_group=group_hash,
+        members=[
+            DuplicateMemberResponse(
+                item_hash=row["url_hash"],
+                item_url=row["url"],
+                item_title=row["title"],
+                item_source_name=row["source_name"],
+                item_predicted_score=row["predicted_score"],
+                item_predicted_confidence=row["predicted_confidence"],
+                item_date_published=row["date_published"],
+                item_duplicate_signal=row["signal"],
+                item_duplicate_confidence=row["confidence"],
+                item_is_shown=index == 0,
+            )
+            for index, row in enumerate(rows)
         ],
     )
 

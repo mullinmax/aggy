@@ -75,3 +75,111 @@ def propagate_items(
     # Recurse after committing this level so downstream feeds see the rows.
     for sub in subs:
         propagate_items(user_hash, sub["feed_hash"], url_hashes, _visited)
+
+
+# --- Votes across a duplicate group -----------------------------------------
+#
+# A vote is about the content, not about the particular copy of it the user
+# happened to be shown. Votes are already shared across feeds (the
+# ``user_item_votes`` view), but they are keyed on ``item_url_hash``, so the
+# same article stored under two URLs is two items and a vote on one says
+# nothing about the other.
+#
+# That matters because which member of a duplicate group is shown is decided by
+# the model's prediction, and a retrain reshuffles those. Downvote a story,
+# retrain, and a different member of its group wins and the story is back --
+# unvoted, unread, looking like a bug. Spreading the vote across the group is
+# what stops that.
+#
+# A member that the user has already voted on is never touched: an explicit
+# judgement on this copy outranks an inherited one. A row that exists only
+# because the item was marked read keeps its ``is_read``; just the score is
+# filled in.
+
+_INHERIT_CONFLICT_SQL = (
+    " ON CONFLICT (user_hash, feed_hash, item_url_hash) DO UPDATE SET"
+    "  score = EXCLUDED.score, score_date = EXCLUDED.score_date"
+)
+
+
+def propagate_vote_to_duplicates(user_hash: str, item_url_hash: str) -> int:
+    """Copy this user's vote on ``item_url_hash`` to the rest of its duplicate
+    group. Returns the number of item_states rows written.
+
+    A no-op for an item that is not in a group, or has no vote to spread.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT group_hash FROM item_duplicates WHERE item_url_hash = %s",
+            (item_url_hash,),
+        )
+        group = cur.fetchone()
+        if not group:
+            return 0
+
+        cur.execute(
+            "SELECT score, score_date FROM user_item_votes "
+            "WHERE user_hash = %s AND item_url_hash = %s",
+            (user_hash, item_url_hash),
+        )
+        vote = cur.fetchone()
+        if not vote:
+            return 0
+
+        # Every feed of this user holding another member of the group. The
+        # NOT EXISTS is what protects a copy the user has judged themselves.
+        cur.execute(
+            "INSERT INTO item_states "
+            "(user_hash, feed_hash, item_url_hash, score, score_date) "
+            "SELECT c.user_hash, c.feed_hash, c.item_url_hash, %s, %s "
+            "FROM feed_items c "
+            "JOIN item_duplicates d ON d.item_url_hash = c.item_url_hash "
+            "WHERE c.user_hash = %s AND d.group_hash = %s "
+            "AND c.item_url_hash <> %s "
+            "AND NOT EXISTS (SELECT 1 FROM user_item_votes v "
+            " WHERE v.user_hash = c.user_hash "
+            "  AND v.item_url_hash = c.item_url_hash)" + _INHERIT_CONFLICT_SQL,
+            (
+                vote["score"],
+                vote["score_date"],
+                user_hash,
+                group["group_hash"],
+                item_url_hash,
+            ),
+        )
+        return cur.rowcount
+
+
+def inherit_votes_from_duplicates(url_hash: str) -> int:
+    """Give a newly grouped item the votes its twins already carry.
+
+    The other direction of ``propagate_vote_to_duplicates``: an item that
+    joins a group after the user voted on the story would otherwise arrive
+    unvoted and resurface it. Returns the number of item_states rows written.
+
+    ``DISTINCT ON`` resolves twins that disagree the same way the
+    ``user_item_votes`` view does -- the most recent vote wins -- and is also
+    what keeps a single conflicting row from being updated twice in one
+    statement.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "INSERT INTO item_states "
+            "(user_hash, feed_hash, item_url_hash, score, score_date) "
+            "SELECT DISTINCT ON (c.user_hash, c.feed_hash) "
+            " c.user_hash, c.feed_hash, c.item_url_hash, v.score, v.score_date "
+            "FROM feed_items c "
+            "JOIN item_duplicates mine ON mine.item_url_hash = c.item_url_hash "
+            "JOIN item_duplicates sib ON sib.group_hash = mine.group_hash "
+            " AND sib.item_url_hash <> c.item_url_hash "
+            "JOIN user_item_votes v ON v.user_hash = c.user_hash "
+            " AND v.item_url_hash = sib.item_url_hash "
+            "WHERE c.item_url_hash = %s "
+            "AND NOT EXISTS (SELECT 1 FROM user_item_votes uv "
+            " WHERE uv.user_hash = c.user_hash "
+            "  AND uv.item_url_hash = c.item_url_hash) "
+            "ORDER BY c.user_hash, c.feed_hash, v.score_date DESC NULLS LAST"
+            + _INHERIT_CONFLICT_SQL,
+            (url_hash,),
+        )
+        return cur.rowcount

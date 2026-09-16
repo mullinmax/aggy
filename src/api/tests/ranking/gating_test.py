@@ -245,16 +245,17 @@ def test_scoring_falls_back_to_a_full_run_when_the_model_is_gone(
         cur.execute(
             "UPDATE ranking_model_stats SET model_name = %s "
             "WHERE user_hash = %s AND feed_hash = %s AND chosen",
-            ("a_model_this_build_does_not_have", existing_feed.user_hash,
-             existing_feed.name_hash),
+            (
+                "a_model_this_build_does_not_have",
+                existing_feed.user_hash,
+                existing_feed.name_hash,
+            ),
         )
 
     assert score_feed(existing_feed) == 0  # it trained instead of scoring
     assert _stats_computed_at(existing_feed) > trained_at
     # and the full run left a model this build actually has
-    assert chosen_model_name(existing_feed) in {
-        m.name for m in engine.all_models()
-    }
+    assert chosen_model_name(existing_feed) in {m.name for m in engine.all_models()}
 
 
 def test_scoring_leaves_already_scored_articles_alone(existing_user, existing_feed):
@@ -269,9 +270,9 @@ def test_scoring_leaves_already_scored_articles_alone(existing_user, existing_fe
     )
     assert score_feed(existing_feed) == 1
 
-    assert _prediction(existing_feed, items[0])["predicted_at"] == before[
-        "predicted_at"
-    ]
+    assert (
+        _prediction(existing_feed, items[0])["predicted_at"] == before["predicted_at"]
+    )
     assert _prediction(existing_feed, fresh)["predicted_at"] is not None
 
 

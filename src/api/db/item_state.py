@@ -6,6 +6,7 @@ from .item import ItemLoose
 from .user import User
 from .feed import Feed
 from .base import AggyBaseModel
+from .propagation import propagate_vote_to_duplicates
 
 # class ReservedVoteReasons(Enum):
 # leaving unimplemented for now, should allow arbitrary user-defined reasons (like tags)
@@ -131,3 +132,12 @@ class ItemState(AggyBaseModel):
             item_state.is_read = is_read
 
         item_state.update()
+
+        if score is not None:
+            # A vote is about the content, so it covers every copy of it. The
+            # same article reaches a user under several URLs and is therefore
+            # several items; without this, downvoting a story and then
+            # retraining brings it straight back as whichever twin the new
+            # model scores highest. Marking something read is not a judgement
+            # about the content, so only a score spreads.
+            propagate_vote_to_duplicates(user_hash, item_url_hash)

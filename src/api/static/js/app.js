@@ -945,6 +945,54 @@ function sourceBadge(name, storedColor) {
   }, h('span', { class: 'truncate min-w-0' }, name));
 }
 
+// The same article often reaches a feed through several sources, under a
+// different URL from each. The feed shows one of them -- whichever the model
+// scores highest -- and this badge says how many others it stands for, opening
+// them inline when tapped.
+function duplicateBadge(item) {
+  const count = item.item_duplicate_count || 0;
+  const group = item.item_duplicate_group;
+  if (!count || !group) return null;
+
+  const panel = h('div', { class: 'hidden mt-1 w-full' });
+  let loaded = false;
+
+  const badge = h('button', {
+    type: 'button',
+    class: 'badge badge-ghost badge-xs text-base-content/50 hover:text-base-content',
+    title: 'The same article from other sources',
+    onclick: async (e) => {
+      // the card itself opens the reader on click
+      e.stopPropagation();
+      const nowHidden = panel.classList.toggle('hidden');
+      if (nowHidden || loaded) return;
+      render(panel, spinner());
+      try {
+        const data = await sdk.feedItemDuplicates({
+          feed_name_hash: currentFeed.feed_name_hash,
+          group_hash: group,
+        });
+        // the shown copy is in the response so it can be marked rather than
+        // guessed at; the others are what this badge is about
+        render(panel, h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
+          data.members.map((m) => h('li', { class: 'flex items-center gap-2 min-w-0' },
+            h('span', { class: 'shrink-0 text-base-content/30' }, m.item_is_shown ? '●' : '○'),
+            sourceBadge(m.item_source_name),
+            h('a', {
+              href: m.item_url, target: '_blank', rel: 'noopener noreferrer',
+              class: 'link link-hover truncate min-w-0',
+              onclick: (ev) => ev.stopPropagation(),
+            }, m.item_title || m.item_url)))));
+        loaded = true;
+      } catch (err) {
+        render(panel, h('p', { class: 'text-xs text-error' }, err.message));
+      }
+    },
+  }, `also in ${count} other source${count === 1 ? '' : 's'}`);
+
+  return [badge, panel];
+}
+
 // "Open in new tab" icon (matches the modal close button's size/style),
 // shown next to titles to open the source's original link.
 function openInNewTabIcon() {
@@ -1710,7 +1758,8 @@ function itemCard(item, { listMode = false } = {}) {
         sourceBadge(item.item_source_name, item.item_source_color),
         item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
         published && h('span', { class: 'whitespace-nowrap' }, published),
-        listMode ? null : predictedBadge),
+        listMode ? null : predictedBadge,
+        listMode ? null : duplicateBadge(item)),
       h('div', { class: 'flex items-center gap-1 ml-auto' },
         listButton(item),
         listMode ? null : voteRow(item))));
