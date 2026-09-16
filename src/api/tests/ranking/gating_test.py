@@ -308,3 +308,73 @@ def test_scoring_pass_uses_the_chosen_model(existing_user, existing_feed):
             (existing_feed.user_hash, existing_feed.name_hash, fresh.url_hash),
         )
         assert cur.fetchone()["predicted_model"] == winner
+
+
+def test_a_vote_is_stamped_on_an_absolute_instant(existing_user, existing_feed):
+    """The gate compares a vote's score_date against the database's own NOW(),
+    so the two have to be on the same clock.
+
+    The API container runs on a local timezone (its dockerfile sets TZ) while
+    Postgres runs on UTC. A naive local timestamp went into the TIMESTAMPTZ
+    column verbatim and came back as a vote cast hours ago, so a fresh vote
+    read as older than the last training run and the feed quietly never
+    retrained. The timezone is forced here rather than inherited so this holds
+    wherever the suite runs.
+    """
+    import os
+    import time
+
+    item = _add_item(existing_feed, f"http://example.com/{uuid.uuid4()}/")
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"  # what the dockerfile sets
+    time.tzset()
+    try:
+        _vote(existing_user, existing_feed, item, 1.0)
+    finally:
+        if before is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = before
+        time.tzset()
+
+    with engine.get_db_con() as cur:
+        cur.execute(
+            "SELECT score_date - NOW() AS skew FROM item_states "
+            "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+            (existing_user.name_hash, existing_feed.name_hash, item.url_hash),
+        )
+        skew = cur.fetchone()["skew"]
+
+    assert abs(skew.total_seconds()) < 60, (
+        f"the vote landed {skew} away from the database's clock, so anything "
+        "comparing it against NOW() will misjudge how fresh it is"
+    )
+
+
+def test_a_new_vote_retrains_whatever_the_app_timezone(existing_user, existing_feed):
+    """The same thing from the gate's side: the retrain has to be triggered by
+    a vote cast in a container whose clock is not the database's."""
+    import os
+    import time
+
+    _trained_feed(existing_user, existing_feed)
+    trained_at = _stats_computed_at(existing_feed)
+    extra = _add_item(
+        existing_feed, f"http://example.com/{uuid.uuid4()}/", embedding=[4.0, 0.2]
+    )
+
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    try:
+        _vote(existing_user, existing_feed, extra, 1.0)
+        assert existing_feed.name in {f.name for f in feeds_needing_training()}
+        feed_ranking_job()
+    finally:
+        if before is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = before
+        time.tzset()
+
+    assert _stats_computed_at(existing_feed) > trained_at

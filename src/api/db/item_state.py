@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from pydantic import confloat
 
@@ -126,7 +126,15 @@ class ItemState(AggyBaseModel):
 
         if score is not None:
             item_state.score = score
-            item_state.score_date = datetime.now()
+            # Stamped as an absolute instant, not local wall-clock time. The
+            # API container runs on a local timezone (TZ is set in its
+            # dockerfile) while Postgres runs on UTC, so a naive
+            # datetime.now() was stored verbatim into a TIMESTAMPTZ and read
+            # back as a vote cast hours ago. Everything that asks "is this
+            # vote newer than the last training run?" compares it against the
+            # database's own NOW(), so a vote used to go unnoticed for as long
+            # as the offset between the two clocks.
+            item_state.score_date = datetime.now(timezone.utc)
 
         if is_read is not None:
             item_state.is_read = is_read
