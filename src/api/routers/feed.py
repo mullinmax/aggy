@@ -269,6 +269,11 @@ def rerank_feed(
     The run happens on a background thread instead; poll `/training_status`
     to follow it, and re-read `/ranking_stats` once it reports done. Asking
     again while a run is in flight simply joins the existing one.
+
+    This deliberately bypasses `feeds_needing_training`: the scheduled job
+    only retrains a feed whose votes moved, and asking for a retrain anyway
+    — to see the bake-off re-run, or after changing the model zoo — is now
+    the whole point of this endpoint.
     """
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
 

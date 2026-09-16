@@ -1,9 +1,21 @@
 """Train/evaluate vote-prediction models for a feed and cache predictions.
 
-`rank_feed` is the entry point: it cross-validates every model on the feed's
+Two operations, deliberately separate, because they cost wildly different
+amounts:
+
+`rank_feed` is the full run. It cross-validates every model on the feed's
 votes, persists the per-model stats (for the stats UI), then trains the best
 model on all labels and writes a predicted score + confidence to every item
-in the feed. `feed/items` sorts read straight from those cached columns.
+in the feed. Cross-validating the zoo is by far the slowest thing the API
+does, so this only happens when the votes it learns from have actually
+changed -- or when the user asks for it.
+
+`score_feed` is the cheap pass. It re-fits the model the stats table already
+chose and scores only the articles that have never been scored. Ingesting a
+new article needs nothing more than this: the model is not stale, the article
+is simply unknown to it.
+
+`feed/items` sorts read straight from the cached columns either way.
 """
 
 import json
@@ -119,14 +131,35 @@ _LABELED_ONLY_SQL = (
 )
 
 
-def load_feed_features(feed: Feed, labeled_only: bool = False) -> List[ItemFeatures]:
+# The never-scored subset, for the cheap pass. An ingest tick adds a handful of
+# articles to a feed that already holds thousands; scoring them means reading
+# them, not the whole feed again.
+_UNSCORED_ONLY_SQL = " AND c.predicted_at IS NULL"
+
+
+def load_feed_features(
+    feed: Feed, labeled_only: bool = False, unscored_only: bool = False
+) -> List[ItemFeatures]:
     """Every article in the feed as model features.
 
     `labeled_only` keeps just the ones the user has voted on or listed — the
     rows training actually learns from. The full set is only needed once a
     model has been picked and the feed is being scored.
+
+    `unscored_only` keeps just the ones that have never been scored, which is
+    what `score_feed` applies an already-chosen model to.
+
+    The two are mutually exclusive: the labeled rows are the ones training
+    reads and the unscored rows are the ones scoring writes, and no caller
+    wants the intersection.
     """
-    sql = _FEED_ITEMS_SQL + (_LABELED_ONLY_SQL if labeled_only else "")
+    if labeled_only and unscored_only:
+        raise ValueError("labeled_only and unscored_only are mutually exclusive")
+    sql = _FEED_ITEMS_SQL
+    if labeled_only:
+        sql += _LABELED_ONLY_SQL
+    elif unscored_only:
+        sql += _UNSCORED_ONLY_SQL
     with get_db_con() as cur:
         cur.execute(sql, (feed.user_hash, feed.name_hash))
         rows = cur.fetchall()
@@ -134,7 +167,20 @@ def load_feed_features(feed: Feed, labeled_only: bool = False) -> List[ItemFeatu
 
 
 def save_model_stats(feed: Feed, stats: List[ModelStats]) -> None:
+    """Persist a full run's per-model stats, and only those.
+
+    A run is authoritative about the zoo it ran: rows naming a model this
+    build no longer has are dropped rather than left behind. One of them
+    carrying `chosen` would otherwise name a model nothing can fit, which
+    `score_feed` reads as "retrain" on every single pass.
+    """
     with get_db_con() as cur:
+        cur.execute(
+            "DELETE FROM ranking_model_stats "
+            "WHERE user_hash = %s AND feed_hash = %s "
+            "AND model_name <> ALL(%s)",
+            (feed.user_hash, feed.name_hash, [s.model_name for s in stats]),
+        )
         for s in stats:
             cur.execute(
                 "INSERT INTO ranking_model_stats (user_hash, feed_hash, "
@@ -347,6 +393,70 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
     return stats
 
 
+def chosen_model_name(feed: Feed) -> Optional[str]:
+    """The model the last full run picked for this feed, if any."""
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT model_name FROM ranking_model_stats "
+            "WHERE user_hash = %s AND feed_hash = %s AND chosen",
+            (feed.user_hash, feed.name_hash),
+        )
+        row = cur.fetchone()
+    return row["model_name"] if row else None
+
+
+def score_feed(feed: Feed) -> int:
+    """Predict for this feed's unscored items using the already-chosen model.
+
+    Returns the number of items scored. No cross-validation, no stats write:
+    the model the stats table already picked is re-fit on the current labels
+    and applied to the rows that have never been scored. That is one `fit`
+    against N models over K folds, which is the whole point — a feed whose
+    votes have not changed does not need a new model, only a score for the
+    articles that have just arrived.
+
+    The re-fit is needed because fitted models are not persisted anywhere;
+    storing the winner would remove even that, at the cost of having model
+    files to version.
+
+    A feed whose chosen model no longer exists (a deploy dropped it) is handed
+    to a full training run instead, since only that can choose a new one, and
+    reports 0 scored here.
+    """
+    winner_name = chosen_model_name(feed)
+    if winner_name is None:
+        return 0  # nothing has been chosen yet; only a full run can choose
+
+    winner = next((m for m in all_models() if m.name == winner_name), None)
+    if winner is None:
+        logging.info(
+            f"Feed {feed.name} was scored by model '{winner_name}', which this "
+            "build no longer has; retraining to pick a new one"
+        )
+        train_feed(feed)
+        return 0
+
+    labeled = load_feed_features(feed, labeled_only=True)
+    labeled = [f for f in labeled if f.label is not None]
+    if len(labeled) < MIN_LABELS_TO_RANK:
+        return 0
+
+    features = load_feed_features(feed, unscored_only=True)
+    if not features:
+        return 0
+    for f in features:
+        f.label_date = None  # predict ages as-of now
+
+    winner.fit(labeled)
+    scores, confs = winner.predict(features)
+    _write_predictions(feed, features, scores, confs, winner_name)
+    logging.info(
+        f"Scored {len(features)} new article(s) in feed {feed.name} with the "
+        f"already-chosen model '{winner_name}' ({len(labeled)} labels)"
+    )
+    return len(features)
+
+
 def _reporter(feed: Feed):
     """A progress callback bound to this feed."""
 
@@ -392,59 +502,121 @@ def train_feed(feed: Feed) -> Optional[List[ModelStats]]:
     return run_training(feed)
 
 
-def feeds_needing_rank() -> List[Feed]:
-    """Feeds with at least one label — an explicit vote or a listed item, since
-    list membership counts as a vote — where a label or item is newer than the
-    latest prediction (or no prediction exists yet).
+# Every label this feed learns from, as a timestamp: the newest vote cast on
+# one of its items (in any feed — votes are shared, see user_item_votes) and
+# the newest time one of its items was added to a list, which counts as a vote
+# of its own. 'epoch' stands in for "no labels at all", so the comparison
+# against the last training run stays a plain one.
+_NEWEST_LABEL_SQL = (
+    " GREATEST("
+    "  COALESCE((SELECT MAX(v.score_date) FROM feed_items c"
+    "   JOIN user_item_votes v ON v.user_hash = c.user_hash"
+    "    AND v.item_url_hash = c.item_url_hash"
+    "   WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
+    "   'epoch'),"
+    "  COALESCE((SELECT MAX(li.added_at) FROM feed_items c"
+    "   JOIN list_items li ON li.user_hash = c.user_hash"
+    "    AND li.item_url_hash = c.item_url_hash"
+    "   WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
+    "   'epoch')"
+    " )"
+)
+
+# When this feed's models were last built. NULL means never.
+_LAST_TRAINED_SQL = (
+    " (SELECT MAX(s.computed_at) FROM ranking_model_stats s"
+    "  WHERE s.user_hash = f.user_hash AND s.feed_hash = f.name_hash)"
+)
+
+# How many of this feed's items carry a label. Mirrors _LABELED_ONLY_SQL, so
+# the count matches what a training run would actually read.
+_LABEL_COUNT_SQL = (
+    " (SELECT COUNT(*) FROM feed_items c"
+    "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash"
+    "   AND (EXISTS (SELECT 1 FROM user_item_votes v"
+    "     WHERE v.user_hash = c.user_hash"
+    "      AND v.item_url_hash = c.item_url_hash)"
+    "    OR EXISTS (SELECT 1 FROM list_items li"
+    "     WHERE li.user_hash = c.user_hash"
+    "      AND li.item_url_hash = c.item_url_hash)))"
+)
+
+
+def feeds_needing_training() -> List[Feed]:
+    """Feeds whose newest label is newer than their newest model stats, plus
+    feeds that have never been trained but now have labels.
+
+    This is the gate that stops the model bake-off from running for nothing.
+    Ingesting an article used to make a feed eligible for a full retrain, which
+    cross-validates the whole zoo — the most expensive thing the API does — to
+    learn from exactly the votes it had already learned from. A new article is
+    not new evidence; only a vote (or a list add, which counts as one) is.
 
     Votes are shared: a label counts if the user voted on an item *in this
     feed* from any feed (via user_item_votes), so voting in one feed schedules
-    every feed the item appears in for re-ranking."""
+    every feed the item appears in for retraining.
+
+    A feed that has never been trained waits until it has
+    MIN_LABELS_TO_RANK labels, since below that there is nothing a model can
+    be fit on anyway.
+    """
     with get_db_con() as cur:
         cur.execute(
-            "SELECT f.user_hash, f.name FROM feeds f WHERE ("
-            " EXISTS (SELECT 1 FROM feed_items c"
-            "  JOIN user_item_votes v ON v.user_hash = c.user_hash"
-            "   AND v.item_url_hash = c.item_url_hash"
-            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash)"
-            " OR EXISTS (SELECT 1 FROM feed_items c"
-            "  JOIN list_items li ON li.user_hash = c.user_hash"
-            "   AND li.item_url_hash = c.item_url_hash"
-            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash)"
-            ") AND ("
-            " EXISTS (SELECT 1 FROM feed_items c"
+            "SELECT f.user_hash, f.name FROM feeds f WHERE"
+            f"{_NEWEST_LABEL_SQL} > COALESCE({_LAST_TRAINED_SQL}, 'epoch')"
+            f" AND ({_LAST_TRAINED_SQL} IS NOT NULL"
+            f"  OR {_LABEL_COUNT_SQL} >= %s)",
+            (MIN_LABELS_TO_RANK,),
+        )
+        rows = cur.fetchall()
+    return [Feed(user_hash=row["user_hash"], name=row["name"]) for row in rows]
+
+
+def feeds_needing_scoring() -> List[Feed]:
+    """Feeds with a chosen model and at least one unscored item.
+
+    These are the feeds that just ingested something. Their model is current;
+    only the new articles are unknown to it, and `score_feed` is what tells
+    them apart from a feed whose votes actually moved.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT f.user_hash, f.name FROM feeds f WHERE"
+            " EXISTS (SELECT 1 FROM ranking_model_stats s"
+            "  WHERE s.user_hash = f.user_hash AND s.feed_hash = f.name_hash"
+            "   AND s.chosen)"
+            " AND EXISTS (SELECT 1 FROM feed_items c"
             "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash"
             "   AND c.predicted_at IS NULL)"
-            " OR GREATEST("
-            "  COALESCE((SELECT MAX(v.score_date) FROM feed_items c"
-            "   JOIN user_item_votes v ON v.user_hash = c.user_hash"
-            "    AND v.item_url_hash = c.item_url_hash"
-            "   WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
-            "   'epoch'),"
-            "  COALESCE((SELECT MAX(li.added_at) FROM feed_items c"
-            "   JOIN list_items li ON li.user_hash = c.user_hash"
-            "    AND li.item_url_hash = c.item_url_hash"
-            "   WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
-            "   'epoch')"
-            " ) > COALESCE((SELECT MAX(c.predicted_at) FROM feed_items c"
-            "  WHERE c.user_hash = f.user_hash AND c.feed_hash = f.name_hash),"
-            "  'epoch'))",
         )
         rows = cur.fetchall()
     return [Feed(user_hash=row["user_hash"], name=row["name"]) for row in rows]
 
 
 def feed_ranking_job() -> None:
-    """Scheduled job: re-rank every feed whose votes or items changed.
+    """Retrain feeds whose votes changed; score new articles everywhere else.
 
-    Goes through `train_feed` so a scheduled retrain shows up in the UI's
-    training progress exactly like one the user asked for.
+    Training goes through `train_feed` so a scheduled retrain shows up in the
+    UI's training progress exactly like one the user asked for. A score-only
+    pass deliberately does not register there: the training indicator then
+    means "the model is being rebuilt", which is now a real distinction, and
+    `training_summary` already reports whether the model is behind the votes.
     """
-    for feed in feeds_needing_rank():
+    trained = set()
+    for feed in feeds_needing_training():
         try:
             train_feed(feed)
+            trained.add((feed.user_hash, feed.name_hash))
         except Exception as e:
             logging.exception(f"Ranking feed {feed.name} failed: {e}")
+
+    for feed in feeds_needing_scoring():
+        if (feed.user_hash, feed.name_hash) in trained:
+            continue  # a full run already scored every article
+        try:
+            score_feed(feed)
+        except Exception as e:
+            logging.exception(f"Scoring feed {feed.name} failed: {e}")
 
 
 def label_counts(feed: Feed) -> dict:
