@@ -63,6 +63,13 @@ class ItemFeatures:
     author: Optional[str] = None
     date_published: Optional[datetime] = None
     has_image: bool = False
+    # The article was published with a picture and that picture has since been
+    # taken down (its host answers 410/404). Kept alongside has_image rather
+    # than cancelling it: "posted with a picture, which is now gone" and "never
+    # had one" are different articles, and how much the difference matters
+    # depends on how central the picture was -- which is the model's to learn,
+    # not ours to decide.
+    image_gone: bool = False
     has_media: bool = False
     label: Optional[float] = None  # user's vote, when known
     label_date: Optional[datetime] = None
@@ -81,20 +88,26 @@ class ItemFeatures:
         return max((ref - published).total_seconds() / 86400.0, 0.0)
 
 
+# Scalar side-features, ahead of the source and author buckets: post age, an
+# unknown-date flag, has-image, has-media, and image-gone.
+_AUX_SCALARS = 5
+
+
 def _aux_vector(item: ItemFeatures, now: datetime) -> np.ndarray:
     """Scalar side-features shared by the parametric models."""
     age = item.age_days(now)
-    vec = np.zeros(4 + SOURCE_BUCKETS + AUTHOR_BUCKETS)
+    vec = np.zeros(_AUX_SCALARS + SOURCE_BUCKETS + AUTHOR_BUCKETS)
     vec[0] = np.log1p(age) if age is not None else 0.0
     vec[1] = 1.0 if age is None else 0.0  # unknown-date flag
     vec[2] = 1.0 if item.has_image else 0.0
     vec[3] = 1.0 if item.has_media else 0.0
+    vec[4] = 1.0 if item.image_gone else 0.0
     s = _bucket(item.source, SOURCE_BUCKETS)
     if s is not None:
-        vec[4 + s] = 1.0
+        vec[_AUX_SCALARS + s] = 1.0
     a = _bucket(item.author, AUTHOR_BUCKETS)
     if a is not None:
-        vec[4 + SOURCE_BUCKETS + a] = 1.0
+        vec[_AUX_SCALARS + SOURCE_BUCKETS + a] = 1.0
     return vec
 
 

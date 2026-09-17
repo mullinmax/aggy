@@ -84,7 +84,8 @@ const TASK_TRIGGERS = [
     label: 'Retry failed images',
     help: 'Clear the failures on every picture the embedder could not handle, '
       + 'including the ones that ran out of attempts and left the queue, then '
-      + 'embed them again.',
+      + 'embed them again. Pictures whose host says they are gone are left '
+      + 'alone; a re-scrape is what revives those.',
   },
   {
     task: 'ingest_sources',

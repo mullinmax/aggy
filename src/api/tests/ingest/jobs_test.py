@@ -124,7 +124,7 @@ def _embed_state(url_hash: str) -> dict:
     with get_db_con() as cur:
         cur.execute(
             "SELECT image_embed_attempts, image_embed_failed_at, "
-            "image_embed_error FROM items WHERE url_hash = %s",
+            "image_embed_error, image_gone_at FROM items WHERE url_hash = %s",
             (url_hash,),
         )
         return dict(cur.fetchone())
@@ -514,3 +514,124 @@ def test_a_backfill_that_embedded_nothing_is_recorded_as_a_failure(
     assert len(runs) == 1
     assert runs[0]["status"] == STATUS_ERROR
     assert "0 embedded, 1 failed" in runs[0]["detail"]
+
+
+def _gone_error(status: int) -> ImageEmbedError:
+    return ImageEmbedError(f"could not fetch image: HTTP {status}", [status])
+
+
+def test_a_picture_the_host_says_is_gone_is_retired_at_once(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """410 means the resource is gone and is not coming back. Retrying it is a
+    request made to be told the same thing, five more times, over a week."""
+
+    def fail(image_url):
+        raise _gone_error(410)
+
+    monkeypatch.setattr(jobs, "embed_image", fail)
+
+    jobs.backfill_image_embeddings_job()
+
+    state = _embed_state(existing_item_strict.url_hash)
+    assert state["image_gone_at"] is not None
+
+    # and it is not offered again, however long the backoff has had to elapse
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_failed_at = NOW() - interval '30 days' "
+            "WHERE url_hash = %s",
+            (existing_item_strict.url_hash,),
+        )
+    tried = []
+    monkeypatch.setattr(jobs, "embed_image", lambda url: tried.append(url))
+
+    jobs.backfill_image_embeddings_job()
+
+    assert tried == []
+
+
+def test_a_missing_picture_gets_one_more_chance_before_being_retired(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """A 404 is usually an expired signed preview or a deleted upload, but it is
+    also what a CDN says mid-deploy -- worth asking twice before believing."""
+
+    def fail(image_url):
+        raise _gone_error(404)
+
+    monkeypatch.setattr(jobs, "embed_image", fail)
+
+    jobs.backfill_image_embeddings_job()
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is None
+
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_failed_at = NOW() - interval '30 days' "
+            "WHERE url_hash = %s",
+            (existing_item_strict.url_hash,),
+        )
+
+    jobs.backfill_image_embeddings_job()
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is not None
+
+
+def test_an_ordinary_failure_keeps_its_full_budget(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """A 403, a timeout or a refusal page is the kind of thing that fixes
+    itself, so nothing about it is treated as final."""
+
+    def fail(image_url):
+        raise ImageEmbedError("could not fetch image: HTTP 403", [403])
+
+    monkeypatch.setattr(jobs, "embed_image", fail)
+
+    jobs.backfill_image_embeddings_job()
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_failed_at = NOW() - interval '30 days' "
+            "WHERE url_hash = %s",
+            (existing_item_strict.url_hash,),
+        )
+    jobs.backfill_image_embeddings_job()
+
+    state = _embed_state(existing_item_strict.url_hash)
+    assert state["image_embed_attempts"] == 2
+    assert state["image_gone_at"] is None
+
+
+def test_a_picture_gone_from_one_url_but_not_another_is_not_retired(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """Reddit previews are tried signed and unsigned; one of them answering 410
+    while the other times out says nothing final about the picture."""
+
+    def fail(image_url):
+        raise ImageEmbedError("could not fetch image: two tries", [410, 403])
+
+    monkeypatch.setattr(jobs, "embed_image", fail)
+
+    jobs.backfill_image_embeddings_job()
+
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is None
+
+
+def test_a_re_scrape_with_a_new_picture_revives_a_retired_item(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """Retirement is about one URL, not about the article: a new picture is a
+    new question, and the only way back for an item that was written off."""
+    from db.item import reset_image_embed_attempts
+
+    monkeypatch.setattr(
+        jobs, "embed_image", lambda url: (_ for _ in ()).throw(_gone_error(410))
+    )
+    jobs.backfill_image_embeddings_job()
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is not None
+
+    reset_image_embed_attempts(existing_item_strict.url_hash)
+
+    state = _embed_state(existing_item_strict.url_hash)
+    assert state["image_gone_at"] is None
+    assert state["image_embed_attempts"] == 0

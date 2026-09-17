@@ -465,12 +465,29 @@ def download_embedding_model_job() -> None:
         ollama.pull(embedding_model)
 
 
+def _image_is_gone(error: ImageEmbedError, attempts_so_far: int) -> bool:
+    """Whether to stop asking for this picture entirely.
+
+    A 410 is the host saying the resource is gone, which it is not going to
+    take back: believe it the first time. A 404 usually means the same thing --
+    an expired signed preview, a deleted upload -- but is also what a CDN says
+    mid-deploy, so it gets one more attempt before we treat it as final.
+
+    Everything else keeps its full budget of retries: a 403, a timeout or a
+    refusal page is the kind of thing that fixes itself.
+    """
+    if error.image_is_gone:
+        return True
+    return error.image_is_missing and attempts_so_far >= 1
+
+
 def _backfill_one_image(row: dict) -> tuple:
     """Embed one candidate row's preview image.
 
-    Returns ``(embedding_or_None, error_or_None)``. Runs on a worker thread and
-    takes no database connection of its own — results are written by the caller
-    — so a wide fan-out can't drain the pool.
+    Returns ``(embedding_or_None, error_or_None, image_gone)``, the last saying
+    the picture is gone for good rather than failing for now. Runs on a worker
+    thread and takes no database connection of its own — results are written by
+    the caller — so a wide fan-out can't drain the pool.
     """
     try:
         image_url = embeddable_image_url(row["image_url"], row["content"], row["url"])
@@ -478,12 +495,12 @@ def _backfill_one_image(row: dict) -> tuple:
             # the candidate query matches "<img" anywhere in the content, which
             # a sanitized body can carry without a usable src; count it as a
             # failure so the row backs off instead of being re-picked each pass
-            return None, "no embeddable image url"
-        return embed_image(image_url), None
+            return None, "no embeddable image url", False
+        return embed_image(image_url), None, False
     except ImageEmbedError as e:
-        return None, str(e)
+        return None, str(e), _image_is_gone(e, row.get("image_embed_attempts", 0))
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}", False
 
 
 def _failure_summary(reasons: Counter) -> str:
@@ -555,27 +572,33 @@ def backfill_image_embeddings_job() -> None:
     run_id = start_run(KIND_IMAGE_EMBED_BACKFILL)
 
     embedded = 0
+    retired = 0
     reasons: Counter = Counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {pool.submit(_backfill_one_image, row): row for row in rows}
         for future in as_completed(futures):
             row = futures[future]
-            embedding, error = future.result()
+            embedding, error, image_gone = future.result()
             try:
                 if embedding is not None:
                     save_image_embedding(row["url_hash"], model_name, embedding)
                     embedded += 1
                 else:
-                    record_image_embed_failure(row["url_hash"], error)
+                    record_image_embed_failure(row["url_hash"], error, image_gone)
                     reasons[_failure_reason(error)] += 1
+                    retired += image_gone
             except Exception as e:
                 logging.error(
                     f"Error recording image embedding result for {row['url']}: {e}"
                 )
 
     failed = sum(reasons.values())
-    summary = f"{embedded} embedded, {failed} failed" + (
-        f" ({_failure_summary(reasons)})" if failed else ""
+    summary = (
+        f"{embedded} embedded, {failed} failed"
+        # Retired items are the ones that will never be tried again, so the
+        # line says how many rather than leaving the count to drift silently.
+        + (f", {retired} gone for good" if retired else "")
+        + (f" ({_failure_summary(reasons)})" if failed else "")
     )
     logging.info(f"Image embedding backfill complete: {summary}")
     # A pass that embedded nothing at all is the interesting failure -- every

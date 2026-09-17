@@ -723,3 +723,37 @@ def test_sanitizing_resolves_protocol_relative_srcs(unique_item_strict):
     )
 
     assert 'src="https://cdn.example.com/a.jpg"' in item.content
+
+
+def test_an_image_served_under_a_generic_content_type_is_kept(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """Plenty of hosts serve pictures as "binary/octet-stream"; rejecting on the
+    header alone cost us images that embed perfectly well."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.headers = {"content-type": "binary/octet-stream"}
+    resp.content = b"\x89PNG\r\n\x1a\n" + b"rest of the file"
+    monkeypatch.setattr("db.item.httpx.get", MagicMock(return_value=resp))
+
+    assert ItemStrict._fetch_image_base64("https://example.com/a.png")
+
+
+def test_a_refusal_page_is_still_rejected_whatever_it_is_labelled(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """The bytes are trusted to accept a picture, never to wave one through:
+    an HTML notice is not an image however the host labels it."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.headers = {"content-type": "application/octet-stream"}
+    resp.content = b"<html>Forbidden</html>"
+    monkeypatch.setattr("db.item.httpx.get", MagicMock(return_value=resp))
+
+    with pytest.raises(ValueError, match="octet-stream"):
+        ItemStrict._fetch_image_base64("https://example.com/a.png")
+
+    # and a host that sends no content type at all says so in the reason
+    resp.headers = {}
+    with pytest.raises(ValueError, match="none"):
+        ItemStrict._fetch_image_base64("https://example.com/a.png")

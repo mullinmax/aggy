@@ -245,15 +245,23 @@ def run_task_now(
         # Done here rather than in the background task so the answer can say
         # how much work was just re-queued -- it is one UPDATE, and a person
         # pressing a button deserves a number back.
-        requeued = reset_failed_image_embeds()
+        requeued, gone = reset_failed_image_embeds()
         background_tasks.add_task(backfill_image_embeddings_job)
+        # The "gone" count is said out loud rather than quietly skipped: a
+        # button that re-queued nothing and a library whose pictures no longer
+        # exist look identical otherwise.
+        gone_note = (
+            f" {gone} more will not be retried: their hosts say the picture is gone."
+            if gone
+            else ""
+        )
         detail = (
             f"Re-queued {requeued} item(s) whose image embedding failed; "
             "embedding them now."
             if requeued
             else "No failed image embeddings to retry; "
             "embedding anything still missing."
-        )
+        ) + gone_note
     elif task == "duplicate_detection":
         background_tasks.add_task(duplicate_detection_job)
         detail = "Checking for duplicate articles now."

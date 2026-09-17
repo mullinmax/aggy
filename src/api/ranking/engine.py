@@ -90,6 +90,7 @@ def _row_to_features(row) -> ItemFeatures:
         author=row.get("author"),
         date_published=row.get("date_published"),
         has_image=bool(row.get("image_url")),
+        image_gone=bool(row.get("image_gone_at")),
         has_media=has_media,
         label=_effective_label(row.get("vote"), list_added_at),
         # an unvoted-but-listed item is labelled as of when it was listed
@@ -102,6 +103,7 @@ def _row_to_features(row) -> ItemFeatures:
 # feed. So an upvote cast in one feed trains every feed the item appears in.
 _FEED_ITEMS_SQL = (
     "SELECT i.url_hash, i.url, i.author, i.date_published, i.image_url, i.media, "
+    "i.image_gone_at, "
     "i.embeddings, i.image_embeddings, v.score AS vote, v.score_date AS vote_date, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"

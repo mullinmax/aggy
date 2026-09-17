@@ -6,7 +6,7 @@ import logging
 import dateparser
 import httpx
 from bleach import clean
-from typing import ClassVar, Optional, List, Dict
+from typing import ClassVar, Optional, List, Dict, Tuple
 import html
 import json
 import warnings
@@ -41,6 +41,36 @@ def _is_context_length_error(error: Exception) -> bool:
     return any(marker in message for marker in _CONTEXT_LENGTH_ERROR_MARKERS)
 
 
+# What the first few bytes of an image file look like. Only the formats whose
+# signature is unambiguous: this decides whether to trust a picture a host
+# labelled as something else, and a guess that goes the wrong way sends a chunk
+# of HTML to the embedding service.
+_IMAGE_MAGIC = (
+    b"\xff\xd8\xff",  # JPEG
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"GIF87a",  # GIF
+    b"GIF89a",
+    b"BM",  # BMP
+    b"II*\x00",  # TIFF, little-endian
+    b"MM\x00*",  # TIFF, big-endian
+    b"\x00\x00\x01\x00",  # ICO
+)
+
+
+def _looks_like_an_image(raw: bytes) -> bool:
+    """Whether these bytes start like an image file.
+
+    Used to accept a picture whose host labelled it badly, never to reject one:
+    a format missing from this list still passes on its content type.
+    """
+    if raw.startswith(_IMAGE_MAGIC):
+        return True
+    # WebP and the ISO-BMFF family (AVIF, HEIC) carry their tag at an offset
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return True
+    return raw[4:8] == b"ftyp"
+
+
 def _fetch_error_detail(error: Exception) -> str:
     """Short, log-friendly description of a failed image fetch."""
     if isinstance(error, httpx.HTTPStatusError):
@@ -56,7 +86,29 @@ class ImageEmbedError(Exception):
     isn't an image, or the embedding service rejected/failed on it. The message
     is short enough to store on the row so a stuck item can be diagnosed
     without digging through logs.
+
+    ``statuses`` carries the HTTP status of each candidate URL that answered
+    with one, so a caller can tell "this host is having a bad day" from "the
+    host says the picture is gone" without parsing the message back apart.
     """
+
+    def __init__(self, message: str, statuses: Optional[List[int]] = None):
+        super().__init__(message)
+        self.statuses = tuple(statuses or ())
+
+    @property
+    def image_is_gone(self) -> bool:
+        """Every candidate URL answered 410 Gone: the host is saying this
+        picture is not coming back, and no number of retries changes that."""
+        return bool(self.statuses) and all(s == 410 for s in self.statuses)
+
+    @property
+    def image_is_missing(self) -> bool:
+        """Every candidate URL answered 404 or 410. Usually permanent -- an
+        expired signed preview, a deleted upload -- but a 404 can also be a CDN
+        mid-deploy, so this one is worth a second attempt before believing it.
+        """
+        return bool(self.statuses) and all(s in (404, 410) for s in self.statuses)
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -438,13 +490,21 @@ class ItemBase(AggyBaseModel):
             headers=ItemBase._image_fetch_headers(),
         )
         response.raise_for_status()
-        # a host that refuses the request often answers 200 with an HTML
+        # A host that refuses the request often answers 200 with an HTML
         # notice; sending that on would fail in the embedding service with a
-        # far less obvious error
+        # far less obvious error. The header alone is not enough to tell those
+        # apart from a real picture, though: plenty of hosts serve images as
+        # "application/octet-stream" (or mislabel them outright), and rejecting
+        # those cost us pictures that would have embedded perfectly well. Trust
+        # what the bytes say first, and fall back to the header only when they
+        # are a format we don't recognise.
+        raw = response.content
         content_type = response.headers.get("content-type", "").split(";")[0].strip()
-        if content_type and not content_type.startswith("image/"):
-            raise ValueError(f"expected an image, got content-type '{content_type}'")
-        return base64.b64encode(response.content).decode("ascii")
+        if not _looks_like_an_image(raw) and not content_type.startswith("image/"):
+            raise ValueError(
+                f"expected an image, got content-type '{content_type or 'none'}'"
+            )
+        return base64.b64encode(raw).decode("ascii")
 
     def add_image_embedding(self, model_name: str, force_refresh=False) -> None:
         """Embed the item's preview image via the CLIP image-embedding service
@@ -629,15 +689,20 @@ def embed_image(image_url: str) -> List[float]:
             raise ImageEmbedError(f"not a usable image url: {image_url[:100]}")
 
         failures = []
+        statuses = []
         for candidate in candidates:
             try:
                 image_base64 = ItemBase._fetch_image_base64(candidate)
                 break
             except Exception as e:
                 failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+                if isinstance(e, httpx.HTTPStatusError):
+                    statuses.append(e.response.status_code)
 
         if image_base64 is None:
-            raise ImageEmbedError(f"could not fetch image: {'; '.join(failures)}")
+            raise ImageEmbedError(
+                f"could not fetch image: {'; '.join(failures)}", statuses
+            )
 
     host = config.get("IMAGE_EMBED_HOST", None)
     port = config.get_int("IMAGE_EMBED_PORT")
@@ -675,11 +740,12 @@ _MAX_STORED_IMAGE_EMBED_ERROR = 500
 # within a tier the newest go first, since those are what the recommender is
 # about to rank.
 _BACKFILL_CANDIDATES_SQL = """
-SELECT url_hash, url, image_url, content
+SELECT url_hash, url, image_url, content, image_embed_attempts
 FROM items
 WHERE (image_url IS NOT NULL OR content ILIKE '%%<img%%')
   AND (image_embeddings IS NULL OR NOT jsonb_exists(image_embeddings, %(model)s))
   AND image_embed_attempts < %(max_attempts)s
+  AND image_gone_at IS NULL
   AND (
         image_embed_failed_at IS NULL
         OR image_embed_failed_at <= NOW() - make_interval(secs =>
@@ -737,16 +803,26 @@ def save_image_embedding(
         )
 
 
-def record_image_embed_failure(url_hash: str, error: str) -> None:
-    """Count a failed image-embedding attempt so the item backs off."""
+def record_image_embed_failure(
+    url_hash: str, error: str, image_gone: bool = False
+) -> None:
+    """Count a failed image-embedding attempt so the item backs off.
+
+    ``image_gone`` retires the item instead: the host said the picture is not
+    there, so the remaining attempts would each be a request made to be told
+    the same thing. The stamp is also what the recommender reads to know this
+    article's picture went away (see :func:`ranking.engine`), so it is a fact
+    worth recording rather than a queue flag.
+    """
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET "
             "image_embed_attempts = image_embed_attempts + 1, "
             "image_embed_failed_at = NOW(), "
-            "image_embed_error = %s "
+            "image_embed_error = %s, "
+            "image_gone_at = CASE WHEN %s THEN NOW() ELSE image_gone_at END "
             "WHERE url_hash = %s",
-            (error[:_MAX_STORED_IMAGE_EMBED_ERROR], url_hash),
+            (error[:_MAX_STORED_IMAGE_EMBED_ERROR], image_gone, url_hash),
         )
 
 
@@ -755,36 +831,52 @@ def reset_image_embed_attempts(url_hash: str) -> None:
 
     Called when a re-scrape turns up a different preview image: the old URL's
     failures say nothing about the new one, and without this an item that
-    exhausted its attempts would never be tried again even after the thing that
-    was broken about it got fixed.
+    exhausted its attempts -- or was retired because the old picture was gone
+    -- would never be tried again even after the thing that was broken about it
+    got fixed. This is also the only route back for a retired item, which is
+    why it clears the stamp rather than leaving it to be reasoned about.
     """
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET image_embed_attempts = 0, "
-            "image_embed_failed_at = NULL, image_embed_error = NULL "
-            "WHERE url_hash = %s AND image_embed_attempts > 0",
+            "image_embed_failed_at = NULL, image_embed_error = NULL, "
+            "image_gone_at = NULL "
+            "WHERE url_hash = %s "
+            "AND (image_embed_attempts > 0 OR image_gone_at IS NOT NULL)",
             (url_hash,),
         )
 
 
-def reset_failed_image_embeds() -> int:
-    """Give every item whose image embedding failed a fresh retry budget.
+def reset_failed_image_embeds() -> Tuple[int, int]:
+    """Give items whose image embedding failed a fresh retry budget.
 
     The backfill backs a failing item off and eventually drops it from the
-    queue for good, which is right for a picture that is simply gone -- and
-    wrong the moment the thing that was broken gets fixed, whether that is a
-    bug in how we built the URL, an image host that was down for a day, or the
-    embedding service itself being misconfigured. There is no way to tell those
-    apart from the row, so this is the manual answer: clear the failures and
-    let the backfill judge them again. Returns the number of items re-queued.
+    queue, which is right for a picture that is simply gone -- and wrong the
+    moment the thing that was broken gets fixed, whether that is a bug in how
+    we built the URL, an image host that was down for a day, or the embedding
+    service itself being misconfigured. Nothing on the row tells those apart,
+    so this is the manual answer: clear the failures and let the backfill judge
+    them again.
+
+    Items whose host said the picture is gone are left alone. Re-queueing those
+    is a request made to be told the same thing, several thousand times over;
+    the way back for one of them is a re-scrape turning up a different picture.
+
+    Returns ``(re-queued, left as gone)`` -- the second number is worth saying
+    out loud, because "nothing happened" and "those pictures no longer exist"
+    look identical from a button.
     """
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET image_embed_attempts = 0, "
             "image_embed_failed_at = NULL, image_embed_error = NULL "
-            "WHERE image_embed_attempts > 0"
+            "WHERE image_embed_attempts > 0 AND image_gone_at IS NULL"
         )
-        return cur.rowcount
+        requeued = cur.rowcount
+        cur.execute(
+            "SELECT COUNT(*) AS gone FROM items WHERE image_gone_at IS NOT NULL"
+        )
+        return requeued, cur.fetchone()["gone"]
 
 
 class ItemStrict(ItemBase):

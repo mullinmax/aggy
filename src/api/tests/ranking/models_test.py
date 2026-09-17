@@ -132,11 +132,15 @@ def test_image_embedding_is_a_distinct_feature():
     model.fit(items)
     same_text = np.array([0.3, 0.3])
     liked = ItemFeatures(
-        url_hash="cl", embedding=same_text, image_embedding=np.array([1.0, 0.0]),
+        url_hash="cl",
+        embedding=same_text,
+        image_embedding=np.array([1.0, 0.0]),
         has_image=True,
     )
     disliked = ItemFeatures(
-        url_hash="cd", embedding=same_text, image_embedding=np.array([-1.0, 0.0]),
+        url_hash="cd",
+        embedding=same_text,
+        image_embedding=np.array([-1.0, 0.0]),
         has_image=True,
     )
     scores, _ = model.predict([liked, disliked])
@@ -320,3 +324,46 @@ def test_age_days_uses_vote_date_for_labeled_items():
         label_date=published + timedelta(days=2),
     )
     assert item.age_days() == pytest.approx(2.0, abs=0.01)
+
+
+def test_a_removed_picture_is_a_feature_of_its_own():
+    """An article posted with a picture that has since been taken down is not
+    the article it was, and not the same as one that never had a picture. The
+    model can only learn how much that matters if the difference reaches it."""
+    items = []
+    for i in range(40):
+        gone = i % 2 == 0
+        items.append(
+            ItemFeatures(
+                url_hash=f"gone{i}",
+                embedding=np.array([0.3, 0.3]),  # constant text for everyone
+                has_image=True,
+                image_gone=gone,
+                # the only thing separating these articles is the dead picture
+                label=-1.0 if gone else 1.0,
+            )
+        )
+    model = RidgeModel()
+    model.fit(items)
+
+    same_text = np.array([0.3, 0.3])
+    intact = ItemFeatures(url_hash="a", embedding=same_text, has_image=True)
+    removed = ItemFeatures(
+        url_hash="b", embedding=same_text, has_image=True, image_gone=True
+    )
+    scores, _ = model.predict([intact, removed])
+    assert scores[0] > scores[1]
+
+
+def test_a_removed_picture_is_not_the_same_as_never_having_one():
+    """Kept alongside has-image rather than cancelling it: "posted with a
+    picture, which is gone" and "never had one" are different articles."""
+    text = np.array([0.3, 0.3])
+    never = ItemFeatures(url_hash="n", embedding=text, has_image=False)
+    removed = ItemFeatures(
+        url_hash="r", embedding=text, has_image=True, image_gone=True
+    )
+    from ranking.models import _aux_vector
+
+    now = datetime.now(timezone.utc)
+    assert not np.array_equal(_aux_vector(never, now), _aux_vector(removed, now))

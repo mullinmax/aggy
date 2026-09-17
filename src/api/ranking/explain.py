@@ -42,8 +42,10 @@ _STRONG_MULTIPLE = 1.3
 # Fields the model consumes, in display order. Each is scored by blanking it out
 # and re-evaluating, so text and image are measured independently. Entries are:
 #   (field id, label, {attr: null-value to blank}, what-is-scored blurb)
-# The image field blanks both its embedding and the has-image flag, so the whole
-# picture is removed rather than half of it.
+# The image field blanks its embedding, the has-image flag and the gone flag,
+# so the whole picture is removed rather than half of it -- an ablation that
+# left "the picture was taken down" behind would be measuring a fact about an
+# image the model was just told does not exist.
 _FIELDS = [
     (
         "text",
@@ -55,9 +57,10 @@ _FIELDS = [
     (
         "image",
         "Image",
-        {"image_embedding": None, "has_image": False},
+        {"image_embedding": None, "has_image": False, "image_gone": False},
         "The preview image — its embedding when a vision model is configured, "
-        "otherwise just whether one is present.",
+        "otherwise whether one is present, and whether it has since been taken "
+        "down.",
     ),
     (
         "source",

@@ -218,6 +218,38 @@ def test_retrying_images_clears_the_failures_and_queues_the_pass(
     assert row["image_embed_error"] is None
 
 
+def test_retrying_images_leaves_pictures_the_host_says_are_gone(
+    client,
+    existing_user,
+    existing_feed,
+    token,
+    no_real_jobs,
+    image_embed_service_configured,
+):
+    """Re-queueing those is a request made to be told the same thing, several
+    thousand times over -- and the answer says so rather than silently
+    skipping them."""
+    from db.base import get_db_con
+
+    item = _failed_image_item(existing_feed, "https://example.com/gone")
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_gone_at = NOW() WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+
+    body = _run(client, token, "image_embed_retry").json()
+
+    assert body["started"] is True
+    assert "1 more will not be retried" in body["detail"]
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT image_embed_attempts FROM items WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+        assert cur.fetchone()["image_embed_attempts"] == 5
+
+
 def test_a_pass_already_running_is_not_started_twice(
     client,
     existing_user,
