@@ -13,6 +13,8 @@ from route_models.item import (
     DuplicateMemberResponse,
     ItemDuplicatesResponse,
     ItemResponse,
+    RelatedItemResponse,
+    RelatedItemsResponse,
 )
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.ranking import (
@@ -343,6 +345,7 @@ def get_item_explanation(
             has_image=p.has_image,
             has_media=p.has_media,
             image_embedded=p.image_embedded,
+            voted_neighbors=p.voted_neighbors,
         )
 
     return ItemExplanationResponse(
@@ -404,6 +407,53 @@ def get_item_duplicates(
                 item_is_shown=index == 0,
             )
             for index, row in enumerate(rows)
+        ],
+    )
+
+
+@feed_router.get(
+    "/related_items",
+    summary="The articles in this feed most like a given one",
+    response_model=RelatedItemsResponse,
+)
+def get_related_items(
+    feed_name_hash: str,
+    item_url_hash: str,
+    limit: int = Query(
+        5,
+        ge=1,
+        le=25,
+        description="How many related articles to return, most similar first.",
+    ),
+    user: User = Depends(authenticate),
+) -> RelatedItemsResponse:
+    """What else in this feed is about the same thing, read out of the
+    nearest-neighbour graph.
+
+    Other copies of the same story are left out: those are what the duplicate
+    badge stands for, and repeating them here would fill the rail with the
+    article the reader already has open.
+
+    An empty list is a normal answer, not an error -- an article ingested
+    minutes ago has not been linked into the graph yet, and one in a feed of
+    two articles has nothing much to be near.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    return RelatedItemsResponse(
+        item_hash=item_url_hash,
+        related=[
+            RelatedItemResponse.from_item(
+                item,
+                meta["similarity"],
+                source_name=meta["source_name"],
+                source_color=meta["source_color"],
+                user_score=meta["user_score"],
+                is_read=meta["is_read"],
+                in_list=meta["in_list"],
+                predicted_score=meta["predicted_score"],
+                predicted_confidence=meta["predicted_confidence"],
+            )
+            for item, meta in feed.related_items(item_url_hash, limit)
         ],
     )
 

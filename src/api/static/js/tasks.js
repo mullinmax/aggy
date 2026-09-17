@@ -54,6 +54,10 @@ const TASK_KIND_META = {
     label: 'Image embedding',
     help: 'Embedding preview pictures the recommender has not seen yet',
   },
+  neighbor_graph: {
+    label: 'Similarity linking',
+    help: 'Linking each article to the ones most like it in the same feed',
+  },
 };
 
 // The canonical display order, and the one kind the lane subtitle needs to name
@@ -98,6 +102,14 @@ const TASK_TRIGGERS = [
     label: 'Find duplicates',
     help: 'Re-group articles that reach you as the same story under different '
       + 'URLs.',
+  },
+  {
+    task: 'neighbor_graph',
+    label: 'Link similar articles',
+    help: 'Work through the articles waiting to be linked to the ones most '
+      + 'like them. These links are what duplicate detection walks, what the '
+      + 'recommender reads your neighbouring votes from, and what the reader '
+      + 'shows beside an article.',
   },
   {
     task: 'rescrape_sources',

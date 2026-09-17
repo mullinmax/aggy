@@ -26,7 +26,7 @@ When Aggy finds new content, it analyzes metadata and determines how relevant it
 
 ### Understanding your preferences
 
-Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide feedback, Aggy fine-tunes your feed so you get more of what you love without relying on generic algorithms or trends. Both the article **text** (via Ollama) and its **preview image** (via a bundled CLIP service, `aggy-image-embed`) are embedded and scored as separate signals.
+Aggy uses **content embeddings** to understand the types of content you enjoy. As you browse, like, filter, or provide feedback, Aggy fine-tunes your feed so you get more of what you love without relying on generic algorithms or trends. Both the article **text** (via Ollama) and its **preview image** (via a bundled CLIP service, `aggy-image-embed`) are embedded and scored as separate signals, alongside how you voted on the articles nearest to it.
 
 ## Features
 
@@ -38,13 +38,14 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 - **Bulk subscription import** from Reddit, YouTube, Bluesky, and any OPML export (Feedly, Inoreader, podcast apps), with per-source feed assignment
 - **[Browser extension](./src/extension)** (Chrome/Chromium): from the page you're on, save it into a feed as an article — with an optional up- or downvote — or start following the site. It asks the instance how that page is best read (its subreddit, its channel, a feed the page advertises, a template, or a scraped feed as the fallback) and previews the items before anything is created
 - **Embedding generation** for text to improve content relevance
+- **Duplicate post detection**: the same article reaching you from several sources is collapsed to whichever copy the model rates highest. Two signals find them - a canonical URL (the same link with different tracking parameters, an AMP rendition, a news redirect) and the article's own text, so the story a second outlet rewrote is caught too
+- **Related articles**: every article is linked to the few most like it in the same feed, shown beside it while you read. The links are found by walking a graph of those same links rather than by comparing against the whole feed, which is also what the duplicate check and the recommender read
 
 ### In the works:
 
 - **URL remapping** (e.g., YouTube to [Invidious](https://invidious.io/))
 - **Embedding generation for images**
 - **User feedback-based model training** (Aggy gets smarter with your input)
-- **Duplicate post detection** (Recognizes similar content across different sources and only shows the best)
 - **Alternate sorting options** (Best, Worst, Newest, Oldest)
 - **Recommendation transparency** (Learn why a piece of content was recommended to you)
 - **Semantic filters** (E.g., hide political content)

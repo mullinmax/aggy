@@ -86,6 +86,14 @@ _FIELDS = [
         {"has_media": False},
         "Whether the article has playable video or audio attached.",
     ),
+    (
+        "similar",
+        "Similar articles",
+        {"neighbors": ()},
+        "How you voted on the articles nearest to this one in the feed. Only "
+        "your real votes count here, never the model's own guesses about "
+        "them.",
+    ),
 ]
 
 
@@ -105,6 +113,10 @@ class FieldPreview:
     # True when this article's image is scored by a real vision embedding, not
     # just the has-image presence flag.
     image_embedded: bool
+    # How many of this article's nearest neighbours the user has actually voted
+    # on. Zero means the "Similar articles" field had nothing to say, which is
+    # a different thing from the model ignoring it.
+    voted_neighbors: int
 
 
 @dataclass
@@ -245,6 +257,10 @@ def explain_item(
     if model is None:
         return None
     model.fit(labeled)
+    # The votes the model was fitted on, which is exactly the set the neighbour
+    # field is allowed to read -- so the preview's count matches what was
+    # actually scored rather than every vote in the feed.
+    voted_hashes = {f.url_hash for f in labeled}
 
     # score the article as-of now (not vote time)
     target = replace(target, label_date=None)
@@ -260,6 +276,11 @@ def explain_item(
         has_image=target.has_image,
         has_media=target.has_media,
         image_embedded=target.image_embedding is not None,
+        voted_neighbors=sum(
+            1
+            for neighbor_hash, _sim in target.neighbors
+            if neighbor_hash in voted_hashes
+        ),
     )
 
     # Score every single-field ablation first, then assign marks from the whole

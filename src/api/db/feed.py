@@ -450,6 +450,105 @@ class Feed(ItemCollection):
             )
             return cur.fetchall()
 
+    def related_items(self, item_url_hash: str, limit: int = 5) -> List[tuple]:
+        """The articles in this feed most like the given one, best first.
+
+        Read straight out of the neighbour graph (see ``neighbors.graph``), in
+        both directions: an article's own list is its nearest, and the articles
+        that named *it* are near it too by the same measurement. Taking the
+        higher similarity when both directions hold an edge is not arbitrary --
+        cosine is symmetric, so they describe the same measurement, and the
+        larger of the two is the more recently computed one.
+
+        Members of the article's own duplicate group are left out. They are the
+        same story rather than a related one, the feed already collapses them,
+        and the badge on the card is where they belong.
+
+        Scoped to this feed as well as this account, because the graph is: the
+        question the reader is asking is what *else in this feed* is like the
+        thing they are reading.
+
+        Returns (item, meta) pairs like ``query_items_with_sources``, with the
+        measured similarity alongside the usual per-feed metadata.
+        """
+        from .item import ItemStrict
+
+        with self.db_con() as cur:
+            cur.execute(
+                "WITH edges AS ("
+                " SELECT neighbor_url_hash AS other, similarity FROM item_neighbors"
+                "  WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s"
+                " UNION ALL"
+                " SELECT item_url_hash AS other, similarity FROM item_neighbors"
+                "  WHERE user_hash = %s AND feed_hash = %s AND neighbor_url_hash = %s"
+                "), best AS ("
+                " SELECT other, MAX(similarity) AS similarity FROM edges GROUP BY other"
+                ") "
+                "SELECT i.*, b.similarity, "
+                "c.predicted_score, c.predicted_confidence, "
+                "uv.score AS user_score, st.is_read AS is_read, "
+                "EXISTS (SELECT 1 FROM list_items li"
+                " WHERE li.user_hash = c.user_hash"
+                "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
+                "src.name AS source_name, src.color AS source_color "
+                "FROM best b "
+                "JOIN items i ON i.url_hash = b.other "
+                "JOIN feed_items c ON c.item_url_hash = b.other"
+                " AND c.user_hash = %s AND c.feed_hash = %s "
+                "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+                " AND st.feed_hash = c.feed_hash"
+                " AND st.item_url_hash = c.item_url_hash "
+                "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
+                " AND uv.item_url_hash = c.item_url_hash "
+                "LEFT JOIN LATERAL ("
+                " SELECT s.name, s.color FROM source_items si"
+                " JOIN sources s ON s.user_hash = si.user_hash"
+                "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+                " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+                "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
+                # Not the article itself, not another copy of it, and not
+                # something the measurement puts on the far side of the sphere:
+                # a node can end up in a short link list for want of anything
+                # nearer, and "-80% alike" is not a related article.
+                "WHERE b.other <> %s AND b.similarity > 0 AND NOT EXISTS ("
+                " SELECT 1 FROM item_duplicates d"
+                " JOIN item_duplicates target ON target.user_hash = d.user_hash"
+                "  AND target.group_hash = d.group_hash"
+                " WHERE d.user_hash = %s AND d.item_url_hash = b.other"
+                "  AND d.group_hash IS NOT NULL AND target.item_url_hash = %s) "
+                "ORDER BY b.similarity DESC, i.url_hash LIMIT %s",
+                (
+                    self.user_hash,
+                    self.name_hash,
+                    item_url_hash,
+                    self.user_hash,
+                    self.name_hash,
+                    item_url_hash,
+                    self.user_hash,
+                    self.name_hash,
+                    item_url_hash,
+                    self.user_hash,
+                    item_url_hash,
+                    limit,
+                ),
+            )
+            rows = cur.fetchall()
+
+        results = []
+        for row in rows:
+            meta = {
+                "similarity": row.pop("similarity", None),
+                "source_name": row.pop("source_name", None),
+                "source_color": row.pop("source_color", None),
+                "user_score": row.pop("user_score", None),
+                "is_read": row.pop("is_read", None),
+                "in_list": row.pop("in_list", None),
+                "predicted_score": row.pop("predicted_score", None),
+                "predicted_confidence": row.pop("predicted_confidence", None),
+            }
+            results.append((ItemStrict.from_row(row), meta))
+        return results
+
     def stats(self) -> dict:
         """Dashboard summary numbers: total items, unvoted items, and the
         average posts per day over the last 30 days (or since the first

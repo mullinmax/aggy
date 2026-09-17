@@ -30,6 +30,7 @@ KIND_SOURCE_INGEST = "source_ingest"
 KIND_SOURCE_RESCRAPE = "source_rescrape"
 KIND_DUPLICATE_DETECTION = "duplicate_detection"
 KIND_IMAGE_EMBED_BACKFILL = "image_embed_backfill"
+KIND_NEIGHBOR_GRAPH = "neighbor_graph"
 
 # Ordered for display: the ones an account owns first, then the system-wide
 # passes it only observes.
@@ -40,12 +41,15 @@ TASK_KINDS = (
     KIND_SOURCE_RESCRAPE,
     KIND_DUPLICATE_DETECTION,
     KIND_IMAGE_EMBED_BACKFILL,
+    KIND_NEIGHBOR_GRAPH,
 )
 
 # Passes that work a global queue rather than one account's articles. Stored
 # with a NULL user_hash and labelled as system-wide when shown, because
 # claiming them as the viewer's own work on a per-account page would be a lie.
-SYSTEM_KINDS = frozenset({KIND_DUPLICATE_DETECTION, KIND_IMAGE_EMBED_BACKFILL})
+SYSTEM_KINDS = frozenset(
+    {KIND_DUPLICATE_DETECTION, KIND_IMAGE_EMBED_BACKFILL, KIND_NEIGHBOR_GRAPH}
+)
 
 STATUS_RUNNING = "running"
 STATUS_OK = "ok"

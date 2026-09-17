@@ -12,6 +12,15 @@ Which member of a group is *shown* is then a per-feed decision made at query
 time, because the prediction it is decided by lives on ``feed_items`` -- see
 ``Feed.query_items_with_sources``.
 
+Two signals build a group. The canonical URL is the certain one: two items
+whose URLs reduce to the same string are the same article. The text embedding
+is the interesting one -- it catches the story the second outlet rewrote, which
+shares no URL with the first -- and it is found by walking the nearest-neighbour
+graph (``neighbors.graph``) rather than by comparing the new article against
+every article the account holds. The walk is approximate, so the similarity
+required to collapse two articles is high enough that missing the true nearest
+neighbour by a little does not change the answer.
+
 Groups are a star, not a transitive closure. Each group has one representative
 and a new item joins only if it matches *that*, never merely some member.
 A~B and B~C does not make A~C, and taking the closure is exactly how a
@@ -28,20 +37,35 @@ changes as the model does.
 
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 
 from config import config
 from db.base import AggyBaseModel, get_db_con
 from db.propagation import inherit_votes_from_duplicates
 from db.task_run import KIND_DUPLICATE_DETECTION, task_run
+from neighbors.graph import (
+    ensure_linked,
+    neighbor_similarities,
+    similarity_between,
+)
 
 from .canonical import canonical_url
 
-# The signals a group can be built from. Only the canonical URL so far: two
-# items whose URLs reduce to the same string are the same article, which is as
-# close to certain as duplicate detection gets.
+# The signals a group can be built from, in the order they are tried.
+#
+# The canonical URL is as close to certain as duplicate detection gets: two
+# items whose URLs reduce to the same string are the same article, so its
+# confidence is a flat 1.0.
+#
+# The text embedding is the near-duplicate signal, and its confidence is the
+# measured cosine similarity of the two articles rather than a constant -- a
+# borderline collapse should be visible as a borderline number. It is tried
+# second because a URL match needs no vectors and no walk, and because when
+# both agree the certain one should be what the row records.
 SIGNAL_CANONICAL_URL = "canonical_url"
 CANONICAL_URL_CONFIDENCE = 1.0
+SIGNAL_TEXT_EMBEDDING = "text_embedding"
 
 
 @dataclass
@@ -94,23 +118,12 @@ def _window_params(published, window_days) -> tuple:
     return (published, window_days, published, window_days)
 
 
-def find_duplicate_group(cur, row: dict) -> Optional[DuplicateMatch]:
-    """The group this item belongs to for this account, or None if it is the
-    only copy the account holds.
-
-    ``row`` needs ``user_hash``, ``url_hash``, ``canonical_url_hash`` and
-    ``published``.
+def _canonical_match(cur, row: dict) -> Optional[DuplicateMatch]:
+    """The group this item joins on the strength of its canonical URL, if any.
 
     Prefers an established group's representative. Failing that, another of
     this account's items with the same canonical URL starts one, the earlier
     published of the two being the representative.
-
-    Every candidate query is scoped to ``user_hash``: an item another account
-    holds is not a candidate, however identical it is.
-
-    Pure lookup: the returned ``group_hash`` can name an item that has no group
-    yet, which is why the match carries every row to write rather than just the
-    joining one. ``record_membership`` does the writing.
     """
     canonical_hash = row.get("canonical_url_hash")
     if not canonical_hash:
@@ -120,18 +133,6 @@ def find_duplicate_group(cur, row: dict) -> Optional[DuplicateMatch]:
     window_days = config.get_int("DUPLICATE_WINDOW_DAYS")
     max_group = config.get_int("DUPLICATE_MAX_GROUP")
     window = _window_params(row["published"], window_days)
-
-    # Already in a group for this account. Worth checking because pairing two
-    # ungrouped items writes both of them, so an item can be grouped before the
-    # job reaches it -- and looking for a second group for it is how one set of
-    # duplicates ends up split across two.
-    cur.execute(
-        "SELECT 1 FROM item_duplicates "
-        "WHERE user_hash = %s AND item_url_hash = %s AND group_hash IS NOT NULL",
-        (user_hash, row["url_hash"]),
-    )
-    if cur.fetchone():
-        return None
 
     # An established group of this account's, matched against its
     # representative only. A NULL group_hash never satisfies the
@@ -190,6 +191,165 @@ def find_duplicate_group(cur, row: dict) -> Optional[DuplicateMatch]:
         confidence=CANONICAL_URL_CONFIDENCE,
         members=(pair[1][1],),
     )
+
+
+def _within_window(left, right, window_days: int) -> bool:
+    """Whether two publish dates are close enough to be the same story.
+
+    The same article republished months later is not a duplicate worth hiding.
+    An item with no date of either kind cannot be placed in time at all, so it
+    is not collapsed -- leaving it visible is the cheaper mistake.
+    """
+    if left is None or right is None:
+        return False
+    return abs(left - right) <= timedelta(days=window_days)
+
+
+# What the embedding signal needs to know about a candidate: when it was
+# published, whether it is already in a group, and how big that group is.
+_CANDIDATE_SQL = (
+    "SELECT i.url_hash, " + _PUBLISHED + " AS published, d.group_hash, ("
+    " SELECT COUNT(*) FROM item_duplicates m"
+    "  WHERE m.user_hash = %s AND m.group_hash = d.group_hash) AS group_size "
+    "FROM items i "
+    "LEFT JOIN item_duplicates d ON d.user_hash = %s AND d.item_url_hash = i.url_hash "
+    "WHERE i.url_hash = ANY(%s)"
+)
+
+
+def _candidate_info(cur, user_hash: str, url_hashes) -> dict:
+    url_hashes = [h for h in dict.fromkeys(url_hashes) if h]
+    if not url_hashes:
+        return {}
+    cur.execute(_CANDIDATE_SQL, (user_hash, user_hash, url_hashes))
+    return {row["url_hash"]: row for row in cur.fetchall()}
+
+
+def _embedding_match(cur, row: dict) -> Optional[DuplicateMatch]:
+    """The group this item joins on the strength of its content, if any.
+
+    The candidates are the item's neighbours in the graph -- the articles a
+    walk found nearest to it -- and only those above
+    ``DUPLICATE_SIMILARITY_THRESHOLD`` are considered at all. The item is
+    linked into the graph first if nobody has got to it yet, because waiting a
+    recheck cycle for a signal that is one walk away is a poor trade.
+
+    The star rule is what makes this more than "pick the nearest": joining an
+    established group means matching its *representative*, and the neighbour
+    that led us to the group is very often not it. So the representative is
+    measured directly, and a group whose representative is not close enough is
+    declined even though one of its members was.
+    """
+    threshold = config.get_float("DUPLICATE_SIMILARITY_THRESHOLD")
+    window_days = config.get_int("DUPLICATE_WINDOW_DAYS")
+    max_group = config.get_int("DUPLICATE_MAX_GROUP")
+    user_hash = row["user_hash"]
+    url_hash = row["url_hash"]
+
+    ensure_linked(cur, user_hash, url_hash)
+    candidates = [
+        (neighbor_hash, sim)
+        for neighbor_hash, sim in neighbor_similarities(cur, user_hash, url_hash)
+        if sim >= threshold
+    ]
+    if not candidates:
+        return None
+
+    infos = _candidate_info(cur, user_hash, [h for h, _ in candidates])
+    # Representatives are looked up in the same pass: a candidate's group is
+    # anchored by an item that need not be a neighbour of ours at all.
+    representatives = {
+        info["group_hash"] for info in infos.values() if info["group_hash"]
+    }
+    infos.update(_candidate_info(cur, user_hash, representatives - set(infos)))
+
+    for candidate_hash, sim in candidates:
+        info = infos.get(candidate_hash)
+        if info is None:
+            continue
+
+        group_hash = info["group_hash"]
+        if group_hash is None:
+            # Neither is in a group, so the two of them start one, anchored by
+            # the earlier published -- the same rule the URL signal uses, so
+            # the group's identity does not depend on processing order.
+            if not _within_window(row["published"], info["published"], window_days):
+                continue
+            pair = sorted(
+                (
+                    (row["published"], url_hash),
+                    (info["published"], candidate_hash),
+                ),
+            )
+            return DuplicateMatch(
+                user_hash=user_hash,
+                group_hash=pair[0][1],
+                signal=SIGNAL_TEXT_EMBEDDING,
+                confidence=sim,
+                members=(pair[1][1],),
+            )
+
+        representative = infos.get(group_hash)
+        if representative is None:
+            continue
+        if info["group_size"] >= max_group:
+            # the backstop: leave it visible rather than grow the group
+            continue
+        if not _within_window(
+            row["published"], representative["published"], window_days
+        ):
+            continue
+        # Measured against the representative, not inherited from the
+        # neighbour: A being near B and B being near C does not make A near C,
+        # and taking that closure is exactly how a mega-group happens.
+        representative_sim = (
+            sim
+            if group_hash == candidate_hash
+            else similarity_between(cur, url_hash, group_hash)
+        )
+        if representative_sim is None or representative_sim < threshold:
+            continue
+        return DuplicateMatch(
+            user_hash=user_hash,
+            group_hash=group_hash,
+            signal=SIGNAL_TEXT_EMBEDDING,
+            confidence=representative_sim,
+            members=(url_hash,),
+        )
+
+    return None
+
+
+def find_duplicate_group(cur, row: dict) -> Optional[DuplicateMatch]:
+    """The group this item belongs to for this account, or None if it is the
+    only copy the account holds.
+
+    ``row`` needs ``user_hash``, ``url_hash``, ``canonical_url_hash`` and
+    ``published``.
+
+    The canonical URL is tried first and the text embedding second, so a pair
+    that both signals would group is recorded under the certain one.
+
+    Every candidate query is scoped to ``user_hash``: an item another account
+    holds is not a candidate, however identical it is.
+
+    Pure lookup: the returned ``group_hash`` can name an item that has no group
+    yet, which is why the match carries every row to write rather than just the
+    joining one. ``record_membership`` does the writing.
+    """
+    # Already in a group for this account. Worth checking because pairing two
+    # ungrouped items writes both of them, so an item can be grouped before the
+    # job reaches it -- and looking for a second group for it is how one set of
+    # duplicates ends up split across two.
+    cur.execute(
+        "SELECT 1 FROM item_duplicates "
+        "WHERE user_hash = %s AND item_url_hash = %s AND group_hash IS NOT NULL",
+        (row["user_hash"], row["url_hash"]),
+    )
+    if cur.fetchone():
+        return None
+
+    return _canonical_match(cur, row) or _embedding_match(cur, row)
 
 
 def record_membership(cur, match: DuplicateMatch) -> None:

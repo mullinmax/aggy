@@ -8,6 +8,7 @@ from db.item import reset_failed_image_embeds
 from db.task_run import (
     KIND_DUPLICATE_DETECTION,
     KIND_IMAGE_EMBED_BACKFILL,
+    KIND_NEIGHBOR_GRAPH,
     KIND_SOURCE_INGEST,
     KIND_SOURCE_RESCRAPE,
     TASK_KINDS,
@@ -18,6 +19,7 @@ from db.task_run import (
 )
 from db.user import User
 from dedup.detect import duplicate_detection_job
+from neighbors.graph import neighbor_graph_job
 from ingest.jobs import (
     ALL_SOURCES_TARGET,
     backfill_image_embeddings_job,
@@ -172,6 +174,11 @@ _TRIGGERS = {
         "system": True,
         "label": "duplicate detection",
     },
+    "neighbor_graph": {
+        "kind": KIND_NEIGHBOR_GRAPH,
+        "system": True,
+        "label": "neighbour graph linking",
+    },
     "ingest_sources": {
         "kind": KIND_SOURCE_INGEST,
         "system": False,
@@ -265,6 +272,9 @@ def run_task_now(
     elif task == "duplicate_detection":
         background_tasks.add_task(duplicate_detection_job)
         detail = "Checking for duplicate articles now."
+    elif task == "neighbor_graph":
+        background_tasks.add_task(neighbor_graph_job)
+        detail = "Linking articles to the ones most like them now."
     elif task == "ingest_sources":
         background_tasks.add_task(ingest_user_sources, user.name_hash)
         detail = "Fetching new articles from every one of your sources now."

@@ -6,12 +6,19 @@ These cover what gets grouped, what deliberately does not, and which member
 survives the collapse.
 """
 
+import json
+import math
+from datetime import datetime, timezone
+
+import pytest
+
 from config import config
 from db.base import get_db_con
 from db.item import ItemLoose
 from db.item_state import ItemState
 from db.source import Source
 from dedup.detect import duplicate_detection_job
+from neighbors.graph import neighbor_graph_job
 from tests.testing_utils import build_api_request_args
 
 
@@ -976,3 +983,255 @@ def test_new_articles_are_examined_before_the_re_sweep(
             (existing_user.name_hash, fresh.url_hash),
         )
         assert cur.fetchone() is not None
+
+
+# ---------- the embedding signal ----------
+#
+# The canonical URL catches the same link arriving twice. This catches the
+# story the second outlet rewrote, which shares no URL with the first -- found
+# by walking the neighbour graph rather than by comparing the new article
+# against everything the account holds.
+
+
+def _embed(item, angle):
+    """Give an article a text embedding, as a point on the unit circle. Two
+    articles are as alike as their angles are close, which keeps the intent of
+    a test readable."""
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET embeddings = %s WHERE url_hash = %s",
+            (
+                json.dumps({"test-model": [math.cos(angle), math.sin(angle)]}),
+                item.url_hash,
+            ),
+        )
+    return item
+
+
+def test_the_same_story_from_two_outlets_is_grouped(existing_user, existing_feed):
+    """No shared URL, no shared canonical URL -- only the content says these
+    are the same piece."""
+    a = _embed(_add_item(existing_feed, "https://outlet-a.com/story"), 0.0)
+    b = _embed(_add_item(existing_feed, "https://outlet-b.com/different-slug"), 0.01)
+
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    group = _group_of(existing_user, a.url_hash)
+    assert group["group_hash"] == _group_of(existing_user, b.url_hash)["group_hash"]
+    assert group["signal"] == "text_embedding"
+    # the confidence is the measured similarity, not a constant -- a borderline
+    # collapse should read as a borderline number
+    assert group["confidence"] == pytest.approx(math.cos(0.01), abs=1e-6)
+
+
+def test_merely_related_articles_are_not_the_same_story(existing_user, existing_feed):
+    """Two pieces about the same subject are not two copies of one piece. The
+    threshold is high on purpose: an uncollapsed duplicate is a far cheaper
+    mistake than an article the reader never gets to see."""
+    a = _embed(_add_item(existing_feed, "https://outlet-a.com/story"), 0.0)
+    b = _embed(_add_item(existing_feed, "https://outlet-b.com/story"), 0.6)
+
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    assert _group_of(existing_user, a.url_hash) is None
+    assert _group_of(existing_user, b.url_hash) is None
+
+
+def test_joining_a_group_means_matching_its_representative(
+    existing_user, existing_feed, monkeypatch
+):
+    """The star rule, which is what keeps "near enough" from taking its
+    transitive closure: A being near B and B being near C does not make A near
+    C, and a chain of near-misses is exactly how a mega-group happens."""
+    monkeypatch.setattr(
+        config,
+        "get_float",
+        _with_float_override(config, "DUPLICATE_SIMILARITY_THRESHOLD", 0.99),
+    )
+    # a and b are close enough to group; c is close to b but not to a.
+    # Staged, because that is how articles actually arrive -- and because which
+    # of the three anchors the group decides the answer, so leaving it to the
+    # order rows happen to come back in would make this test mean nothing.
+    a = _embed(_add_item(existing_feed, "https://outlet-a.com/s"), 0.0)
+    b = _embed(_add_item(existing_feed, "https://outlet-b.com/s"), 0.10)
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    c = _embed(_add_item(existing_feed, "https://outlet-c.com/s"), 0.20)
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    a_group = _group_of(existing_user, a.url_hash)
+    b_group = _group_of(existing_user, b.url_hash)
+    assert a_group is not None and a_group["group_hash"] == b_group["group_hash"]
+    # c matched b, but b is not the group's anchor, and c is not near a
+    assert _group_of(existing_user, c.url_hash) is None
+
+
+def test_the_window_applies_to_the_embedding_signal_too(existing_user, existing_feed):
+    """The same story republished a year later is not a duplicate worth
+    hiding, however alike the two read."""
+    old = _embed(
+        _add_item(
+            existing_feed,
+            "https://outlet-a.com/story",
+            published=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        ),
+        0.0,
+    )
+    new = _embed(
+        _add_item(
+            existing_feed,
+            "https://outlet-b.com/story",
+            published=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+        0.001,
+    )
+
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    assert _group_of(existing_user, old.url_hash) is None
+    assert _group_of(existing_user, new.url_hash) is None
+
+
+def test_the_embedding_signal_never_crosses_accounts(existing_user, existing_feed):
+    """The boundary V21 drew. This signal compares article content, which is
+    exactly the comparison that must not cross accounts."""
+    mine = _embed(_add_item(existing_feed, "https://outlet-a.com/story"), 0.0)
+    _, their_feed = _second_account("embedding-stranger")
+    _embed(_add_item(their_feed, "https://outlet-b.com/story"), 0.001)
+
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    assert _group_of(existing_user, mine.url_hash) is None
+    assert _groups() == {}
+
+
+def test_a_url_match_is_recorded_over_an_embedding_match(existing_user, existing_feed):
+    """When both signals agree, the row should record the certain one."""
+    a = _embed(_add_item(existing_feed, "https://example.com/story?utm_source=a"), 0.0)
+    _embed(_add_item(existing_feed, "https://example.com/story?utm_source=b"), 0.001)
+
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    assert _group_of(existing_user, a.url_hash)["signal"] == "canonical_url"
+    assert _group_of(existing_user, a.url_hash)["confidence"] == 1.0
+
+
+def test_detection_places_an_article_the_graph_job_has_not_reached(
+    existing_user, existing_feed
+):
+    """Detection reaches an article on its own schedule, so it links the
+    article itself rather than waiting a recheck cycle for a signal that is one
+    walk away."""
+    a = _embed(_add_item(existing_feed, "https://outlet-a.com/story"), 0.0)
+    b = _embed(_add_item(existing_feed, "https://outlet-b.com/story"), 0.01)
+
+    # no neighbor_graph_job() at all
+    duplicate_detection_job()
+
+    assert (
+        _group_of(existing_user, a.url_hash)["group_hash"]
+        == _group_of(existing_user, b.url_hash)["group_hash"]
+    )
+
+
+def _with_float_override(cfg, key, value):
+    """config.get_float with one key forced, leaving every other key alone."""
+    real = cfg.get_float
+
+    def get_float(name, *args, **kwargs):
+        if name == key:
+            return value
+        return real(name, *args, **kwargs)
+
+    return get_float
+
+
+# ---------- related articles in the reader ----------
+
+
+def test_related_items_are_the_nearest_in_the_same_feed(
+    client, existing_user, existing_feed, token
+):
+    a = _embed(_add_item(existing_feed, "https://example.com/a", title="A"), 0.0)
+    near = _embed(_add_item(existing_feed, "https://example.com/b", title="B"), 0.4)
+    far = _embed(_add_item(existing_feed, "https://example.com/c", title="C"), 2.5)
+
+    neighbor_graph_job()
+
+    args = build_api_request_args(
+        path="/feed/related_items",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": a.url_hash,
+        },
+        token=token,
+    )
+    body = client.get(**args).json()
+
+    hashes = [r["item_hash"] for r in body["related"]]
+    assert hashes == [near.url_hash]
+    assert a.url_hash not in hashes
+    # far points the other way entirely; a short link list can still hold it,
+    # but it is not a related article
+    assert far.url_hash not in hashes
+    assert body["related"][0]["item_similarity"] == pytest.approx(
+        math.cos(0.4), abs=1e-6
+    )
+    # a whole item, so tapping one opens it in the reader without a round trip
+    assert body["related"][0]["item_title"] == "B"
+
+
+def test_related_items_leave_out_other_copies_of_the_same_story(
+    client, existing_user, existing_feed, token
+):
+    """Those are what the duplicate badge stands for. Repeating them in the
+    rail would fill it with the article the reader already has open."""
+    a = _embed(_add_item(existing_feed, "https://example.com/story?utm_source=a"), 0.0)
+    twin = _embed(
+        _add_item(existing_feed, "https://example.com/story?utm_source=b"), 0.001
+    )
+    other = _embed(_add_item(existing_feed, "https://example.com/other"), 0.5)
+
+    neighbor_graph_job()
+    duplicate_detection_job()
+
+    args = build_api_request_args(
+        path="/feed/related_items",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": a.url_hash,
+        },
+        token=token,
+    )
+    hashes = [r["item_hash"] for r in client.get(**args).json()["related"]]
+
+    assert twin.url_hash not in hashes
+    assert other.url_hash in hashes
+
+
+def test_related_items_are_empty_rather_than_an_error_before_linking(
+    client, existing_user, existing_feed, token
+):
+    """An article ingested minutes ago has not been linked yet, and a feed of
+    one article has nothing to be near. Neither is a fault."""
+    lonely = _embed(_add_item(existing_feed, "https://example.com/only"), 0.0)
+
+    args = build_api_request_args(
+        path="/feed/related_items",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": lonely.url_hash,
+        },
+        token=token,
+    )
+    response = client.get(**args)
+
+    assert response.status_code == 200
+    assert response.json()["related"] == []

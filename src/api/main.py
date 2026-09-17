@@ -49,6 +49,7 @@ from ingest.jobs import (
 )
 from ranking.engine import feed_ranking_job
 from dedup.detect import duplicate_detection_job
+from neighbors.graph import neighbor_graph_job
 from db.task_run import abandon_running_runs
 
 # Scheduler instance
@@ -168,6 +169,25 @@ async def app_lifespan(app: FastAPI):
         trigger="interval",
         seconds=60 * config.get_int("IMAGE_EMBED_BACKFILL_INTERVAL_MINUTES"),
         id="backfill_image_embeddings_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Link each article to the ones most like it, which is what duplicate
+    # detection walks, what the recommender reads a neighbour's votes from, and
+    # what the reader shows beside an article. Runs before duplicate detection
+    # on the same start-up tick and on a shorter interval, since detection is
+    # one of its readers -- though it does not depend on the ordering: an
+    # article detection reaches first is linked on demand. Progress lives on
+    # the rows themselves, so an overrun pass is skipped and coalesced rather
+    # than stacked.
+    scheduler.add_job(
+        func=neighbor_graph_job,
+        trigger="interval",
+        seconds=60 * config.get_int("NEIGHBOR_GRAPH_INTERVAL_MINUTES"),
+        id="neighbor_graph_job",
         replace_existing=False,
         next_run_time=datetime.now(),
         max_instances=1,

@@ -140,6 +140,11 @@ class AggySDK {
     return this._request("GET", "/feed/ranking_stats", { query: { feed_name_hash } });
   }
 
+  /** The articles in this feed most like a given one */
+  async feedRelatedItems({ feed_name_hash, item_url_hash, limit }) {
+    return this._request("GET", "/feed/related_items", { query: { feed_name_hash, item_url_hash, limit } });
+  }
+
   /** Rename a feed */
   async feedRename({ feed_name_hash, new_name }) {
     return this._request("POST", "/feed/rename", { query: { feed_name_hash, new_name } });

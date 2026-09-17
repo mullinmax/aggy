@@ -82,6 +82,18 @@ KNOWN_CONFIG_VALUES = [
     "DUPLICATE_WINDOW_DAYS",
     "DUPLICATE_MAX_GROUP",
     "DUPLICATE_RECHECK_DAYS",
+    "DUPLICATE_SIMILARITY_THRESHOLD",
+    # The nearest-neighbour graph over each feed (src/api/neighbors), which
+    # the embedding duplicate signal, the recommender and the reader's
+    # related-articles rail are all read out of.
+    "NEIGHBOR_GRAPH_INTERVAL_MINUTES",
+    "NEIGHBOR_GRAPH_BATCH_SIZE",
+    "NEIGHBOR_LINKS",
+    "NEIGHBOR_SEARCH_WIDTH",
+    "NEIGHBOR_SEARCH_MAX_HOPS",
+    "NEIGHBOR_ENTRY_POINTS",
+    "NEIGHBOR_MAX_FANOUT",
+    "NEIGHBOR_RELINK_DAYS",
     # How long the background-task run history behind the tasks page is kept.
     "TASK_RUN_HISTORY_DAYS",
     "DUPLICATE_COLLAPSE_DEFAULT",
@@ -212,6 +224,41 @@ DEFAULT_CONFIG = {
     # once the never-examined backlog is clear, so a busy install always spends
     # its budget on new articles first.
     "DUPLICATE_RECHECK_DAYS": 3,
+    # How alike two articles' text embeddings must be before the graph walk
+    # calls them the same story. Deliberately high: the walk is approximate, so
+    # a threshold that admits near-misses would collapse articles that merely
+    # share a subject, and a wrong collapse hides an article the reader never
+    # gets to see. An uncollapsed duplicate is the cheaper mistake, which is the
+    # same bias the canonical-URL signal has.
+    "DUPLICATE_SIMILARITY_THRESHOLD": 0.93,
+    # The neighbour graph. Nodes are linked a batch at a time on this interval,
+    # so an install with a large backlog builds its graph over several passes
+    # rather than one long one.
+    "NEIGHBOR_GRAPH_INTERVAL_MINUTES": 10,
+    "NEIGHBOR_GRAPH_BATCH_SIZE": 300,
+    # How many nearest articles each one records. Five is enough to walk on and
+    # enough to show beside an article; the cost of more is paid on every
+    # ingest, in edges written and vectors fetched per hop.
+    "NEIGHBOR_LINKS": 5,
+    # How many candidates a walk carries. Above NEIGHBOR_LINKS it keeps
+    # runners-up alive as places to explore from, which is what lets a walk
+    # cross a small ridge instead of stopping on top of it.
+    "NEIGHBOR_SEARCH_WIDTH": 12,
+    # A hard ceiling on expansions per walk, so an oddly shaped graph cannot
+    # turn one article's placement into a scan of the feed.
+    "NEIGHBOR_SEARCH_MAX_HOPS": 48,
+    # Where each walk starts: half the most recently linked articles (feeds
+    # arrive in topical bursts) and half at random (so the walk is not always
+    # exploring the same corner).
+    "NEIGHBOR_ENTRY_POINTS": 4,
+    # How many of the articles pointing *at* a node are followed when the walk
+    # expands it. A hub can be named by hundreds of others, and expanding all of
+    # them is the scan the graph exists to avoid.
+    "NEIGHBOR_MAX_FANOUT": 24,
+    # Every new article dirties the neighbours it displaced. Without a cooldown
+    # a busy feed would re-walk its popular nodes on every pass and never reach
+    # the backlog, so a node is re-walked at most this often.
+    "NEIGHBOR_RELINK_DAYS": 2,
     # One row per pass of every background job, so the tasks page can show how
     # often things run and how long they take. A week is enough to see a daily
     # rhythm; the rows are small but there is one per source per ingest cycle.
