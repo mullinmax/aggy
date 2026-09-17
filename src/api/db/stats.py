@@ -109,7 +109,7 @@ def base_domain(host: Optional[str]) -> str:
 # embedder can't have it" -- worth telling apart on a page whose whole job is
 # showing what the recommender is missing.
 _USER_ITEMS_CTE = """
-WITH user_items AS (
+WITH user_item_rows AS (
     SELECT DISTINCT ON (i.url_hash)
         i.url_hash,
         lower(split_part(regexp_replace(split_part(regexp_replace(
@@ -131,13 +131,26 @@ WITH user_items AS (
         length(regexp_replace(COALESCE(i.content, ''), '<[^>]*>', '', 'g'))
             AS content_chars,
         c.added_at,
-        uv.score AS user_score
+        uv.score AS user_score,
+        d.group_hash
     FROM feed_items c
     JOIN items i ON i.url_hash = c.item_url_hash
     LEFT JOIN user_item_votes uv
         ON uv.user_hash = c.user_hash AND uv.item_url_hash = c.item_url_hash
+    LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash
+        AND d.item_url_hash = i.url_hash AND d.group_hash IS NOT NULL
     WHERE c.user_hash = %s
     ORDER BY i.url_hash, c.added_at
+), user_items AS (
+    SELECT *,
+        -- A duplicate *for this user*: the group has to hold at least two of
+        -- the articles they actually have. Detection is global, so a group can
+        -- easily have members in nobody else's feeds, and counting those would
+        -- report duplicates the user cannot see. The NULL group_hash rows all
+        -- land in one partition, which is why the flag tests the hash too.
+        (group_hash IS NOT NULL
+            AND COUNT(*) OVER (PARTITION BY group_hash) > 1) AS has_duplicate
+    FROM user_item_rows
 )
 """
 
@@ -157,6 +170,7 @@ _COUNT_FIELDS = (
     "up_votes",
     "down_votes",
     "neutral_votes",
+    "in_duplicate_group",
 )
 
 _HOST_AGGREGATE_SQL = (
@@ -178,6 +192,7 @@ SELECT
     COUNT(*) FILTER (WHERE user_score > 0) AS up_votes,
     COUNT(*) FILTER (WHERE user_score < 0) AS down_votes,
     COUNT(*) FILTER (WHERE user_score = 0) AS neutral_votes,
+    COUNT(*) FILTER (WHERE has_duplicate) AS in_duplicate_group,
     SUM(content_chars) AS content_chars,
     MIN(added_at) AS first_added_at,
     MAX(added_at) AS last_added_at
@@ -285,6 +300,51 @@ def _summarize(domains: List[dict]) -> dict:
     return summary
 
 
+# Group-level duplicate numbers. These are deliberately not part of the
+# per-domain counts: a group's members are grouped by their *canonical* URL, so
+# the copies can arrive under different hosts (a publisher's own link and the
+# same story via a redirector), which means a group does not belong to one base
+# domain and its count cannot be folded up by adding domains together.
+#
+# Only groups where the user holds two or more copies count. Detection is
+# global, so a group routinely has members in nobody else's feeds, and counting
+# those would report duplicates the user cannot see.
+_DUPLICATE_GROUPS_SQL = """
+SELECT
+    COUNT(*) AS duplicate_groups,
+    COALESCE(SUM(copies), 0) AS duplicated_articles,
+    COALESCE(SUM(copies - 1), 0) AS redundant_articles,
+    COALESCE(MAX(copies), 0) AS largest_duplicate_group
+FROM (
+    SELECT d.group_hash, COUNT(DISTINCT c.item_url_hash) AS copies
+    FROM feed_items c
+    JOIN item_duplicates d ON d.user_hash = c.user_hash
+        AND d.item_url_hash = c.item_url_hash
+    WHERE c.user_hash = %s AND d.group_hash IS NOT NULL
+    GROUP BY d.group_hash
+    HAVING COUNT(DISTINCT c.item_url_hash) > 1
+) groups
+"""
+
+
+def duplicate_group_stats(user_hash: str) -> dict:
+    """How much of what this user has collected is the same content twice.
+
+    ``redundant_articles`` is the useful one: it is how many articles the feed
+    collapses away, which is the number that says whether duplicate detection
+    is earning its keep.
+    """
+    with get_db_con() as cur:
+        cur.execute(_DUPLICATE_GROUPS_SQL, (user_hash,))
+        row = cur.fetchone()
+    return {
+        "duplicate_groups": row["duplicate_groups"],
+        "duplicated_articles": row["duplicated_articles"],
+        "redundant_articles": row["redundant_articles"],
+        "largest_duplicate_group": row["largest_duplicate_group"],
+    }
+
+
 def article_timeline(user_hash: str, days: int) -> List[dict]:
     """Articles collected per day over the last ``days`` days.
 
@@ -318,7 +378,9 @@ def article_stats(user_hash: str, timeline_days: int = 30) -> dict:
     domain, and a daily collection timeline."""
     domains = domain_stats(user_hash)
     return {
-        "summary": _summarize(domains),
+        # the group-level duplicate numbers cannot be summed out of the domain
+        # rows (see _DUPLICATE_GROUPS_SQL), so they are queried in their own right
+        "summary": {**_summarize(domains), **duplicate_group_stats(user_hash)},
         "domains": domains,
         "timeline": article_timeline(user_hash, timeline_days),
     }

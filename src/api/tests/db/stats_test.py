@@ -212,3 +212,114 @@ def test_article_stats_with_no_articles(existing_user):
     assert stats["summary"]["total_articles"] == 0
     assert stats["summary"]["avg_content_chars"] is None
     assert [point["article_count"] for point in stats["timeline"]] == [0, 0, 0, 0]
+
+
+# ---------- duplicate counts ----------
+
+
+def test_duplicate_counts_are_scoped_to_what_the_user_holds(
+    existing_user, existing_feed
+):
+    """Detection is global, so a group routinely has members in other people's
+    feeds. Only the copies this user actually has may count, or the page reports
+    duplicates they cannot see."""
+    from db.feed import Feed
+    from db.user import User
+    from dedup.detect import duplicate_detection_job
+
+    add_item(existing_feed, "https://example.com/story?utm_source=mine")
+
+    # the second copy of the same story belongs to somebody else entirely
+    other = User(name="somebody-else")
+    other.set_password("password")
+    other.create()
+    other_feed = Feed(user_hash=other.name_hash, name="Theirs")
+    other_feed.create()
+    add_item(other_feed, "https://example.com/story?utm_source=theirs")
+
+    duplicate_detection_job()
+    summary = article_stats(existing_user.name_hash)["summary"]
+
+    # the two copies are one group, but only one of them is in this user's feed
+    assert summary["total_articles"] == 1
+    assert summary["in_duplicate_group"] == 0
+    assert summary["duplicate_groups"] == 0
+    assert summary["redundant_articles"] == 0
+
+
+def test_duplicate_counts_report_groups_and_redundancy(existing_user, existing_feed):
+    from dedup.detect import duplicate_detection_job
+
+    # one story collected three times over, one twice, and two singletons
+    for i in range(3):
+        add_item(existing_feed, f"https://example.com/big?utm_source=s{i}")
+    for i in range(2):
+        add_item(existing_feed, f"https://example.com/pair?utm_source=s{i}")
+    add_item(existing_feed, "https://example.com/alone")
+    add_item(existing_feed, "https://other.com/alone")
+
+    duplicate_detection_job()
+    summary = article_stats(existing_user.name_hash)["summary"]
+
+    assert summary["total_articles"] == 7
+    assert summary["duplicate_groups"] == 2
+    # every copy of a duplicated story...
+    assert summary["duplicated_articles"] == 5
+    assert summary["in_duplicate_group"] == 5
+    # ...minus the one the feed keeps showing for each
+    assert summary["redundant_articles"] == 3
+    assert summary["largest_duplicate_group"] == 3
+
+
+def test_duplicate_counts_appear_per_domain(existing_user, existing_feed):
+    """The per-article count folds up by domain like every other count."""
+    from dedup.detect import duplicate_detection_job
+
+    for i in range(2):
+        add_item(existing_feed, f"https://dupes.com/story?utm_source=s{i}")
+    add_item(existing_feed, "https://dupes.com/unique")
+    add_item(existing_feed, "https://clean.com/unique")
+
+    duplicate_detection_job()
+    rows = {row["domain"]: row for row in domain_stats(existing_user.name_hash)}
+
+    assert rows["dupes.com"]["article_count"] == 3
+    assert rows["dupes.com"]["in_duplicate_group"] == 2
+    assert rows["clean.com"]["in_duplicate_group"] == 0
+
+
+def test_a_group_spanning_hosts_counts_under_each(existing_user, existing_feed):
+    """Copies are grouped by canonical URL, so they can arrive under different
+    hosts. That is exactly why the group-level numbers are summary-only: this
+    group belongs to no single base domain."""
+    from dedup.detect import duplicate_detection_job
+
+    add_item(existing_feed, "https://publisher.com/piece")
+    add_item(
+        existing_feed,
+        "https://news.google.com/articles/x?url=https%3A%2F%2Fpublisher.com%2Fpiece",
+    )
+
+    duplicate_detection_job()
+    stats = article_stats(existing_user.name_hash)
+    rows = {row["domain"]: row for row in stats["domains"]}
+
+    assert rows["publisher.com"]["in_duplicate_group"] == 1
+    assert rows["google.com"]["in_duplicate_group"] == 1
+    # one group, not one per domain
+    assert stats["summary"]["duplicate_groups"] == 1
+    assert stats["summary"]["redundant_articles"] == 1
+
+
+def test_duplicate_counts_are_zero_before_detection_runs(existing_user, existing_feed):
+    """Detection is a background pass, so an article it has not reached yet is
+    simply not in a group. That must read as zero rather than breaking the page."""
+    for i in range(2):
+        add_item(existing_feed, f"https://example.com/story?utm_source=s{i}")
+
+    summary = article_stats(existing_user.name_hash)["summary"]
+
+    assert summary["total_articles"] == 2
+    assert summary["in_duplicate_group"] == 0
+    assert summary["duplicate_groups"] == 0
+    assert summary["largest_duplicate_group"] == 0

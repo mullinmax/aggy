@@ -75,6 +75,16 @@ KNOWN_CONFIG_VALUES = [
     # Comma-separated extra origins allowed to call the API cross-origin.
     # Browser-extension origins are always allowed; this is for anything else.
     "EXTRA_CORS_ORIGINS",
+    # Near-duplicate article detection (src/api/dedup). Every threshold is
+    # config so it can be tuned against a real corpus without a code change.
+    "DUPLICATE_DETECTION_INTERVAL_MINUTES",
+    "DUPLICATE_DETECTION_BATCH_SIZE",
+    "DUPLICATE_WINDOW_DAYS",
+    "DUPLICATE_MAX_GROUP",
+    "DUPLICATE_RECHECK_DAYS",
+    # How long the background-task run history behind the tasks page is kept.
+    "TASK_RUN_HISTORY_DAYS",
+    "DUPLICATE_COLLAPSE_DEFAULT",
 ]
 
 DEFAULT_CONFIG = {
@@ -180,6 +190,35 @@ DEFAULT_CONFIG = {
     # are pruned to this window.
     "SOURCE_ATTEMPT_HISTORY_DAYS": 30,
     "ATTEMPT_PRUNE_INTERVAL_MINUTES": 360,
+    # Duplicate detection. Items that have never been examined are worked a
+    # batch at a time on this interval, so an install with a large backlog
+    # catches up over several passes instead of one long one.
+    "DUPLICATE_DETECTION_INTERVAL_MINUTES": 30,
+    "DUPLICATE_DETECTION_BATCH_SIZE": 500,
+    # Only items published within this many days of each other are compared.
+    # The same story republished months later is not a duplicate worth hiding,
+    # and the window is what keeps the candidate set small.
+    "DUPLICATE_WINDOW_DAYS": 7,
+    # A backstop against a group running away. Groups are a star rather than a
+    # transitive closure, which is the real guard; this catches the case where
+    # a great many items genuinely share one canonical URL. An item that would
+    # overflow a group is left ungrouped -- an uncollapsed duplicate is a far
+    # cheaper mistake than a wrong collapse.
+    "DUPLICATE_MAX_GROUP": 25,
+    # Being unique is not permanent: a second copy of an article arrives later,
+    # and by then the copy that arrived first has already been examined. Items
+    # examined and found unique are re-examined once their check is this old,
+    # which is what makes detection reach articles it has already seen. Only
+    # once the never-examined backlog is clear, so a busy install always spends
+    # its budget on new articles first.
+    "DUPLICATE_RECHECK_DAYS": 3,
+    # One row per pass of every background job, so the tasks page can show how
+    # often things run and how long they take. A week is enough to see a daily
+    # rhythm; the rows are small but there is one per source per ingest cycle.
+    "TASK_RUN_HISTORY_DAYS": 7,
+    # Whether the feed collapses duplicate groups by default. The API and the
+    # UI can both ask for the full list instead.
+    "DUPLICATE_COLLAPSE_DEFAULT": True,
 }
 
 FALSEY_STRINGS = {"", "0", "false", "no", "off"}

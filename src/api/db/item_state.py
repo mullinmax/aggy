@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from pydantic import confloat
 
@@ -6,6 +6,7 @@ from .item import ItemLoose
 from .user import User
 from .feed import Feed
 from .base import AggyBaseModel
+from .propagation import propagate_vote_to_duplicates
 
 # class ReservedVoteReasons(Enum):
 # leaving unimplemented for now, should allow arbitrary user-defined reasons (like tags)
@@ -125,9 +126,26 @@ class ItemState(AggyBaseModel):
 
         if score is not None:
             item_state.score = score
-            item_state.score_date = datetime.now()
+            # Stamped as an absolute instant, not local wall-clock time. The
+            # API container runs on a local timezone (TZ is set in its
+            # dockerfile) while Postgres runs on UTC, so a naive
+            # datetime.now() was stored verbatim into a TIMESTAMPTZ and read
+            # back as a vote cast hours ago. Everything that asks "is this
+            # vote newer than the last training run?" compares it against the
+            # database's own NOW(), so a vote used to go unnoticed for as long
+            # as the offset between the two clocks.
+            item_state.score_date = datetime.now(timezone.utc)
 
         if is_read is not None:
             item_state.is_read = is_read
 
         item_state.update()
+
+        if score is not None:
+            # A vote is about the content, so it covers every copy of it. The
+            # same article reaches a user under several URLs and is therefore
+            # several items; without this, downvoting a story and then
+            # retraining brings it straight back as whichever twin the new
+            # model scores highest. Marking something read is not a judgement
+            # about the content, so only a score spreads.
+            propagate_vote_to_duplicates(user_hash, item_url_hash)

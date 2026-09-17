@@ -2,6 +2,7 @@ from pydantic import StringConstraints
 from typing import List, Optional
 from typing_extensions import Annotated
 
+from config import config
 from .item_collection import ItemCollection
 
 # sort name -> ORDER BY clause; "best" is the pre-prediction default.
@@ -212,14 +213,26 @@ class Feed(ItemCollection):
         source_hashes: Optional[List[str]] = None,
         post_types: Optional[List[str]] = None,
         max_age: Optional[str] = None,
+        collapse_duplicates: Optional[bool] = None,
+        only_duplicates: bool = False,
     ):
         """Like ``query_items`` but pairs each item with its source name and
         the user's item state / model prediction.
 
         Returns (item, meta) tuples where meta carries source_name,
-        user_score, is_read, predicted_score, predicted_confidence.
+        user_score, is_read, predicted_score, predicted_confidence,
+        duplicate_count and duplicate_group.
 
         - ``include_read=False`` hides items the user has already voted on.
+        - ``collapse_duplicates`` shows one member of each duplicate group --
+          the one the current model scores highest, which is the point of the
+          feature -- and reports how many others it stands for. ``None`` takes
+          the ``DUPLICATE_COLLAPSE_DEFAULT`` setting; False returns every
+          member, which is how "show me everything" stays possible.
+        - ``only_duplicates`` keeps just the articles that arrived more than
+          once, for reviewing what the collapse is hiding. It composes with
+          ``collapse_duplicates``: collapsed, it is one row per duplicated
+          story; uncollapsed, it is every copy of them.
         - ``source_hashes`` restricts to items produced by those sources.
         - ``post_types`` keeps items matching any of ``POST_TYPES`` ("image",
           "video", "link", "text"); the types overlap, so an illustrated
@@ -241,6 +254,43 @@ class Feed(ItemCollection):
         # the same sort keys, without table prefixes, for the outer
         # interleave query where every column is already flattened
         outer_order = order_by.replace("c.", "").replace("i.", "")
+        if collapse_duplicates is None:
+            collapse_duplicates = config.get_bool("DUPLICATE_COLLAPSE_DEFAULT")
+
+        # Which member of a duplicate group is shown: whichever the current
+        # model scores highest, then the most confident, then the earliest
+        # published (credit the original), then the hash so it is stable. A
+        # group whose members have no predictions yet falls through to the date,
+        # and the next scoring pass re-resolves it.
+        #
+        # Partitioning on COALESCE(group_hash, url_hash) makes every ungrouped
+        # item a group of one, so its rank is 1 and the collapse filter below is
+        # a single condition. Partitioning on group_hash alone would instead put
+        # every ungrouped item in one NULL partition and hide all but one.
+        #
+        # Which member wins is decided over the rows this view actually shows,
+        # so that hiding the top-scoring copy with a source or date filter
+        # promotes the next one rather than leaving the group unrepresented.
+        dup_partition = "COALESCE(d.group_hash, i.url_hash)"
+        dup_order = (
+            "c.predicted_score DESC NULLS LAST, "
+            "c.predicted_confidence DESC NULLS LAST, "
+            "i.date_published ASC NULLS LAST, i.url_hash"
+        )
+
+        # How big the group is, counted across the whole feed rather than over
+        # the filtered rows. Whether an article arrived twice is a fact about
+        # the feed, not about the filters in force, so the badge's count keeps
+        # agreeing with the list that /feed/item_duplicates expands it into --
+        # and "only duplicates" means the same thing whatever else is filtered.
+        dup_group_size = (
+            "CASE WHEN d.group_hash IS NULL THEN 1 ELSE ("
+            " SELECT COUNT(*) FROM feed_items fc"
+            " JOIN item_duplicates fd ON fd.user_hash = fc.user_hash"
+            "  AND fd.item_url_hash = fc.item_url_hash"
+            " WHERE fc.user_hash = c.user_hash AND fc.feed_hash = c.feed_hash"
+            "  AND fd.group_hash = d.group_hash) END"
+        )
 
         # Votes are shared across feeds: user_score comes from the user's latest
         # vote on the item in any feed (user_item_votes), so a vote cast in one
@@ -253,10 +303,16 @@ class Feed(ItemCollection):
             " WHERE li.user_hash = c.user_hash"
             "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
             "src.name AS source_name, src.color AS source_color, "
-            "ROW_NUMBER() OVER (PARTITION BY src.name_hash "
-            f"ORDER BY {order_by}) AS source_rank "
+            "src.name_hash AS source_name_hash, "
+            "d.group_hash AS duplicate_group, "
+            f"ROW_NUMBER() OVER (PARTITION BY {dup_partition} "
+            f"ORDER BY {dup_order}) AS dup_rank, "
+            f"{dup_group_size} AS dup_group_size "
             "FROM items i "
             "JOIN feed_items c ON c.item_url_hash = i.url_hash "
+            "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+            " AND d.item_url_hash = c.item_url_hash"
+            " AND d.group_hash IS NOT NULL "
             "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
             " AND st.feed_hash = c.feed_hash"
             " AND st.item_url_hash = c.item_url_hash "
@@ -302,6 +358,22 @@ class Feed(ItemCollection):
             sql += " AND COALESCE(i.date_published, c.added_at) >= NOW() - %s::interval"
             params = params + (window,)
 
+        # The duplicate filter has to run *before* source_rank is computed,
+        # which is why that window moved out to its own layer: ranking over
+        # rows that are then hidden leaves the round-robin interleave with
+        # holes, and the feed shows runs of one source where a rank is missing.
+        dup_conditions = []
+        if collapse_duplicates:
+            dup_conditions.append("b.dup_rank = 1")
+        if only_duplicates:
+            dup_conditions.append("b.dup_group_size > 1")
+        dup_filter = f" WHERE {' AND '.join(dup_conditions)}" if dup_conditions else ""
+        sql = (
+            "SELECT b.*, ROW_NUMBER() OVER (PARTITION BY b.source_name_hash "
+            f"ORDER BY {outer_order}) AS source_rank "
+            f"FROM ({sql}) b{dup_filter}"
+        )
+
         # Prediction-ranked sorts stay strictly monotonic (see MONOTONIC_SORTS);
         # the browse sorts interleave sources by round-robin rank first.
         outer_sort = (
@@ -327,6 +399,10 @@ class Feed(ItemCollection):
             row.pop("score", None)
             row.pop("added_at", None)
             row.pop("source_rank", None)
+            row.pop("source_name_hash", None)
+            row.pop("dup_rank", None)
+            # an ungrouped item is a group of one, so this is 0 for it
+            group_size = row.pop("dup_group_size", 1) or 1
             meta = {
                 "source_name": row.pop("source_name", None),
                 "source_color": row.pop("source_color", None),
@@ -335,9 +411,44 @@ class Feed(ItemCollection):
                 "in_list": row.pop("in_list", None),
                 "predicted_score": row.pop("predicted_score", None),
                 "predicted_confidence": row.pop("predicted_confidence", None),
+                "duplicate_group": row.pop("duplicate_group", None),
+                "duplicate_count": group_size - 1,
             }
             results.append((ItemStrict.from_row(row), meta))
         return results
+
+    def duplicate_group_members(self, group_hash: str) -> List[dict]:
+        """Every member of a duplicate group that is in this feed, in the order
+        the feed would pick a survivor from.
+
+        Same ordering as the ``dup_rank`` window in
+        ``query_items_with_sources``, so the first row is the one the feed is
+        currently showing and the rest are what its badge stands for.
+
+        Groups are per account, and this is scoped to both this account and
+        this feed, so it can only ever return copies the caller holds.
+        """
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT i.url_hash, i.url, i.title, i.date_published, "
+                "c.predicted_score, c.predicted_confidence, "
+                "d.signal, d.confidence, ("
+                " SELECT s.name FROM source_items si"
+                " JOIN sources s ON s.user_hash = si.user_hash"
+                "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+                " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+                "  AND si.item_url_hash = c.item_url_hash LIMIT 1) AS source_name "
+                "FROM item_duplicates d "
+                "JOIN items i ON i.url_hash = d.item_url_hash "
+                "JOIN feed_items c ON c.item_url_hash = d.item_url_hash "
+                " AND c.user_hash = %s AND c.feed_hash = %s "
+                "WHERE d.user_hash = c.user_hash AND d.group_hash = %s "
+                "ORDER BY c.predicted_score DESC NULLS LAST, "
+                " c.predicted_confidence DESC NULLS LAST, "
+                " i.date_published ASC NULLS LAST, i.url_hash",
+                (self.user_hash, self.name_hash, group_hash),
+            )
+            return cur.fetchall()
 
     def stats(self) -> dict:
         """Dashboard summary numbers: total items, unvoted items, and the

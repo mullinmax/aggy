@@ -3,6 +3,7 @@ import pytest
 from config import config
 from db.base import get_db_con
 from db.item import ImageEmbedError, ItemLoose, ItemStrict
+from db.task_run import KIND_IMAGE_EMBED_BACKFILL, STATUS_ERROR, STATUS_OK
 from ingest import jobs
 
 
@@ -453,3 +454,63 @@ def test_rescrape_skips_the_generic_scrapers_for_backends_that_refuse_them(
     monkeypatch.setattr("ranking.engine.rank_feed", lambda feed: None)
 
     jobs.rescrape_source(existing_source)
+
+
+def _backfill_runs() -> list:
+    """The task-run rows the backfill left behind, newest first."""
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT kind, status, detail, user_hash, finished_at FROM task_runs "
+            "WHERE kind = %s ORDER BY started_at DESC",
+            (KIND_IMAGE_EMBED_BACKFILL,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def test_the_backfill_records_the_pass_it_made(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """The tasks page draws a bar per pass, so a pass that did work has to leave
+    a closed row behind with the summary it logged."""
+    monkeypatch.setattr(jobs, "embed_image", lambda image_url: [0.1, 0.2, 0.3])
+
+    jobs.backfill_image_embeddings_job()
+
+    runs = _backfill_runs()
+    assert len(runs) == 1
+    assert runs[0]["status"] == STATUS_OK
+    assert runs[0]["detail"] == "1 embedded, 0 failed"
+    assert runs[0]["finished_at"] is not None
+    # a global queue, not this account's work
+    assert runs[0]["user_hash"] is None
+
+
+def test_a_backfill_pass_with_nothing_to_do_is_not_recorded(
+    monkeypatch, image_embed_configured
+):
+    """This runs every few minutes whether or not there is a backlog. Recording
+    the empty passes would bury the ones that did something."""
+    monkeypatch.setattr(jobs, "embed_image", lambda image_url: [0.1])
+
+    jobs.backfill_image_embeddings_job()
+
+    assert _backfill_runs() == []
+
+
+def test_a_backfill_that_embedded_nothing_is_recorded_as_a_failure(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """Every picture in the batch being unreachable is the interesting failure,
+    and the one worth a red bar."""
+
+    def unreachable(image_url):
+        raise ImageEmbedError("the image host refused")
+
+    monkeypatch.setattr(jobs, "embed_image", unreachable)
+
+    jobs.backfill_image_embeddings_job()
+
+    runs = _backfill_runs()
+    assert len(runs) == 1
+    assert runs[0]["status"] == STATUS_ERROR
+    assert "0 embedded, 1 failed" in runs[0]["detail"]

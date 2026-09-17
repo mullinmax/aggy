@@ -9,7 +9,8 @@ from db.feed import Feed
 from db.item import ItemStrict
 from db.item_state import ItemState
 from ranking.engine import (
-    feeds_needing_rank,
+    MIN_LABELS_TO_RANK,
+    feeds_needing_training,
     label_counts,
     load_feed_features,
     rank_feed,
@@ -87,14 +88,23 @@ def test_label_counts_include_shared_votes(existing_user, two_feeds_sharing_item
     assert counts["down"] == 0
 
 
-def test_feeds_needing_rank_sees_shared_vote(
+def test_feeds_needing_training_sees_shared_votes(
     existing_user, two_feeds_sharing_item
 ):
-    feed_a, feed_b, item = two_feeds_sharing_item
-    _vote(existing_user.name_hash, feed_b, item, 1.0)
+    """A vote cast in one feed makes every feed holding that item due for a
+    retrain, because that vote is a label in all of them."""
+    feed_a, feed_b, _ = two_feeds_sharing_item
 
-    names = {f.name for f in feeds_needing_rank()}
-    # both feeds contain the item, so both are due for a re-rank
+    # An untrained feed waits for enough labels to fit anything on, so give it
+    # that many -- all voted on in feed B, none in feed A.
+    for _ in range(MIN_LABELS_TO_RANK):
+        shared = _make_item(f"http://example.com/{uuid.uuid4()}")
+        feed_a.add_items(shared)
+        feed_b.add_items(shared)
+        _vote(existing_user.name_hash, feed_b, shared, 1.0)
+
+    names = {f.name for f in feeds_needing_training()}
+    # both feeds contain the voted items, so both are due for a retrain
     assert feed_a.name in names
     assert feed_b.name in names
 

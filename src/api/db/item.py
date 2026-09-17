@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from config import config
+from dedup.canonical import canonical_url
 from .base import AggyBaseModel, get_db_con
 from typing_extensions import Annotated
 from utils import get_ollama_connection
@@ -85,11 +86,29 @@ class ItemBase(AggyBaseModel):
             cur.execute("SELECT 1 FROM items WHERE url_hash = %s", (self.url_hash,))
             return cur.fetchone() is not None
 
+    @property
+    def canonical_url(self) -> Optional[str]:
+        """This item's URL with everything that does not identify the content
+        stripped -- tracking parameters, an AMP rendition, a redirector.
+
+        Two items whose canonical URLs match are the same article, which is
+        what duplicate detection groups on. Derived rather than stored on the
+        model so a re-scrape cannot leave it disagreeing with ``url``.
+        """
+        return canonical_url(self.url)
+
     def _row_values(self) -> dict:
         data = self.model_dump()
+        # Pure CPU over a URL we already have, so it is computed on the way in
+        # rather than left to the detection job to backfill.
+        canonical = self.canonical_url
         return {
             "url_hash": self.url_hash,
             "url": str(self.url),
+            "canonical_url": canonical,
+            "canonical_url_hash": (
+                self.__insecure_hash__(canonical) if canonical else None
+            ),
             "title": data.get("title"),
             "author": data.get("author"),
             "domain": data.get("domain"),
@@ -115,14 +134,18 @@ class ItemBase(AggyBaseModel):
         v = self._row_values()
         with self.db_con() as cur:
             cur.execute(
-                "INSERT INTO items (url_hash, url, title, author, domain, excerpt, "
+                "INSERT INTO items (url_hash, url, canonical_url, "
+                "canonical_url_hash, title, author, domain, excerpt, "
                 "content, image_url, media, date_published, embeddings, "
                 "image_embeddings) "
-                "VALUES (%(url_hash)s, %(url)s, %(title)s, %(author)s, %(domain)s, "
+                "VALUES (%(url_hash)s, %(url)s, %(canonical_url)s, "
+                "%(canonical_url_hash)s, %(title)s, %(author)s, %(domain)s, "
                 "%(excerpt)s, %(content)s, %(image_url)s, %(media)s, "
                 "%(date_published)s, %(embeddings)s, %(image_embeddings)s) "
                 "ON CONFLICT (url_hash) DO UPDATE SET "
-                "url = EXCLUDED.url, title = EXCLUDED.title, author = EXCLUDED.author, "
+                "url = EXCLUDED.url, canonical_url = EXCLUDED.canonical_url, "
+                "canonical_url_hash = EXCLUDED.canonical_url_hash, "
+                "title = EXCLUDED.title, author = EXCLUDED.author, "
                 "domain = EXCLUDED.domain, excerpt = EXCLUDED.excerpt, "
                 "content = EXCLUDED.content, image_url = EXCLUDED.image_url, "
                 "media = EXCLUDED.media, "

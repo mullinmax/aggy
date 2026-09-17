@@ -163,3 +163,18 @@ function debounce(fn, ms = 300) {
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+
+// fmtInt(1240) -> "1,240"
+const fmtInt = (n) => Number(n || 0).toLocaleString();
+
+// sectionCard(title, subtitle, ...body) — a titled block, so every section on
+// every page reads the same. Shared rather than per-page: the stats and tasks
+// pages are both stacks of these.
+function sectionCard(title, subtitle, ...body) {
+  return h('div', { class: 'card bg-base-200 border border-base-300 mb-4' },
+    h('div', { class: 'card-body p-4 gap-3' },
+      h('div', {},
+        h('h2', { class: 'font-semibold' }, title),
+        subtitle ? h('p', { class: 'text-xs text-base-content/60 mt-0.5' }, subtitle) : null),
+      ...body));
+}

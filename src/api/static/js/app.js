@@ -14,7 +14,8 @@ let lastItemBand = null; // sort-band of the last rendered item, for threshold d
 // filter/sort state for the current feed; sources and postTypes: null means
 // "everything" (no filter), an array means only those
 const defaultFilters = () =>
-  ({ sort: 'predicted', includeRead: false, postTypes: null, maxAge: 'all', sources: null });
+  ({ sort: 'predicted', includeRead: false, postTypes: null, maxAge: 'all', sources: null,
+    onlyDuplicates: false });
 // Post types a feed can be filtered by, matching the API's post_types values.
 // They overlap on purpose — an illustrated article is both an image post and
 // a text post — so ticking boxes widens the view rather than slicing it up.
@@ -46,6 +47,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   router
     .add('', showDashboard)
     .add('stats', showArticleStats)
+    .add('tasks', showTasks)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
@@ -90,6 +92,7 @@ function bindControls() {
   });
   $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
   $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
+  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; reloadItems(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
@@ -161,6 +164,7 @@ function setView(name) {
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
   $('viewList').classList.toggle('hidden', name !== 'list');
   $('viewStats').classList.toggle('hidden', name !== 'stats');
+  $('viewTasks').classList.toggle('hidden', name !== 'tasks');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -449,6 +453,7 @@ function syncFilterControls() {
   $('filterSort').value = feedFilters.sort;
   $('filterDate').value = feedFilters.maxAge;
   $('filterIncludeRead').checked = feedFilters.includeRead;
+  $('filterOnlyDuplicates').checked = feedFilters.onlyDuplicates;
   const types = feedFilters.postTypes; // null = every type
   postTypeCheckboxes().forEach((box) => {
     box.checked = types === null || types.includes(box.dataset.postType);
@@ -464,7 +469,8 @@ function reloadItems() {
 function isFiltered() {
   return feedFilters.postTypes !== null
     || feedFilters.sources !== null
-    || feedFilters.maxAge !== 'all';
+    || feedFilters.maxAge !== 'all'
+    || feedFilters.onlyDuplicates;
 }
 
 function clearFilters() {
@@ -866,6 +872,7 @@ async function loadFeedItems() {
       // an empty string is meaningful here: no post type ticked shows nothing
       post_types: feedFilters.postTypes === null ? null : feedFilters.postTypes.join(','),
       max_age: feedFilters.maxAge,
+      only_duplicates: feedFilters.onlyDuplicates,
     });
     if (seq !== itemsRequestSeq) return; // a newer request superseded this one
     if (itemSkip === 0) render(list);
@@ -943,6 +950,54 @@ function sourceBadge(name, storedColor) {
     style: `border-color:${color};color:${color}`,
     title: name,
   }, h('span', { class: 'truncate min-w-0' }, name));
+}
+
+// The same article often reaches a feed through several sources, under a
+// different URL from each. The feed shows one of them -- whichever the model
+// scores highest -- and this badge says how many others it stands for, opening
+// them inline when tapped.
+function duplicateBadge(item) {
+  const count = item.item_duplicate_count || 0;
+  const group = item.item_duplicate_group;
+  if (!count || !group) return null;
+
+  const panel = h('div', { class: 'hidden mt-1 w-full' });
+  let loaded = false;
+
+  const badge = h('button', {
+    type: 'button',
+    class: 'badge badge-ghost badge-xs text-base-content/50 hover:text-base-content',
+    title: 'The same article from other sources',
+    onclick: async (e) => {
+      // the card itself opens the reader on click
+      e.stopPropagation();
+      const nowHidden = panel.classList.toggle('hidden');
+      if (nowHidden || loaded) return;
+      render(panel, spinner());
+      try {
+        const data = await sdk.feedItemDuplicates({
+          feed_name_hash: currentFeed.feed_name_hash,
+          group_hash: group,
+        });
+        // the shown copy is in the response so it can be marked rather than
+        // guessed at; the others are what this badge is about
+        render(panel, h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
+          data.members.map((m) => h('li', { class: 'flex items-center gap-2 min-w-0' },
+            h('span', { class: 'shrink-0 text-base-content/30' }, m.item_is_shown ? '●' : '○'),
+            sourceBadge(m.item_source_name),
+            h('a', {
+              href: m.item_url, target: '_blank', rel: 'noopener noreferrer',
+              class: 'link link-hover truncate min-w-0',
+              onclick: (ev) => ev.stopPropagation(),
+            }, m.item_title || m.item_url)))));
+        loaded = true;
+      } catch (err) {
+        render(panel, h('p', { class: 'text-xs text-error' }, err.message));
+      }
+    },
+  }, `also in ${count} other source${count === 1 ? '' : 's'}`);
+
+  return [badge, panel];
 }
 
 // "Open in new tab" icon (matches the modal close button's size/style),
@@ -1710,7 +1765,8 @@ function itemCard(item, { listMode = false } = {}) {
         sourceBadge(item.item_source_name, item.item_source_color),
         item.item_author && h('span', { class: 'truncate max-w-32' }, item.item_author),
         published && h('span', { class: 'whitespace-nowrap' }, published),
-        listMode ? null : predictedBadge),
+        listMode ? null : predictedBadge,
+        listMode ? null : duplicateBadge(item)),
       h('div', { class: 'flex items-center gap-1 ml-auto' },
         listButton(item),
         listMode ? null : voteRow(item))));

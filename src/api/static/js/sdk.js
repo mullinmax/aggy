@@ -115,14 +115,19 @@ class AggySDK {
     return this._request("GET", "/feed/get", { query: { feed_name_hash } });
   }
 
+  /** The items a duplicate badge stands for */
+  async feedItemDuplicates({ feed_name_hash, group_hash }) {
+    return this._request("GET", "/feed/item_duplicates", { query: { feed_name_hash, group_hash } });
+  }
+
   /** Explain why an item got its predicted score */
   async feedItemExplanation({ feed_name_hash, item_url_hash }) {
     return this._request("GET", "/feed/item_explanation", { query: { feed_name_hash, item_url_hash } });
   }
 
   /** List all items in a feed */
-  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age }) {
-    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age } });
+  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates }) {
+    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates } });
   }
 
   /** List feeds a user has created */
@@ -303,6 +308,11 @@ class AggySDK {
   /** How reliably each site has been answering this user's sources */
   async statsSources({ days }) {
     return this._request("GET", "/stats/sources", { query: { days } });
+  }
+
+  /** Recent background task runs for this account */
+  async tasksRuns({ hours, kinds, statuses }) {
+    return this._request("GET", "/tasks/runs", { query: { hours, kinds, statuses } });
   }
 
   /** Get Version */

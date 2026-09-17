@@ -25,6 +25,11 @@ class ItemResponse(BaseRouteModel):
     item_in_list: Optional[bool] = None
     item_predicted_score: Optional[float] = None
     item_predicted_confidence: Optional[float] = None
+    # How many other items are the same content as this one (0 when it is not
+    # in a duplicate group), and the group they share, so the hidden members
+    # can be asked for.
+    item_duplicate_count: Optional[int] = None
+    item_duplicate_group: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {
@@ -52,6 +57,8 @@ class ItemResponse(BaseRouteModel):
         in_list: bool = None,
         predicted_score: float = None,
         predicted_confidence: float = None,
+        duplicate_count: int = None,
+        duplicate_group: str = None,
     ):
         return cls(
             item_source_name=source_name,
@@ -61,6 +68,8 @@ class ItemResponse(BaseRouteModel):
             item_in_list=in_list,
             item_predicted_score=predicted_score,
             item_predicted_confidence=predicted_confidence,
+            item_duplicate_count=duplicate_count,
+            item_duplicate_group=duplicate_group,
             item_hash=db_model.url_hash,
             item_url=db_model.url,
             item_author=db_model.author,
@@ -72,3 +81,30 @@ class ItemResponse(BaseRouteModel):
             item_excerpt=db_model.excerpt,
             item_content=db_model.content,
         )
+
+
+class DuplicateMemberResponse(BaseRouteModel):
+    """One member of a duplicate group, as the feed's duplicate badge shows it.
+
+    The feed shows a single member of each group -- whichever the current model
+    scores highest -- so this is what the others are, including the shown one
+    so the UI can mark it.
+    """
+
+    item_hash: str
+    item_url: HttpUrl
+    item_title: Optional[str] = None
+    item_source_name: Optional[str] = None
+    item_predicted_score: Optional[float] = None
+    item_predicted_confidence: Optional[float] = None
+    item_date_published: Optional[datetime] = None
+    # What put this item in the group, and how sure that signal is.
+    item_duplicate_signal: str
+    item_duplicate_confidence: float
+    # True for the one the feed is currently showing.
+    item_is_shown: bool = False
+
+
+class ItemDuplicatesResponse(BaseRouteModel):
+    duplicate_group: str
+    members: List[DuplicateMemberResponse]

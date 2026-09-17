@@ -31,6 +31,7 @@ def build_app():
     from routers.item import item_router
     from routers.list import list_router
     from routers.stats import stats_router
+    from routers.task import task_router
 
     app = FastAPI()
     app.include_router(admin_router, tags=["Admin"])
@@ -50,6 +51,7 @@ def build_app():
     )
     app.include_router(list_router, prefix="/list", tags=["Lists"])
     app.include_router(stats_router, prefix="/stats", tags=["Stats"])
+    app.include_router(task_router, prefix="/tasks", tags=["Background Tasks"])
     return app
 
 
