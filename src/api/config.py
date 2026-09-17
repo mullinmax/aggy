@@ -82,6 +82,8 @@ KNOWN_CONFIG_VALUES = [
     "DUPLICATE_WINDOW_DAYS",
     "DUPLICATE_MAX_GROUP",
     "DUPLICATE_RECHECK_DAYS",
+    # How long the background-task run history behind the tasks page is kept.
+    "TASK_RUN_HISTORY_DAYS",
     "DUPLICATE_COLLAPSE_DEFAULT",
 ]
 
@@ -210,6 +212,10 @@ DEFAULT_CONFIG = {
     # once the never-examined backlog is clear, so a busy install always spends
     # its budget on new articles first.
     "DUPLICATE_RECHECK_DAYS": 3,
+    # One row per pass of every background job, so the tasks page can show how
+    # often things run and how long they take. A week is enough to see a daily
+    # rhythm; the rows are small but there is one per source per ingest cycle.
+    "TASK_RUN_HISTORY_DAYS": 7,
     # Whether the feed collapses duplicate groups by default. The API and the
     # UI can both ask for the full list instead.
     "DUPLICATE_COLLAPSE_DEFAULT": True,

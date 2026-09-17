@@ -28,6 +28,7 @@ from psycopg2.extras import execute_values
 
 from db.base import get_db_con
 from db.feed import Feed
+from db.task_run import KIND_FEED_SCORING, KIND_FEED_TRAINING, task_run
 from utils import is_playable_media_url
 from . import progress
 from .models import (
@@ -447,9 +448,14 @@ def score_feed(feed: Feed) -> int:
     for f in features:
         f.label_date = None  # predict ages as-of now
 
-    winner.fit(labeled)
-    scores, confs = winner.predict(features)
-    _write_predictions(feed, features, scores, confs, winner_name)
+    with task_run(KIND_FEED_SCORING, feed.user_hash, feed.name) as run:
+        winner.fit(labeled)
+        scores, confs = winner.predict(features)
+        _write_predictions(feed, features, scores, confs, winner_name)
+        run.detail = (
+            f"{len(features)} new article(s) scored by '{winner_name}' "
+            f"({len(labeled)} labels)"
+        )
     logging.info(
         f"Scored {len(features)} new article(s) in feed {feed.name} with the "
         f"already-chosen model '{winner_name}' ({len(labeled)} labels)"
@@ -484,13 +490,24 @@ def start_training(feed: Feed) -> bool:
 
 
 def run_training(feed: Feed) -> List[ModelStats]:
-    """Do the training claimed by `start_training`, reporting its progress."""
-    try:
-        stats = rank_feed(feed)
-    except Exception as e:
-        progress.finish(feed.user_hash, feed.name_hash, error=str(e))
-        raise
-    progress.finish(feed.user_hash, feed.name_hash)
+    """Do the training claimed by `start_training`, reporting its progress.
+
+    `ranking.progress` drives the live progress bar and forgets the run once
+    the UI has collected it; the task run outlives the process, which is what
+    the tasks page reads to show how long training actually takes.
+    """
+    with task_run(KIND_FEED_TRAINING, feed.user_hash, feed.name) as run:
+        try:
+            stats = rank_feed(feed)
+        except Exception as e:
+            progress.finish(feed.user_hash, feed.name_hash, error=str(e))
+            raise
+        progress.finish(feed.user_hash, feed.name_hash)
+        chosen = next((s.model_name for s in stats if s.chosen), None)
+        labels = max((s.n_labels for s in stats), default=0)
+        run.detail = f"{len(stats)} model(s) cross-validated on {labels} label(s)" + (
+            f", chose '{chosen}'" if chosen else ", none eligible yet"
+        )
     return stats
 
 

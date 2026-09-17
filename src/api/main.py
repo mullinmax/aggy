@@ -35,6 +35,7 @@ from routers.bulk_import import bulk_import_router
 from routers.item import item_router
 from routers.list import list_router
 from routers.stats import stats_router
+from routers.task import task_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
 from bridge.rsshub import rsshub_get_templates_job
@@ -48,6 +49,7 @@ from ingest.jobs import (
 )
 from ranking.engine import feed_ranking_job
 from dedup.detect import duplicate_detection_job
+from db.task_run import abandon_running_runs
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
@@ -87,6 +89,11 @@ async def app_lifespan(app: FastAPI):
         create_builtin_source_templates()
     except Exception as e:
         logging.error(f"Failed to seed builtin source templates: {e}")
+
+    # A task run still marked running belongs to a process that is gone, and
+    # nothing will ever finish it. Left alone it would show the tasks page a
+    # pass that has apparently been going since before the restart.
+    abandon_running_runs()
 
     scheduler.add_job(
         func=source_ingestion_scheduling_job,
@@ -247,6 +254,7 @@ app.include_router(item_router, prefix="/item", tags=["Items"])
 app.include_router(extension_router, prefix="/extension", tags=["Browser Extension"])
 app.include_router(list_router, prefix="/list", tags=["Lists"])
 app.include_router(stats_router, prefix="/stats", tags=["Stats"])
+app.include_router(task_router, prefix="/tasks", tags=["Background Tasks"])
 app.include_router(web_router)
 
 

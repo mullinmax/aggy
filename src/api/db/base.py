@@ -98,6 +98,7 @@ class AggyBaseModel(BaseModel):
 _ALL_TABLES = (
     "ranking_model_stats",
     "item_duplicates",
+    "task_runs",
     "list_items",
     "lists",
     "item_states",

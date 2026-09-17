@@ -16,6 +16,16 @@ from db.item import (
     save_image_embedding,
 )
 from db.source import Source
+from db.task_run import (
+    KIND_IMAGE_EMBED_BACKFILL,
+    KIND_SOURCE_INGEST,
+    STATUS_ERROR,
+    STATUS_OK,
+    finish_run,
+    prune_runs,
+    set_run_target,
+    start_run,
+)
 from db.source_attempt import (
     OUTCOME_ERROR,
     OUTCOME_OK,
@@ -100,21 +110,29 @@ def source_ingestion_job() -> None:
         )
 
     source = None
+    # Opened before the source is even read, so a pass that dies on the read
+    # still leaves a record of having been attempted. The branches below close
+    # it on the way out; a skip is recorded as an error with its reason, since
+    # the page's job is to show that the pass did not do any work and why.
+    run_id = start_run(KIND_SOURCE_INGEST, user_hash=row["user_hash"])
     try:
         source = Source.read(
             user_hash=row["user_hash"],
             feed_hash=row["feed_hash"],
             source_hash=row["name_hash"],
         )
+        set_run_target(run_id, source.name)
         logging.info(f"Ingesting source '{source.name}' ({source.url})")
         _ingest_with_circuit(source)
         source.mark_ingested()
+        finish_run(run_id, detail=f"ingested '{source.name}'")
     except HostUnavailable as e:
         # Not a failure of this source: its site is in cooldown and was never
         # contacted. Logged at info because a broken site produces one of these
         # per source per cycle, and they are the breaker working, not news.
         logging.info(f"Skipping source '{source.name}': {e}")
         source.mark_ingest_error(str(e))
+        finish_run(run_id, STATUS_ERROR, f"skipped: {e}")
         return
     except IngestError as e:
         # An ordinary bad day on the open web: the site is down, the feed came
@@ -124,6 +142,7 @@ def source_ingestion_job() -> None:
         logging.warning(f"{_source_label(source, row)}: {e}")
         if source is not None:
             source.mark_ingest_error(str(e))
+        finish_run(run_id, STATUS_ERROR, str(e))
         return
     except Exception as e:
         # Anything that isn't an IngestError got here without being explained,
@@ -131,6 +150,7 @@ def source_ingestion_job() -> None:
         logging.exception(f"{_source_label(source, row)} failed unexpectedly: {e}")
         if source is not None:
             source.mark_ingest_error(str(e))
+        finish_run(run_id, STATUS_ERROR, f"{type(e).__name__}: {e}")
         return
 
 
@@ -193,7 +213,12 @@ def _ingest_with_circuit(source: Source) -> None:
 
 
 def prune_ingest_attempts_job() -> None:
-    """Drop ingest attempts that have aged out of the retention window."""
+    """Drop the attempt and task-run history that has aged out.
+
+    Both are append-one-row-per-pass histories on the same schedule, so they are
+    trimmed together rather than by two jobs doing the same thing.
+    """
+    prune_runs()
     try:
         deleted = prune_attempts()
     except Exception as e:
@@ -447,6 +472,10 @@ def backfill_image_embeddings_job() -> None:
         f"Backfilling image embeddings for {len(rows)} item(s) "
         f"({concurrency} at a time)..."
     )
+    # Recorded only from here on: a pass with nothing to do returned above, and
+    # a timeline of empty passes every quarter of an hour would bury the ones
+    # that did work.
+    run_id = start_run(KIND_IMAGE_EMBED_BACKFILL)
 
     embedded = 0
     reasons: Counter = Counter()
@@ -468,7 +497,14 @@ def backfill_image_embeddings_job() -> None:
                 )
 
     failed = sum(reasons.values())
-    logging.info(
-        f"Image embedding backfill complete: {embedded} embedded, {failed} failed"
-        + (f" ({_failure_summary(reasons)})" if failed else "")
+    summary = f"{embedded} embedded, {failed} failed" + (
+        f" ({_failure_summary(reasons)})" if failed else ""
+    )
+    logging.info(f"Image embedding backfill complete: {summary}")
+    # A pass that embedded nothing at all is the interesting failure -- every
+    # picture in the batch was unreachable -- so it is recorded as one.
+    finish_run(
+        run_id,
+        STATUS_ERROR if embedded == 0 and failed else STATUS_OK,
+        summary,
     )

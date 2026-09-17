@@ -310,6 +310,11 @@ class AggySDK {
     return this._request("GET", "/stats/sources", { query: { days } });
   }
 
+  /** Recent background task runs for this account */
+  async tasksRuns({ hours, kinds, statuses }) {
+    return this._request("GET", "/tasks/runs", { query: { hours, kinds, statuses } });
+  }
+
   /** Get Version */
   async version() {
     return this._request("GET", "/version");

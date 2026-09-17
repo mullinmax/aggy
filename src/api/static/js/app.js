@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   router
     .add('', showDashboard)
     .add('stats', showArticleStats)
+    .add('tasks', showTasks)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
@@ -163,6 +164,7 @@ function setView(name) {
   $('viewFeed').classList.toggle('hidden', name !== 'feed');
   $('viewList').classList.toggle('hidden', name !== 'list');
   $('viewStats').classList.toggle('hidden', name !== 'stats');
+  $('viewTasks').classList.toggle('hidden', name !== 'tasks');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }

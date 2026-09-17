@@ -33,6 +33,7 @@ from typing import Optional
 from config import config
 from db.base import AggyBaseModel, get_db_con
 from db.propagation import inherit_votes_from_duplicates
+from db.task_run import KIND_DUPLICATE_DETECTION, task_run
 
 from .canonical import canonical_url
 
@@ -322,12 +323,21 @@ def duplicate_detection_job() -> None:
     if not rows:
         return
 
+    # Recorded only once there is something to examine: a pass with an empty
+    # queue returned above, and a timeline of empty passes every half hour
+    # would bury the ones that did work. System-wide, with no user_hash --
+    # the queue spans every account, so calling it any one account's work
+    # would be a lie.
     grouped = 0
-    for row in rows:
-        try:
-            grouped += _detect_one(row)
-        except Exception as e:
-            logging.exception(f"Duplicate detection for {row['url']} failed: {e}")
+    with task_run(KIND_DUPLICATE_DETECTION) as run:
+        for row in rows:
+            try:
+                grouped += _detect_one(row)
+            except Exception as e:
+                logging.exception(f"Duplicate detection for {row['url']} failed: {e}")
+        run.detail = (
+            f"{len(rows)} examined ({rechecked} re-examined), {grouped} grouped"
+        )
 
     logging.info(
         f"Duplicate detection: {len(rows)} item(s) examined "

@@ -29,8 +29,6 @@ function svg(tag, props, ...children) {
   return el;
 }
 
-const fmtInt = (n) => Number(n || 0).toLocaleString();
-
 // 940 -> "940", 1240 -> "1.2k", 25400 -> "25k"
 function fmtCompact(n) {
   if (n == null) return '—';
@@ -210,14 +208,14 @@ function renderArticleStats() {
 
   render($('statsPageBody'),
     summaryTiles(summary),
-    statsCard('Coverage across all articles',
+    sectionCard('Coverage across all articles',
       'Share of your articles that carry each field — the gaps are what the recommender is missing.',
       coverageChart(summary)),
     duplicateCard(summary),
-    statsCard(`Articles collected per day (last ${STATS_TIMELINE_DAYS} days)`,
+    sectionCard(`Articles collected per day (last ${STATS_TIMELINE_DAYS} days)`,
       'How many articles arrived each day, and how many of them the pipeline has processed.',
       timelineChart(timeline)),
-    statsCard('By site',
+    sectionCard('By site',
       `${fmtInt(domains.length)} ${domains.length === 1 ? 'site' : 'sites'}, grouped by the base domain of each article's link.`,
       domainTable(summary, domains)),
     h('h2', { class: 'font-semibold mt-8 mb-1' }, 'Source reliability'),
@@ -225,16 +223,6 @@ function renderArticleStats() {
       'Whether the sites behind your sources are answering at all — the numbers above ' +
       'can only describe articles that arrived.'),
     reliabilitySection());
-}
-
-// A titled section wrapper, so every block on the page reads the same.
-function statsCard(title, subtitle, ...body) {
-  return h('div', { class: 'card bg-base-200 border border-base-300 mb-4' },
-    h('div', { class: 'card-body p-4 gap-3' },
-      h('div', {},
-        h('h2', { class: 'font-semibold' }, title),
-        subtitle ? h('p', { class: 'text-xs text-base-content/60 mt-0.5' }, subtitle) : null),
-      ...body));
 }
 
 // ---------- summary tiles ----------
@@ -306,7 +294,7 @@ function duplicateCard(summary) {
   const groups = summary.duplicate_groups || 0;
 
   if (!groups) {
-    return statsCard('Duplicates',
+    return sectionCard('Duplicates',
       'The same story arriving from more than one source, under a different URL from each.',
       h('p', { class: 'text-sm text-base-content/50' },
         'No duplicates found among your articles yet.'),
@@ -319,7 +307,7 @@ function duplicateCard(summary) {
       h('div', { class: 'text-xl tabular-nums' }, value),
       desc ? h('div', { class: 'text-xs text-base-content/50' }, desc) : null);
 
-  return statsCard('Duplicates',
+  return sectionCard('Duplicates',
     'The same story arriving from more than one source, under a different URL from each.',
     h('div', { class: 'grid grid-cols-2 sm:grid-cols-4 gap-4' },
       figure('Duplicated stories', fmtInt(groups),
@@ -844,11 +832,11 @@ function reliabilitySection() {
         h('div', { class: `stat-value text-lg ${paused ? 'text-error' : ''}` }, fmtInt(paused)),
         h('div', { class: 'stat-desc' },
           paused ? 'backing off, retried automatically' : 'all sites responding'))),
-    statsCard(`Failed fetches per day (last ${days} days)`,
+    sectionCard(`Failed fetches per day (last ${days} days)`,
       'The share of each day’s source fetches that came back an error. A site that stops ' +
       'answering shows up here long before you notice its articles have gone quiet.',
       reliabilityChart(timeline)),
-    statsCard('By site',
+    sectionCard('By site',
       'Worst first. A paused site has failed enough times in a row that Aggy has stopped ' +
       'asking for a while — it probes again on its own, so nothing needs doing here.',
       reliabilityTableHost));

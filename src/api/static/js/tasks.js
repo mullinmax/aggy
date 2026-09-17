@@ -1,0 +1,463 @@
+// Aggy background-tasks page: what the scheduler has been doing, as a timeline
+// of runs and as a table.
+//
+// The timeline is the point of the page. A log line says a pass happened; a bar
+// across a time axis says how often it happens and how long it takes, which is
+// what you actually want to know about a background job. One lane per task, so
+// the rhythm of a lane reads at a glance: evenly spaced short bars is a healthy
+// ingest, one long bar is a retrain, a wall of bars is something thrashing.
+//
+// Colour encodes *status*, not task kind. Which task a bar belongs to is
+// already carried by its lane, so spending hue on identity would re-encode the
+// row label; what you scan a timeline for is the failures. Status is daisyUI's
+// reserved success/error/info, always paired with a label in the legend and a
+// word in the table -- never colour alone.
+
+'use strict';
+
+const TASKS_WINDOWS = [
+  { hours: 1, label: '1h' },
+  { hours: 6, label: '6h' },
+  { hours: 24, label: '24h' },
+  { hours: 72, label: '3d' },
+  { hours: 24 * 7, label: '7d' },
+];
+
+// Labels and one-liners for the task kinds the API reports. Keyed by the
+// backend's own constants so an unknown kind still renders (as itself) rather
+// than vanishing from a page whose whole job is showing what ran.
+const TASK_KIND_META = {
+  feed_training: {
+    label: 'Model training',
+    help: 'Cross-validating every model on a feed’s votes and picking a winner',
+  },
+  feed_scoring: {
+    label: 'Article scoring',
+    help: 'Applying the chosen model to articles it has not scored yet',
+  },
+  source_ingest: {
+    label: 'Source ingest',
+    help: 'Fetching a source and storing what it returned',
+  },
+  duplicate_detection: {
+    label: 'Duplicate checks',
+    help: 'Grouping articles that are the same content under different URLs',
+  },
+  image_embed_backfill: {
+    label: 'Image embedding',
+    help: 'Embedding preview pictures the recommender has not seen yet',
+  },
+};
+
+// Status is the reserved palette: never a task-kind hue, always with a word
+// beside it. `bar` paints the mark, `text` the label, so a status never relies
+// on colour alone to be read.
+const TASK_STATUS_META = {
+  ok: { label: 'Finished', bar: 'bg-success', text: 'text-success', mark: '●' },
+  error: { label: 'Failed', bar: 'bg-error', text: 'text-error', mark: '▲' },
+  running: { label: 'Running', bar: 'bg-info', text: 'text-info', mark: '◐' },
+};
+
+const TASKS_REFRESH_SECONDS = 15;
+
+let taskData = null;
+let taskFilters = { hours: 24, kinds: null, statuses: null, view: 'timeline' };
+let tasksTimer = null;
+
+function kindMeta(kind) {
+  return TASK_KIND_META[kind] || { label: kind, help: '' };
+}
+
+function statusMeta(status) {
+  return TASK_STATUS_META[status] || TASK_STATUS_META.ok;
+}
+
+// ---------- page ----------
+
+async function showTasks() {
+  setView('tasks');
+  currentFeed = null;
+  currentList = null;
+
+  $('tasksRefreshBtn').onclick = () => loadTasks();
+  $('tasksAutoRefresh').onchange = (e) => {
+    if (e.target.checked) startTasksRefresh();
+    else stopTasksRefresh();
+  };
+
+  render($('tasksPageBody'), spinner());
+  await loadTasks();
+  if ($('tasksAutoRefresh').checked) startTasksRefresh();
+}
+
+// A page showing what is running now is worth refreshing on its own; stopped
+// whenever the view is left so it does not poll in the background forever.
+function startTasksRefresh() {
+  stopTasksRefresh();
+  tasksTimer = setInterval(() => {
+    if (!$('viewTasks').classList.contains('hidden')) loadTasks();
+    else stopTasksRefresh();
+  }, TASKS_REFRESH_SECONDS * 1000);
+}
+
+function stopTasksRefresh() {
+  if (tasksTimer) clearInterval(tasksTimer);
+  tasksTimer = null;
+}
+
+async function loadTasks() {
+  try {
+    taskData = await sdk.tasksRuns({
+      hours: taskFilters.hours,
+      kinds: taskFilters.kinds === null ? null : taskFilters.kinds.join(','),
+      statuses: taskFilters.statuses === null ? null : taskFilters.statuses.join(','),
+    });
+    renderTasks();
+  } catch (err) {
+    render($('tasksPageBody'),
+      h('p', { class: 'text-sm text-error' }, err.message));
+  }
+}
+
+function renderTasks() {
+  const data = taskData;
+
+  render($('tasksPageBody'),
+    taskSummaryTiles(data),
+    taskFilterBar(),
+    data.truncated
+      ? h('div', { class: 'alert alert-warning text-xs mb-3' },
+          `Showing the most recent ${fmtInt(data.runs.length)} runs only, so the ` +
+          'timeline does not cover the whole window. Narrow the window or the filters.')
+      : null,
+    taskFilters.view === 'timeline' ? taskTimeline(data) : taskTable(data),
+    taskKindTable(data));
+}
+
+// ---------- summary ----------
+
+function taskSummaryTiles(data) {
+  const tile = (label, value, desc, cls) =>
+    h('div', { class: 'stat py-3 px-4' },
+      h('div', { class: 'stat-title text-xs' }, label),
+      h('div', { class: `stat-value text-xl ${cls || ''}` }, value),
+      desc ? h('div', { class: 'stat-desc text-xs' }, desc) : null);
+
+  return h('div', { class: 'stats stats-vertical sm:stats-horizontal shadow-none border border-base-300 w-full mb-4 overflow-x-auto' },
+    tile('Runs', fmtInt(data.total_runs), `in the last ${windowLabel(data.hours)}`),
+    tile('Running now', fmtInt(data.total_running), 'passes in flight',
+      data.total_running ? 'text-info' : null),
+    tile('Failed', fmtInt(data.total_errors),
+      data.total_errors ? 'needs a look' : 'none',
+      data.total_errors ? 'text-error' : null));
+}
+
+function windowLabel(hours) {
+  if (hours <= 24) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'}`;
+}
+
+// ---------- filters ----------
+
+// One row above the charts: the time window, what to include, and which view.
+// Every control re-requests rather than filtering in the page, so the counts
+// and the axis always describe the same set of rows.
+function taskFilterBar() {
+  const windowButtons = h('div', { class: 'flex flex-wrap gap-1' },
+    TASKS_WINDOWS.map((w) =>
+      h('button', {
+        class: `btn btn-xs ${w.hours === taskFilters.hours ? 'btn-active' : ''}`,
+        onclick: () => { taskFilters.hours = w.hours; loadTasks(); },
+      }, w.label)));
+
+  // A null filter means "everything", and every box ticked is the same view as
+  // none ticked -- kept as null so the request stays clean.
+  const toggle = (current, value, all) => {
+    const picked = current === null ? all.slice() : current.slice();
+    const at = picked.indexOf(value);
+    if (at === -1) picked.push(value);
+    else picked.splice(at, 1);
+    return picked.length === all.length ? null : picked;
+  };
+
+  const allKinds = Object.keys(TASK_KIND_META);
+  const kindBoxes = h('div', { class: 'flex flex-wrap gap-2' },
+    allKinds.map((kind) => {
+      const on = taskFilters.kinds === null || taskFilters.kinds.includes(kind);
+      return h('label', {
+        class: 'label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100',
+        title: kindMeta(kind).help,
+      },
+        h('input', {
+          type: 'checkbox', class: 'checkbox checkbox-xs checkbox-primary',
+          checked: on,
+          onchange: () => {
+            taskFilters.kinds = toggle(taskFilters.kinds, kind, allKinds);
+            loadTasks();
+          },
+        }),
+        h('span', { class: 'label-text text-xs' }, kindMeta(kind).label));
+    }));
+
+  const allStatuses = Object.keys(TASK_STATUS_META);
+  const statusBoxes = h('div', { class: 'flex flex-wrap gap-2' },
+    allStatuses.map((status) => {
+      const on = taskFilters.statuses === null || taskFilters.statuses.includes(status);
+      const meta = statusMeta(status);
+      return h('label', {
+        class: 'label cursor-pointer gap-1.5 py-0 px-2 border border-base-300 rounded-lg bg-base-100',
+      },
+        h('input', {
+          type: 'checkbox', class: 'checkbox checkbox-xs checkbox-primary',
+          checked: on,
+          onchange: () => {
+            taskFilters.statuses = toggle(taskFilters.statuses, status, allStatuses);
+            loadTasks();
+          },
+        }),
+        h('span', { class: `label-text text-xs ${meta.text}` }, meta.mark),
+        h('span', { class: 'label-text text-xs' }, meta.label));
+    }));
+
+  const viewButtons = h('div', { class: 'flex gap-1' },
+    [['timeline', 'Timeline'], ['table', 'Table']].map(([key, label]) =>
+      h('button', {
+        class: `btn btn-xs ${taskFilters.view === key ? 'btn-active' : ''}`,
+        onclick: () => { taskFilters.view = key; renderTasks(); },
+      }, label)));
+
+  const group = (label, control) =>
+    h('div', { class: 'flex flex-col gap-1' },
+      h('span', { class: 'text-xs text-base-content/60' }, label),
+      control);
+
+  return h('div', { class: 'card bg-base-200 border border-base-300 mb-4' },
+    h('div', { class: 'card-body p-3 flex-row flex-wrap gap-4 items-start' },
+      group('Window', windowButtons),
+      group('Task', kindBoxes),
+      group('Status', statusBoxes),
+      group('View', viewButtons)));
+}
+
+// ---------- timeline ----------
+
+// One lane per task, a lane being a kind plus what it worked on -- so each
+// source gets its own row and its cadence is visible, rather than every ingest
+// piling into one "source ingest" line.
+function taskLanes(runs) {
+  const lanes = new Map();
+  for (const run of runs) {
+    const key = `${run.kind} ${run.target || ''}`;
+    if (!lanes.has(key)) {
+      lanes.set(key, {
+        kind: run.kind,
+        target: run.target,
+        systemWide: run.system_wide,
+        runs: [],
+      });
+    }
+    lanes.get(key).runs.push(run);
+  }
+
+  // Busiest lane first: the rows worth looking at are the ones with something
+  // in them, and a lane with one bar reads fine at the bottom.
+  return [...lanes.values()].sort(
+    (a, b) =>
+      b.runs.length - a.runs.length ||
+      a.kind.localeCompare(b.kind) ||
+      String(a.target).localeCompare(String(b.target)));
+}
+
+function taskTimeline(data) {
+  const lanes = taskLanes(data.runs);
+  if (!lanes.length) {
+    return sectionCard('Timeline', null,
+      h('p', { class: 'text-sm text-base-content/50 py-4' },
+        'No runs in this window match these filters.'));
+  }
+
+  const start = Date.parse(data.window_start);
+  const end = Date.parse(data.window_end);
+  const span = Math.max(end - start, 1);
+  const pct = (t) => ((t - start) / span) * 100;
+
+  const lane = (l) =>
+    h('div', { class: 'flex items-center gap-2 py-0.5' },
+      h('div', { class: 'w-40 sm:w-56 flex-none min-w-0' },
+        h('div', { class: 'text-xs truncate', title: kindMeta(l.kind).help },
+          l.target || kindMeta(l.kind).label),
+        h('div', { class: 'text-[10px] text-base-content/50 truncate' },
+          l.target ? kindMeta(l.kind).label : 'system-wide',
+          ' · ', `${fmtInt(l.runs.length)} run${l.runs.length === 1 ? '' : 's'}`)),
+      // The track is the lane's time axis; a bar is positioned and sized on it
+      // as a percentage, so the whole thing reflows with the window.
+      h('div', { class: 'relative flex-1 h-5 rounded bg-base-300/40 overflow-hidden' },
+        l.runs.map((run) => taskBar(run, pct))));
+
+  return sectionCard(
+    `Timeline (last ${windowLabel(data.hours)})`,
+    'One row per task. Bar position is when the pass ran, bar width is how long it took.',
+    timelineAxis(start, end),
+    h('div', { class: 'flex flex-col' }, lanes.map(lane)),
+    timelineLegend());
+}
+
+function taskBar(run, pct) {
+  const startedAt = Date.parse(run.started_at);
+  const finishedAt = run.finished_at ? Date.parse(run.finished_at) : Date.now();
+  const left = Math.max(0, Math.min(100, pct(startedAt)));
+  // A pass that took under a second would otherwise be a zero-width bar and so
+  // invisible -- and "it ran, very briefly" is exactly what this page is for.
+  // The floor is in pixels rather than percent so it holds at every window.
+  const width = Math.max(0, Math.min(100 - left, pct(finishedAt) - left));
+  const meta = statusMeta(run.status);
+
+  const title = [
+    `${kindMeta(run.kind).label}${run.target ? `: ${run.target}` : ''}`,
+    `${meta.label} · ${fmtDuration(run.duration_seconds)}`,
+    new Date(run.started_at).toLocaleString(),
+    run.detail || null,
+  ].filter(Boolean).join('\n');
+
+  return h('span', {
+    // 2px ring in the surface colour so bars that abut stay countable, and
+    // rounded ends per the mark spec.
+    class: `absolute top-0.5 bottom-0.5 rounded ${meta.bar} ring-1 ring-base-100`,
+    style: `left:${left}%;width:${width}%;min-width:3px`,
+    title,
+  });
+}
+
+// A hairline axis with a handful of ticks -- recessive, never dashed, and
+// labelled in the reader's own locale rather than UTC.
+//
+// Each label is positioned on the track rather than laid out in an equal-width
+// cell: six labels in six cells put the last one at five sixths of the width,
+// so every tick sat to the left of the time it named. The end labels are pulled
+// back inside the track so neither overhangs it.
+function timelineAxis(start, end) {
+  const ticks = 5;
+  const labels = [];
+  for (let i = 0; i <= ticks; i += 1) {
+    const at = new Date(start + ((end - start) * i) / ticks);
+    const left = (i / ticks) * 100;
+    const shift = i === 0 ? '0' : i === ticks ? '-100%' : '-50%';
+    labels.push(h('span', {
+      class: 'absolute bottom-0 text-[10px] text-base-content/40 whitespace-nowrap',
+      style: `left:${left}%;transform:translateX(${shift})`,
+    }, at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
+  }
+  return h('div', { class: 'flex items-end gap-2 mb-1' },
+    h('div', { class: 'w-40 sm:w-56 flex-none' }),
+    h('div', { class: 'relative flex-1 h-4 border-b border-base-300' }, labels));
+}
+
+function timelineLegend() {
+  return h('div', { class: 'flex flex-wrap items-center gap-4 mt-2' },
+    Object.entries(TASK_STATUS_META).map(([, meta]) =>
+      h('span', { class: 'flex items-center gap-1.5 text-xs text-base-content/60' },
+        h('span', { class: `w-3 h-2 rounded ${meta.bar}` }),
+        meta.label)));
+}
+
+// ---------- table ----------
+
+function fmtDuration(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  if (seconds < 1) return '<1s';
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+// The table view the timeline owes the reader: every bar as a row, with the
+// detail line that does not fit on a bar.
+function taskTable(data) {
+  if (!data.runs.length) {
+    return sectionCard('Runs', null,
+      h('p', { class: 'text-sm text-base-content/50 py-4' },
+        'No runs in this window match these filters.'));
+  }
+
+  const row = (run) => {
+    const meta = statusMeta(run.status);
+    return h('tr', {},
+      h('td', { class: 'text-xs whitespace-nowrap' },
+        h('span', { class: `${meta.text} mr-1` }, meta.mark),
+        meta.label),
+      h('td', { class: 'text-xs' }, kindMeta(run.kind).label),
+      h('td', { class: 'text-xs' },
+        run.target
+          ? h('span', { class: 'truncate' }, run.target)
+          : h('span', { class: 'text-base-content/40' }, 'system-wide')),
+      h('td', { class: 'text-xs whitespace-nowrap text-right tabular-nums' },
+        fmtDuration(run.duration_seconds)),
+      h('td', { class: 'text-xs whitespace-nowrap text-base-content/60' },
+        timeAgo(run.started_at)),
+      h('td', { class: 'text-xs text-base-content/60' }, run.detail || '—'));
+  };
+
+  // A busy install puts hundreds of passes in a day and the row limit allows
+  // thousands, so the rows scroll inside the card rather than pushing the
+  // per-task rollup off the bottom of the page. The header sticks so the
+  // columns are still named at row four hundred.
+  const th = (label, extra = '') =>
+    h('th', { class: `sticky top-0 z-10 bg-base-200 ${extra}` }, label);
+
+  return sectionCard(`Runs (last ${windowLabel(data.hours)})`,
+    `${fmtInt(data.runs.length)} pass${data.runs.length === 1 ? '' : 'es'}, newest first.`,
+    h('div', {
+      class: 'max-h-[70vh] overflow-auto border border-base-300 rounded-lg',
+    },
+      h('table', { class: 'table table-xs' },
+        h('thead', {},
+          h('tr', {},
+            th('Status'),
+            th('Task'),
+            th('Target'),
+            th('Took', 'text-right'),
+            th('Started'),
+            th('Detail'))),
+        h('tbody', {}, data.runs.map(row)))));
+}
+
+// Per-kind rollup, which answers "how expensive is this task" in a way a
+// timeline of individual bars cannot. Always shown: it is the summary the
+// timeline is a detail of, and it stays correct when the rows are truncated.
+function taskKindTable(data) {
+  if (!data.kinds.length) return null;
+
+  const row = (k) =>
+    h('tr', {},
+      h('td', { class: 'text-xs' },
+        h('div', { title: kindMeta(k.kind).help }, kindMeta(k.kind).label),
+        k.system_wide
+          ? h('div', { class: 'text-[10px] text-base-content/50' }, 'system-wide')
+          : null),
+      h('td', { class: 'text-right text-xs tabular-nums' }, fmtInt(k.runs)),
+      h('td', { class: 'text-right text-xs tabular-nums' },
+        k.errors
+          ? h('span', { class: 'text-error' }, fmtInt(k.errors))
+          : h('span', { class: 'text-base-content/40' }, '0')),
+      h('td', { class: 'text-right text-xs tabular-nums' },
+        fmtDuration(k.median_seconds)),
+      h('td', { class: 'text-right text-xs tabular-nums' },
+        fmtDuration(k.max_seconds)),
+      h('td', { class: 'text-right text-xs whitespace-nowrap text-base-content/60' },
+        k.last_started_at ? timeAgo(k.last_started_at) : '—'));
+
+  return sectionCard('By task',
+    'Counted over the whole window, so these stay right even when the timeline is cut short.',
+    h('div', { class: 'overflow-x-auto' },
+      h('table', { class: 'table table-xs' },
+        h('thead', {},
+          h('tr', {},
+            h('th', {}, 'Task'),
+            h('th', { class: 'text-right' }, 'Runs'),
+            h('th', { class: 'text-right' }, 'Failed'),
+            h('th', { class: 'text-right', title: 'Half of the passes finished faster than this' }, 'Median'),
+            h('th', { class: 'text-right' }, 'Slowest'),
+            h('th', { class: 'text-right' }, 'Last run'))),
+        h('tbody', {}, data.kinds.map(row)))));
+}
