@@ -19,12 +19,14 @@ from db.source import Source
 from db.task_run import (
     KIND_IMAGE_EMBED_BACKFILL,
     KIND_SOURCE_INGEST,
+    KIND_SOURCE_RESCRAPE,
     STATUS_ERROR,
     STATUS_OK,
     finish_run,
     prune_runs,
     set_run_target,
     start_run,
+    task_run,
 )
 from db.source_attempt import (
     OUTCOME_ERROR,
@@ -247,6 +249,81 @@ def ingest_source_now(source: Source) -> None:
         source.mark_ingest_error(str(e))
 
 
+# The target recorded for a manually triggered pass over every source an
+# account owns. Distinct from the per-source passes the scheduler records, so
+# the tasks page can tell them apart -- and so "is this already running" asks
+# about another batch rather than about whichever single source the scheduler
+# happens to be working on right now.
+ALL_SOURCES_TARGET = "all sources"
+
+
+def user_sources(user_hash: str) -> list:
+    """Every source an account owns, once.
+
+    The same feed URL can be a source of several feeds, and re-fetching or
+    re-scraping it once per feed is the same work done twice; deduplicated on
+    the URL so a manual pass costs what it looks like it costs.
+    """
+    seen = set()
+    sources = []
+    for feed in Feed.read_all(user_hash=user_hash):
+        for source in feed.sources:
+            if source.url in seen:
+                continue
+            seen.add(source.url)
+            sources.append(source)
+    return sources
+
+
+def ingest_user_sources(user_hash: str) -> None:
+    """Fetch every source an account owns, now, outside the schedule.
+
+    One run is recorded for the batch rather than one per source: the scheduler
+    already records a pass per source, and a manual sweep is one thing the
+    person asked for, not fifty.
+    """
+    sources = user_sources(user_hash)
+    logging.info(f"Ingesting {len(sources)} source(s) on request")
+
+    with task_run(KIND_SOURCE_INGEST, user_hash, ALL_SOURCES_TARGET) as run:
+        failed = 0
+        for source in sources:
+            try:
+                ingest_source_now(source)
+            except Exception as e:
+                # ingest_source_now records the failure on the source itself;
+                # the batch keeps going, because one dead site must not cost
+                # the person the other forty-nine.
+                failed += 1
+                logging.warning(f"Ingesting source '{source.name}' failed: {e}")
+        run.detail = f"{len(sources)} source(s) ingested" + (
+            f", {failed} failed" if failed else ""
+        )
+
+
+def rescrape_user_sources(user_hash: str) -> None:
+    """Re-scrape every source an account owns, now.
+
+    The expensive one: every stored item of every source is re-fetched from its
+    original site and re-embedded. Recorded as one run for the batch, whose
+    detail says how far it got.
+    """
+    sources = user_sources(user_hash)
+    logging.info(f"Re-scraping {len(sources)} source(s) on request")
+
+    with task_run(KIND_SOURCE_RESCRAPE, user_hash, ALL_SOURCES_TARGET) as run:
+        failed = 0
+        for source in sources:
+            try:
+                rescrape_source(source)
+            except Exception as e:
+                failed += 1
+                logging.exception(f"Re-scraping source '{source.name}' failed: {e}")
+        run.detail = f"{len(sources)} source(s) re-scraped" + (
+            f", {failed} failed" if failed else ""
+        )
+
+
 def _feeds_with_votes_on(url_hash: str) -> set:
     """(user_hash, feed_hash) pairs that have cast a vote on this item."""
     with get_db_con() as cur:
@@ -388,25 +465,50 @@ def download_embedding_model_job() -> None:
         ollama.pull(embedding_model)
 
 
+def _image_is_gone(error: ImageEmbedError, missed_before: bool) -> bool:
+    """Whether to stop asking for this picture entirely.
+
+    A 410 is the host saying the resource is gone, which it is not going to
+    take back: believe it the first time. A 404 usually means the same thing --
+    an expired signed preview, a deleted upload -- but is also what a CDN says
+    mid-deploy, so it gets one more attempt before we treat it as final.
+
+    ``missed_before`` is that first strike, and it comes from the item's own
+    ``image_missing_at`` rather than from its attempt count: the manual retry
+    resets the attempts, so counting strikes there meant a 404 never reached
+    two and was fetched again every single pass, forever.
+
+    Everything else keeps its full budget of retries: a 403, a timeout or a
+    refusal page is the kind of thing that fixes itself.
+    """
+    if error.image_is_gone:
+        return True
+    return error.image_is_missing and missed_before
+
+
 def _backfill_one_image(row: dict) -> tuple:
     """Embed one candidate row's preview image.
 
-    Returns ``(embedding_or_None, error_or_None)``. Runs on a worker thread and
-    takes no database connection of its own — results are written by the caller
-    — so a wide fan-out can't drain the pool.
+    Returns ``(embedding_or_None, error_or_None, image_gone, image_missing)``:
+    the third says the picture is gone for good rather than failing for now,
+    the fourth that it answered 404 and has used up its one benefit of the
+    doubt. Runs on a worker thread and takes no database connection of its own
+    — results are written by the caller — so a wide fan-out can't drain the
+    pool.
     """
     try:
-        image_url = embeddable_image_url(row["image_url"], row["content"])
+        image_url = embeddable_image_url(row["image_url"], row["content"], row["url"])
         if not image_url:
             # the candidate query matches "<img" anywhere in the content, which
             # a sanitized body can carry without a usable src; count it as a
             # failure so the row backs off instead of being re-picked each pass
-            return None, "no embeddable image url"
-        return embed_image(image_url), None
+            return None, "no embeddable image url", False, False
+        return embed_image(image_url), None, False, False
     except ImageEmbedError as e:
-        return None, str(e)
+        gone = _image_is_gone(e, row.get("image_missing_at") is not None)
+        return None, str(e), gone, e.image_is_missing
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}", False, False
 
 
 def _failure_summary(reasons: Counter) -> str:
@@ -478,27 +580,35 @@ def backfill_image_embeddings_job() -> None:
     run_id = start_run(KIND_IMAGE_EMBED_BACKFILL)
 
     embedded = 0
+    retired = 0
     reasons: Counter = Counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {pool.submit(_backfill_one_image, row): row for row in rows}
         for future in as_completed(futures):
             row = futures[future]
-            embedding, error = future.result()
+            embedding, error, image_gone, image_missing = future.result()
             try:
                 if embedding is not None:
                     save_image_embedding(row["url_hash"], model_name, embedding)
                     embedded += 1
                 else:
-                    record_image_embed_failure(row["url_hash"], error)
+                    record_image_embed_failure(
+                        row["url_hash"], error, image_gone, image_missing
+                    )
                     reasons[_failure_reason(error)] += 1
+                    retired += image_gone
             except Exception as e:
                 logging.error(
                     f"Error recording image embedding result for {row['url']}: {e}"
                 )
 
     failed = sum(reasons.values())
-    summary = f"{embedded} embedded, {failed} failed" + (
-        f" ({_failure_summary(reasons)})" if failed else ""
+    summary = (
+        f"{embedded} embedded, {failed} failed"
+        # Retired items are the ones that will never be tried again, so the
+        # line says how many rather than leaving the count to drift silently.
+        + (f", {retired} gone for good" if retired else "")
+        + (f" ({_failure_summary(reasons)})" if failed else "")
     )
     logging.info(f"Image embedding backfill complete: {summary}")
     # A pass that embedded nothing at all is the interesting failure -- every

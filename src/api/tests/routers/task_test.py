@@ -5,10 +5,13 @@ import pytest
 from db.task_run import (
     KIND_DUPLICATE_DETECTION,
     KIND_FEED_TRAINING,
+    KIND_IMAGE_EMBED_BACKFILL,
     KIND_SOURCE_INGEST,
+    KIND_SOURCE_RESCRAPE,
     start_run,
     task_run,
 )
+from ingest.jobs import ALL_SOURCES_TARGET
 from db.user import User
 from tests.testing_utils import build_api_request_args
 
@@ -121,3 +124,237 @@ def test_runs_outside_the_window_are_excluded(client, existing_user, token):
 def test_the_endpoint_needs_a_token(client, existing_user):
     args = build_api_request_args(path="/tasks/runs", params={})
     assert client.get(**args).status_code == 401
+
+
+# ---------- running a task on request ----------
+
+
+def _run(client, token, task):
+    args = build_api_request_args(path=f"/tasks/run/{task}", token=token)
+    return client.post(**args)
+
+
+@pytest.fixture
+def no_real_jobs(monkeypatch):
+    """Record what a trigger queued instead of running it.
+
+    The test client runs background tasks for real once the response is sent,
+    and these are the jobs that talk to every image host and source site the
+    account has.
+    """
+    queued = []
+    for name in (
+        "backfill_image_embeddings_job",
+        "duplicate_detection_job",
+        "ingest_user_sources",
+        "rescrape_user_sources",
+    ):
+        monkeypatch.setattr(
+            f"routers.task.{name}",
+            lambda *args, _name=name: queued.append(_name),
+        )
+    yield queued
+
+
+def _failed_image_item(feed, url):
+    from db.base import get_db_con
+    from db.item import ItemLoose
+
+    item = ItemLoose(
+        url=url,
+        title="Title",
+        domain="example.com",
+        excerpt="Excerpt",
+        content="<p>Body</p>",
+        image_url="//cdn.example.com/a.jpg",
+    )
+    item.create(overwrite=True)
+    feed.add_items(item)
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_attempts = 5, image_embed_failed_at = NOW(), "
+            "image_embed_error = 'UnsupportedProtocol' WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+    return item
+
+
+@pytest.fixture
+def image_embed_service_configured():
+    from config import config
+
+    config.config["IMAGE_EMBED_HOST"] = "image-embed"
+    yield
+    config.config.pop("IMAGE_EMBED_HOST", None)
+
+
+def test_retrying_images_clears_the_failures_and_queues_the_pass(
+    client,
+    existing_user,
+    existing_feed,
+    token,
+    no_real_jobs,
+    image_embed_service_configured,
+):
+    """The point of the button: an item that burned through its attempts is
+    stuck for good until something clears them, however fixable its picture."""
+    from db.base import get_db_con
+
+    item = _failed_image_item(existing_feed, "https://example.com/stuck")
+
+    body = _run(client, token, "image_embed_retry").json()
+
+    assert body["started"] is True
+    assert "1 item" in body["detail"]
+    assert no_real_jobs == ["backfill_image_embeddings_job"]
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT image_embed_attempts, image_embed_error FROM items "
+            "WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+        row = cur.fetchone()
+    assert row["image_embed_attempts"] == 0
+    assert row["image_embed_error"] is None
+
+
+def test_retrying_images_leaves_pictures_the_host_says_are_gone(
+    client,
+    existing_user,
+    existing_feed,
+    token,
+    no_real_jobs,
+    image_embed_service_configured,
+):
+    """Re-queueing those is a request made to be told the same thing, several
+    thousand times over -- and the answer says so rather than silently
+    skipping them."""
+    from db.base import get_db_con
+
+    item = _failed_image_item(existing_feed, "https://example.com/gone")
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_gone_at = NOW() WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+
+    body = _run(client, token, "image_embed_retry").json()
+
+    assert body["started"] is True
+    assert "1 more will not be retried" in body["detail"]
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT image_embed_attempts FROM items WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+        assert cur.fetchone()["image_embed_attempts"] == 5
+
+
+def test_a_pass_already_running_is_not_started_twice(
+    client,
+    existing_user,
+    existing_feed,
+    token,
+    no_real_jobs,
+    image_embed_service_configured,
+):
+    """Two passes over one queue is duplicated work, and a button that claimed
+    to have started one anyway would have you pressing it again."""
+    from db.base import get_db_con
+
+    item = _failed_image_item(existing_feed, "https://example.com/stuck")
+    start_run(KIND_IMAGE_EMBED_BACKFILL)
+
+    body = _run(client, token, "image_embed_retry").json()
+
+    assert body["started"] is False
+    assert "already running" in body["detail"]
+    assert no_real_jobs == []
+    # and the failures it would have cleared are left alone
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT image_embed_attempts FROM items WHERE url_hash = %s",
+            (item.url_hash,),
+        )
+        assert cur.fetchone()["image_embed_attempts"] == 5
+
+
+def test_a_scheduled_source_ingest_does_not_block_a_manual_sweep(
+    client, existing_user, token, no_real_jobs
+):
+    """The scheduler is ingesting a source somewhere almost all the time; only
+    another sweep of the whole account is a reason to refuse this one."""
+    start_run(KIND_SOURCE_INGEST, existing_user.name_hash, "Some source")
+
+    assert _run(client, token, "ingest_sources").json()["started"] is True
+    assert no_real_jobs == ["ingest_user_sources"]
+
+
+def test_a_manual_sweep_already_running_is_refused(
+    client, existing_user, token, no_real_jobs
+):
+    start_run(KIND_SOURCE_INGEST, existing_user.name_hash, ALL_SOURCES_TARGET)
+
+    assert _run(client, token, "ingest_sources").json()["started"] is False
+    assert no_real_jobs == []
+
+
+def test_another_account_s_sweep_does_not_block_yours(
+    client, existing_user, token, no_real_jobs
+):
+    other = User(name="somebody-else")
+    other.set_password("password")
+    other.create()
+    start_run(KIND_SOURCE_INGEST, other.name_hash, ALL_SOURCES_TARGET)
+
+    assert _run(client, token, "ingest_sources").json()["started"] is True
+
+
+def test_retrying_images_says_so_when_there_is_no_embedder(
+    client, existing_user, existing_feed, token, no_real_jobs
+):
+    """Without the service the backfill does nothing at all, so queueing it
+    would be a button reporting work it knows will not happen."""
+    _failed_image_item(existing_feed, "https://example.com/stuck")
+
+    body = _run(client, token, "image_embed_retry").json()
+
+    assert body["started"] is False
+    assert "not configured" in body["detail"]
+    assert no_real_jobs == []
+
+
+def test_each_trigger_reports_the_kind_it_produces(
+    client, existing_user, token, no_real_jobs, image_embed_service_configured
+):
+    """The page filters its timeline by kind, so a trigger that named the wrong
+    one would send you looking for a bar that is in another lane."""
+    expected = {
+        "image_embed_retry": KIND_IMAGE_EMBED_BACKFILL,
+        "duplicate_detection": KIND_DUPLICATE_DETECTION,
+        "ingest_sources": KIND_SOURCE_INGEST,
+        "rescrape_sources": KIND_SOURCE_RESCRAPE,
+    }
+    for task, kind in expected.items():
+        body = _run(client, token, task).json()
+        assert body["task"] == task
+        assert body["kind"] == kind
+        assert body["started"] is True
+
+    assert sorted(no_real_jobs) == sorted(
+        [
+            "backfill_image_embeddings_job",
+            "duplicate_detection_job",
+            "ingest_user_sources",
+            "rescrape_user_sources",
+        ]
+    )
+
+
+def test_an_unknown_task_is_rejected(client, existing_user, token):
+    assert _run(client, token, "rm_rf_slash").status_code == 404
+
+
+def test_running_a_task_needs_a_token(client, existing_user):
+    args = build_api_request_args(path="/tasks/run/image_embed_retry")
+    assert client.post(**args).status_code == 401

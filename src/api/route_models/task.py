@@ -54,3 +54,19 @@ class TaskRunsResponse(BaseRouteModel):
     # True when the row limit cut the result short, so the page can say the
     # timeline is incomplete rather than quietly showing part of the window.
     truncated: bool
+
+
+class TaskTriggerResponse(BaseRouteModel):
+    """The outcome of asking for a background task to run now.
+
+    ``started`` is False when the task was already running: the trigger is a
+    request, not a guarantee, and a page that claimed otherwise would have the
+    person pressing the button again.
+    """
+
+    task: str
+    # the task_runs kind this trigger produces, so the page can point the
+    # timeline's filter at the work it just asked for
+    kind: str
+    started: bool
+    detail: str

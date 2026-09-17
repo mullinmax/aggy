@@ -3,7 +3,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from config import config
-from db.item import ImageEmbedError, ItemLoose, ItemStrict, embed_image
+from db.item import (
+    ImageEmbedError,
+    ItemLoose,
+    ItemStrict,
+    data_image_base64,
+    embed_image,
+    embeddable_image_url,
+    usable_image_url,
+)
 
 
 @pytest.mark.parametrize(
@@ -571,3 +579,181 @@ def test_excerpts_and_authors_are_unescaped_too(unique_item_strict):
 
     assert item.excerpt == "Ben & Jerry"
     assert item.author == "R&D team"
+
+
+def test_protocol_relative_image_urls_are_given_a_scheme():
+    """A protocol-relative src is a real picture, but httpx rejects it with
+    "Request URL is missing an 'http://' or 'https://' protocol" -- which is how
+    it showed up in the backfill: a failed embedding rather than a bad URL."""
+    assert (
+        usable_image_url("//cdn.example.com/a.jpg", "https://example.com/post")
+        == "https://cdn.example.com/a.jpg"
+    )
+    # http item, http asset: don't upgrade a host to a scheme it may not serve
+    assert (
+        usable_image_url("//cdn.example.com/a.jpg", "http://example.com/post")
+        == "http://cdn.example.com/a.jpg"
+    )
+    # nothing to resolve against: assume https rather than give up
+    assert (
+        usable_image_url("//cdn.example.com/a.jpg")
+        == "https://cdn.example.com/a.jpg"
+    )
+
+
+def test_relative_image_urls_are_resolved_against_the_item():
+    assert (
+        usable_image_url("/img/a.jpg", "https://example.com/posts/1")
+        == "https://example.com/img/a.jpg"
+    )
+    assert (
+        usable_image_url("a.jpg", "https://example.com/posts/1")
+        == "https://example.com/posts/a.jpg"
+    )
+
+
+def test_unusable_image_urls_are_treated_as_no_image():
+    """A src that can never be downloaded is not a failed fetch to retry; it is
+    an item with no picture, and saying so keeps the backfill from burning its
+    attempts on it."""
+    assert usable_image_url("chrome-extension://abc/a.png") is None
+    # a data: URI carrying something that isn't a picture
+    assert usable_image_url("data:text/html,<b>hi</b>") is None
+    assert usable_image_url("/img/a.jpg") is None
+    assert usable_image_url("   ") is None
+    assert usable_image_url(None) is None
+
+
+def test_embeddable_image_url_resolves_both_sources():
+    """Either source can hold a protocol-relative src -- items stored before the
+    sanitizer resolved them are still in the table."""
+    assert (
+        embeddable_image_url("//cdn.example.com/a.jpg", None, "https://example.com/p")
+        == "https://cdn.example.com/a.jpg"
+    )
+    assert (
+        embeddable_image_url(
+            None, '<p><img src="//cdn.example.com/b.jpg"></p>', "https://example.com/p"
+        )
+        == "https://cdn.example.com/b.jpg"
+    )
+    # an image_url that can't be used still falls back to the content image
+    assert (
+        embeddable_image_url(
+            "chrome-extension://abc/a.png",
+            '<p><img src="https://cdn.example.com/b.jpg"></p>',
+            "https://example.com/p",
+        )
+        == "https://cdn.example.com/b.jpg"
+    )
+
+
+def test_embed_image_reports_an_unusable_url_without_calling_out():
+    """No request is attempted for a URL httpx would reject, and the stored
+    reason names the URL rather than the protocol error."""
+    with pytest.raises(ImageEmbedError, match="not a usable image url"):
+        embed_image("chrome-extension://abc/a.png")
+
+
+def test_data_image_urls_are_kept_and_decoded():
+    """A data: URI is the picture itself, not somewhere to fetch it from --
+    feeds inline thumbnails this way, and dropping them lost real images."""
+    url = "data:image/png;base64,aGVsbG8="
+    assert usable_image_url(url) == url
+    assert data_image_base64(url) == "aGVsbG8="
+    # percent-encoded payloads carry the bytes just as well
+    assert data_image_base64("data:image/svg+xml,%3Csvg%2F%3E") == "PHN2Zy8+"
+    # anything that isn't an image data URI is left to the fetch path
+    assert data_image_base64("https://example.com/a.jpg") is None
+    assert data_image_base64("data:text/html,<b>hi</b>") is None
+
+
+def test_a_broken_data_image_url_is_a_stored_failure():
+    """Unusable payload is a property of the item, not of a host worth
+    retrying, so it fails with a reason rather than raising out of the job."""
+    with pytest.raises(ImageEmbedError, match="data: image url"):
+        data_image_base64("data:image/png;base64,")
+    with pytest.raises(ImageEmbedError, match="malformed"):
+        data_image_base64("data:image/png;base64")
+
+
+def test_embed_image_sends_a_data_url_without_fetching(
+    image_embed_configured, monkeypatch
+):
+    def fail(*args, **kwargs):
+        raise AssertionError("a data: url must not be fetched")
+
+    monkeypatch.setattr("db.item.httpx.get", fail)
+    post = _fake_post([0.1, 0.2])
+    monkeypatch.setattr("db.item.httpx.post", post)
+
+    assert embed_image("data:image/png;base64,aGVsbG8=") == [0.1, 0.2]
+    assert post.call_args.kwargs["json"] == {"image_base64": "aGVsbG8="}
+
+
+def test_sanitizing_keeps_inline_data_images(unique_item_strict):
+    """bleach's default protocol list drops data: srcs, which left the reader a
+    srcless <img> and the embedder no picture at all."""
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={
+                "content": (
+                    '<p><a href="data:text/html,<b>x</b>">link</a>'
+                    '<img src="data:image/png;base64,aGVsbG8="></p>'
+                )
+            }
+        ).dict()
+    )
+
+    assert 'src="data:image/png;base64,aGVsbG8="' in item.content
+    # ... but only for pictures: a data: href is navigation, so it is dropped
+    assert "href" not in item.content
+
+
+def test_sanitizing_resolves_protocol_relative_srcs(unique_item_strict):
+    """The sanitizer only resolved srcs with no host, so "//host/a.jpg" was
+    stored as-is and later handed to httpx unusable."""
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={
+                "url": "https://example.com/posts/1",
+                "content": '<p><img src="//cdn.example.com/a.jpg"></p>',
+            }
+        ).dict()
+    )
+
+    assert 'src="https://cdn.example.com/a.jpg"' in item.content
+
+
+def test_an_image_served_under_a_generic_content_type_is_kept(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """Plenty of hosts serve pictures as "binary/octet-stream"; rejecting on the
+    header alone cost us images that embed perfectly well."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.headers = {"content-type": "binary/octet-stream"}
+    resp.content = b"\x89PNG\r\n\x1a\n" + b"rest of the file"
+    monkeypatch.setattr("db.item.httpx.get", MagicMock(return_value=resp))
+
+    assert ItemStrict._fetch_image_base64("https://example.com/a.png")
+
+
+def test_a_refusal_page_is_still_rejected_whatever_it_is_labelled(
+    unique_item_strict, image_embed_configured, monkeypatch
+):
+    """The bytes are trusted to accept a picture, never to wave one through:
+    an HTML notice is not an image however the host labels it."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.headers = {"content-type": "application/octet-stream"}
+    resp.content = b"<html>Forbidden</html>"
+    monkeypatch.setattr("db.item.httpx.get", MagicMock(return_value=resp))
+
+    with pytest.raises(ValueError, match="octet-stream"):
+        ItemStrict._fetch_image_base64("https://example.com/a.png")
+
+    # and a host that sends no content type at all says so in the reason
+    resp.headers = {}
+    with pytest.raises(ValueError, match="none"):
+        ItemStrict._fetch_image_base64("https://example.com/a.png")

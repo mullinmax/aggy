@@ -1,15 +1,16 @@
 from pydantic import field_validator, StringConstraints, HttpUrl, model_validator
 from datetime import datetime
 import base64
+import binascii
 import logging
 import dateparser
 import httpx
 from bleach import clean
-from typing import ClassVar, Optional, List, Dict
+from typing import ClassVar, Optional, List, Dict, Tuple
 import html
 import json
 import warnings
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import unquote, unquote_to_bytes, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from config import config
@@ -40,6 +41,36 @@ def _is_context_length_error(error: Exception) -> bool:
     return any(marker in message for marker in _CONTEXT_LENGTH_ERROR_MARKERS)
 
 
+# What the first few bytes of an image file look like. Only the formats whose
+# signature is unambiguous: this decides whether to trust a picture a host
+# labelled as something else, and a guess that goes the wrong way sends a chunk
+# of HTML to the embedding service.
+_IMAGE_MAGIC = (
+    b"\xff\xd8\xff",  # JPEG
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"GIF87a",  # GIF
+    b"GIF89a",
+    b"BM",  # BMP
+    b"II*\x00",  # TIFF, little-endian
+    b"MM\x00*",  # TIFF, big-endian
+    b"\x00\x00\x01\x00",  # ICO
+)
+
+
+def _looks_like_an_image(raw: bytes) -> bool:
+    """Whether these bytes start like an image file.
+
+    Used to accept a picture whose host labelled it badly, never to reject one:
+    a format missing from this list still passes on its content type.
+    """
+    if raw.startswith(_IMAGE_MAGIC):
+        return True
+    # WebP and the ISO-BMFF family (AVIF, HEIC) carry their tag at an offset
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return True
+    return raw[4:8] == b"ftyp"
+
+
 def _fetch_error_detail(error: Exception) -> str:
     """Short, log-friendly description of a failed image fetch."""
     if isinstance(error, httpx.HTTPStatusError):
@@ -55,7 +86,29 @@ class ImageEmbedError(Exception):
     isn't an image, or the embedding service rejected/failed on it. The message
     is short enough to store on the row so a stuck item can be diagnosed
     without digging through logs.
+
+    ``statuses`` carries the HTTP status of each candidate URL that answered
+    with one, so a caller can tell "this host is having a bad day" from "the
+    host says the picture is gone" without parsing the message back apart.
     """
+
+    def __init__(self, message: str, statuses: Optional[List[int]] = None):
+        super().__init__(message)
+        self.statuses = tuple(statuses or ())
+
+    @property
+    def image_is_gone(self) -> bool:
+        """Every candidate URL answered 410 Gone: the host is saying this
+        picture is not coming back, and no number of retries changes that."""
+        return bool(self.statuses) and all(s == 410 for s in self.statuses)
+
+    @property
+    def image_is_missing(self) -> bool:
+        """Every candidate URL answered 404 or 410. Usually permanent -- an
+        expired signed preview, a deleted upload -- but a 404 can also be a CDN
+        mid-deploy, so this one is worth a second attempt before believing it.
+        """
+        return bool(self.statuses) and all(s in (404, 410) for s in self.statuses)
 
 
 # TODO test that urls are preserved and hashed fully. htps://example.com/0 seems to be truncated to htps://example.com/
@@ -198,21 +251,31 @@ class ItemBase(AggyBaseModel):
 
         base_url = str(self.url)
 
-        # Find all <a> tags with a relative href attribute
+        # Find all <a> tags with a relative href attribute. Tested on the
+        # scheme rather than the host: a protocol-relative URL
+        # ("//cdn.example.com/x.jpg") has a host but is still unusable on its
+        # own, and urljoin fills in the base's scheme for it.
         for a_tag in soup.find_all("a", href=True):
             # Check if the link is relative
             href = a_tag["href"]
             parsed_href = urlparse(href)
-            if not parsed_href.netloc:
+            if not parsed_href.scheme:
                 # Join the relative link with the base URL
                 absolute_url = urljoin(base_url, href)
                 a_tag["href"] = absolute_url
+
+            # A data: link is not navigation, whatever it claims to be, and
+            # allowing the scheme below is only meant to keep inline pictures.
+            # Dropped here so the sanitizer's protocol list doesn't have to
+            # carry it for <a> as well.
+            if parsed_href.scheme == "data":
+                del a_tag["href"]
 
         # Find and fix relative src in <img> tags
         for img_tag in soup.find_all("img", src=True):
             src = img_tag["src"]
             parsed_src = urlparse(src)
-            if not parsed_src.netloc:
+            if not parsed_src.scheme:
                 absolute_url = urljoin(base_url, src)
                 img_tag["src"] = absolute_url
 
@@ -228,6 +291,12 @@ class ItemBase(AggyBaseModel):
                 "td": ["colspan", "rowspan"],
                 "th": ["colspan", "rowspan"],
             },
+            # "data" is bleach's default protocol list plus the one feeds use
+            # to inline a thumbnail: <img src="data:image/png;base64,...">.
+            # Without it the picture is stripped to a srcless <img>, which the
+            # reader shows as a broken card and the image embedder never sees.
+            # Only <img> can reach the scheme -- data: hrefs are removed above.
+            protocols=["http", "https", "mailto", "data"],
             strip=True,
         )
         return self
@@ -356,7 +425,7 @@ class ItemBase(AggyBaseModel):
         image the reader promotes out of the article body into the hero slot,
         and a content image belongs in both places at once.
         """
-        return embeddable_image_url(self.image_url, self.content)
+        return embeddable_image_url(self.image_url, self.content, str(self.url))
 
     @staticmethod
     def _image_fetch_headers() -> Dict[str, str]:
@@ -388,12 +457,18 @@ class ItemBase(AggyBaseModel):
           that query string, so a mangled one is rejected outright.
         * reddit's signed preview host serves the same asset unsigned from
           ``i.redd.it``, which works even when the signature doesn't.
-        """
-        urls = [image_url]
 
-        unescaped = html.unescape(image_url)
-        if unescaped not in urls:
-            urls.append(unescaped)
+        Candidates that aren't absolute http(s) URLs are dropped rather than
+        handed to httpx, which rejects them with an error about the request URL
+        rather than about the image.
+        """
+        urls = []
+
+        for url in (image_url, html.unescape(image_url)):
+            usable = usable_image_url(url)
+            # data: URIs are read directly by embed_image, never requested
+            if usable and not usable.startswith("data:") and usable not in urls:
+                urls.append(usable)
 
         for url in list(urls):
             parsed = urlparse(url)
@@ -415,13 +490,21 @@ class ItemBase(AggyBaseModel):
             headers=ItemBase._image_fetch_headers(),
         )
         response.raise_for_status()
-        # a host that refuses the request often answers 200 with an HTML
+        # A host that refuses the request often answers 200 with an HTML
         # notice; sending that on would fail in the embedding service with a
-        # far less obvious error
+        # far less obvious error. The header alone is not enough to tell those
+        # apart from a real picture, though: plenty of hosts serve images as
+        # "application/octet-stream" (or mislabel them outright), and rejecting
+        # those cost us pictures that would have embedded perfectly well. Trust
+        # what the bytes say first, and fall back to the header only when they
+        # are a format we don't recognise.
+        raw = response.content
         content_type = response.headers.get("content-type", "").split(";")[0].strip()
-        if content_type and not content_type.startswith("image/"):
-            raise ValueError(f"expected an image, got content-type '{content_type}'")
-        return base64.b64encode(response.content).decode("ascii")
+        if not _looks_like_an_image(raw) and not content_type.startswith("image/"):
+            raise ValueError(
+                f"expected an image, got content-type '{content_type or 'none'}'"
+            )
+        return base64.b64encode(raw).decode("ascii")
 
     def add_image_embedding(self, model_name: str, force_refresh=False) -> None:
         """Embed the item's preview image via the CLIP image-embedding service
@@ -472,21 +555,122 @@ class ItemBase(AggyBaseModel):
 # ---------------------------------------------------------------------------
 
 
+def data_image_base64(image_url: str) -> Optional[str]:
+    """The bytes of a ``data:`` image URI, base64-encoded, or ``None``.
+
+    A data URI carries the picture itself instead of somewhere to fetch it
+    from, so it needs no request at all -- and plenty of feeds inline their
+    thumbnails this way, so treating one as "no image" would drop real preview
+    pictures out of the recommender.
+
+    Returns ``None`` when the URI isn't an image data URI (any other scheme, or
+    a ``data:`` URI holding something that isn't an image); raises
+    :class:`ImageEmbedError` when it is one but its payload is unusable, which
+    is a property of the item rather than of a host we could retry.
+    """
+    if not image_url or not image_url[:5].lower() == "data:":
+        return None
+
+    header, comma, payload = image_url[len("data:") :].partition(",")
+    if not comma:
+        raise ImageEmbedError("malformed data: image url")
+
+    parameters = [p.strip().lower() for p in header.split(";")]
+    if not parameters[0].startswith("image/"):
+        return None
+
+    try:
+        if "base64" in parameters[1:]:
+            # re-encoded rather than passed through: the stored payload can
+            # carry whitespace or missing padding, which the embedding service
+            # decodes with validate=True and rejects
+            raw = base64.b64decode(unquote(payload), validate=False)
+        else:
+            raw = unquote_to_bytes(payload)
+    except (binascii.Error, ValueError) as e:
+        raise ImageEmbedError(f"could not decode data: image url: {e}")
+
+    if not raw:
+        raise ImageEmbedError("data: image url is empty")
+
+    return base64.b64encode(raw).decode("ascii")
+
+
+def usable_image_url(
+    image_url: Optional[str], base_url: Optional[str] = None
+) -> Optional[str]:
+    """``image_url`` as a picture we can actually turn into an embedding.
+
+    A stored image URL isn't always an absolute http(s) one. Feeds and page
+    markup are full of protocol-relative ("//cdn.example.com/x.jpg") and
+    root-relative ("/img/x.jpg") srcs, and items scraped before the sanitizer
+    resolved the protocol-relative ones still carry them. httpx refuses both
+    outright -- "Request URL is missing an 'http://' or 'https://' protocol" --
+    which surfaces as a failed embedding rather than as the bad URL it is.
+
+    Resolve what can be resolved (against the item's own URL when we have one,
+    otherwise assuming https for a protocol-relative host), keep ``data:``
+    image URIs as they are (:func:`data_image_base64` reads the picture
+    straight out of them), and treat everything else as no picture at all: a
+    ``chrome-extension://`` src is never going to be downloaded, and reporting
+    it as "no embeddable image url" stops the backfill burning attempts on a
+    fetch that cannot succeed.
+    """
+    if not image_url:
+        return None
+
+    candidate = image_url.strip()
+    if not candidate:
+        return None
+
+    parsed = urlparse(candidate)
+    if not parsed.scheme:
+        # "//host/path" has a netloc but no scheme; anything else is relative
+        # to the item's own URL.
+        if candidate.startswith("//"):
+            base_scheme = urlparse(base_url).scheme if base_url else ""
+            candidate = urlunparse(
+                (base_scheme if base_scheme in ("http", "https") else "https",)
+                + tuple(parsed[1:])
+            )
+        elif base_url:
+            candidate = urljoin(base_url, candidate)
+        else:
+            return None
+        parsed = urlparse(candidate)
+
+    if parsed.scheme == "data":
+        # cheap shape check only; decoding happens once, at embedding time
+        return candidate if parsed.path[:6].lower() == "image/" else None
+
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+
+    return candidate
+
+
 def embeddable_image_url(
-    image_url: Optional[str], content: Optional[str]
+    image_url: Optional[str], content: Optional[str], base_url: Optional[str] = None
 ) -> Optional[str]:
     """The picture an item actually shows, given its ``image_url``/``content``.
 
     See :attr:`ItemBase.embeddable_image_url` for why the content fallback
-    exists.
+    exists. Either source can hold something we can't make an embedding from,
+    so both go through :func:`usable_image_url`, and a stored ``image_url``
+    that isn't usable still falls back to the content image.
     """
-    if image_url:
-        return image_url
+    usable = usable_image_url(image_url, base_url)
+    if usable:
+        return usable
     if not content:
         return None
-    # content is stored sanitized, with relative srcs already made absolute
+    # content is stored sanitized, with relative srcs already made absolute --
+    # but items scraped before that covered protocol-relative srcs are still in
+    # the table, so resolve again here rather than trusting the stored value
     img = BeautifulSoup(content, "html.parser").find("img", src=True)
-    return img["src"] if img else None
+    if not img:
+        return None
+    return usable_image_url(img["src"], base_url)
 
 
 def embed_image(image_url: str) -> List[float]:
@@ -496,17 +680,29 @@ def embed_image(image_url: str) -> List[float]:
     the item — when the picture can't be fetched from any candidate URL or the
     embedding service won't produce a vector for it.
     """
-    image_base64 = None
-    failures = []
-    for candidate in ItemBase._image_fetch_urls(image_url):
-        try:
-            image_base64 = ItemBase._fetch_image_base64(candidate)
-            break
-        except Exception as e:
-            failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+    # a data: URI is the picture, not an address to fetch it from
+    image_base64 = data_image_base64(image_url)
 
     if image_base64 is None:
-        raise ImageEmbedError(f"could not fetch image: {'; '.join(failures)}")
+        candidates = ItemBase._image_fetch_urls(image_url)
+        if not candidates:
+            raise ImageEmbedError(f"not a usable image url: {image_url[:100]}")
+
+        failures = []
+        statuses = []
+        for candidate in candidates:
+            try:
+                image_base64 = ItemBase._fetch_image_base64(candidate)
+                break
+            except Exception as e:
+                failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+                if isinstance(e, httpx.HTTPStatusError):
+                    statuses.append(e.response.status_code)
+
+        if image_base64 is None:
+            raise ImageEmbedError(
+                f"could not fetch image: {'; '.join(failures)}", statuses
+            )
 
     host = config.get("IMAGE_EMBED_HOST", None)
     port = config.get_int("IMAGE_EMBED_PORT")
@@ -544,11 +740,12 @@ _MAX_STORED_IMAGE_EMBED_ERROR = 500
 # within a tier the newest go first, since those are what the recommender is
 # about to rank.
 _BACKFILL_CANDIDATES_SQL = """
-SELECT url_hash, url, image_url, content
+SELECT url_hash, url, image_url, content, image_embed_attempts, image_missing_at
 FROM items
 WHERE (image_url IS NOT NULL OR content ILIKE '%%<img%%')
   AND (image_embeddings IS NULL OR NOT jsonb_exists(image_embeddings, %(model)s))
   AND image_embed_attempts < %(max_attempts)s
+  AND image_gone_at IS NULL
   AND (
         image_embed_failed_at IS NULL
         OR image_embed_failed_at <= NOW() - make_interval(secs =>
@@ -606,16 +803,39 @@ def save_image_embedding(
         )
 
 
-def record_image_embed_failure(url_hash: str, error: str) -> None:
-    """Count a failed image-embedding attempt so the item backs off."""
+def record_image_embed_failure(
+    url_hash: str, error: str, image_gone: bool = False, image_missing: bool = False
+) -> None:
+    """Count a failed image-embedding attempt so the item backs off.
+
+    ``image_gone`` retires the item instead: the host said the picture is not
+    there, so the remaining attempts would each be a request made to be told
+    the same thing. The stamp is also what the recommender reads to know this
+    article's picture went away (see :mod:`ranking.engine`), so it is a fact
+    worth recording rather than a queue flag.
+
+    ``image_missing`` marks a 404 without retiring anything. It is the first
+    strike of the two a 404 gets, kept in its own column rather than counted
+    with the attempts, because the manual retry resets the attempts -- which
+    left a 404 permanently on "strike one" for anyone who used the button, and
+    fetched forever. Only a re-scrape finding a different picture clears it.
+    """
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET "
             "image_embed_attempts = image_embed_attempts + 1, "
             "image_embed_failed_at = NOW(), "
-            "image_embed_error = %s "
+            "image_embed_error = %s, "
+            "image_gone_at = CASE WHEN %s THEN NOW() ELSE image_gone_at END, "
+            "image_missing_at = CASE WHEN %s THEN COALESCE(image_missing_at, NOW()) "
+            "ELSE image_missing_at END "
             "WHERE url_hash = %s",
-            (error[:_MAX_STORED_IMAGE_EMBED_ERROR], url_hash),
+            (
+                error[:_MAX_STORED_IMAGE_EMBED_ERROR],
+                image_gone,
+                image_missing,
+                url_hash,
+            ),
         )
 
 
@@ -624,16 +844,56 @@ def reset_image_embed_attempts(url_hash: str) -> None:
 
     Called when a re-scrape turns up a different preview image: the old URL's
     failures say nothing about the new one, and without this an item that
-    exhausted its attempts would never be tried again even after the thing that
-    was broken about it got fixed.
+    exhausted its attempts -- or was retired because the old picture was gone
+    -- would never be tried again even after the thing that was broken about it
+    got fixed. This is also the only route back for a retired item, which is
+    why it clears the stamp rather than leaving it to be reasoned about.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_attempts = 0, "
+            "image_embed_failed_at = NULL, image_embed_error = NULL, "
+            "image_gone_at = NULL, image_missing_at = NULL "
+            "WHERE url_hash = %s "
+            "AND (image_embed_attempts > 0 OR image_gone_at IS NOT NULL)",
+            (url_hash,),
+        )
+
+
+def reset_failed_image_embeds() -> Tuple[int, int]:
+    """Give items whose image embedding failed a fresh retry budget.
+
+    The backfill backs a failing item off and eventually drops it from the
+    queue, which is right for a picture that is simply gone -- and wrong the
+    moment the thing that was broken gets fixed, whether that is a bug in how
+    we built the URL, an image host that was down for a day, or the embedding
+    service itself being misconfigured. Nothing on the row tells those apart,
+    so this is the manual answer: clear the failures and let the backfill judge
+    them again.
+
+    Items whose host said the picture is gone are left alone. Re-queueing those
+    is a request made to be told the same thing, several thousand times over;
+    the way back for one of them is a re-scrape turning up a different picture.
+
+    A 404 already seen once keeps that strike (``image_missing_at`` is not
+    cleared here): it gets its second try, and if the picture is still missing
+    it retires instead of coming back round forever.
+
+    Returns ``(re-queued, left as gone)`` -- the second number is worth saying
+    out loud, because "nothing happened" and "those pictures no longer exist"
+    look identical from a button.
     """
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET image_embed_attempts = 0, "
             "image_embed_failed_at = NULL, image_embed_error = NULL "
-            "WHERE url_hash = %s AND image_embed_attempts > 0",
-            (url_hash,),
+            "WHERE image_embed_attempts > 0 AND image_gone_at IS NULL"
         )
+        requeued = cur.rowcount
+        cur.execute(
+            "SELECT COUNT(*) AS gone FROM items WHERE image_gone_at IS NOT NULL"
+        )
+        return requeued, cur.fetchone()["gone"]
 
 
 class ItemStrict(ItemBase):

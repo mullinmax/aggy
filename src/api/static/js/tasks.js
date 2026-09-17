@@ -42,6 +42,10 @@ const TASK_KIND_META = {
     label: 'Source ingest',
     help: 'Fetching a source and storing what it returned',
   },
+  source_rescrape: {
+    label: 'Source re-scrape',
+    help: 'Re-collecting content, pictures and media for articles already stored',
+  },
   duplicate_detection: {
     label: 'Duplicate checks',
     help: 'Grouping articles that are the same content under different URLs',
@@ -66,9 +70,57 @@ const TASK_STATUS_META = {
   running: { label: 'Running', bar: 'bg-info', text: 'text-info', mark: '◐' },
 };
 
+// The tasks a person can ask for by hand, in the order they are offered.
+// Everything here is work the scheduler already does on its own interval -- the
+// button only says "now", because waiting an hour to find out whether a fix
+// worked is how a fix goes unverified.
+//
+// `confirm` marks the ones worth a second thought: a re-scrape re-fetches every
+// article of every source from its original site, which is minutes of work and
+// a lot of requests to other people's servers.
+const TASK_TRIGGERS = [
+  {
+    task: 'image_embed_retry',
+    label: 'Retry failed images',
+    help: 'Clear the failures on every picture the embedder could not handle, '
+      + 'including the ones that ran out of attempts and left the queue, then '
+      + 'embed them again. Pictures whose host says they are gone are left '
+      + 'alone; a re-scrape is what revives those.',
+  },
+  {
+    task: 'ingest_sources',
+    label: 'Fetch all sources',
+    help: 'Check every one of your sources for new articles now, instead of at '
+      + 'its next scheduled turn.',
+  },
+  {
+    task: 'duplicate_detection',
+    label: 'Find duplicates',
+    help: 'Re-group articles that reach you as the same story under different '
+      + 'URLs.',
+  },
+  {
+    task: 'rescrape_sources',
+    label: 'Re-scrape all sources',
+    help: 'Re-collect content, pictures and media for every article you have '
+      + 'stored, and rebuild their embeddings. Slow, and heavy on the sites it '
+      + 'fetches from.',
+    confirm: {
+      title: 'Re-scrape every source?',
+      message: 'This re-fetches every article of every source from its original '
+        + 'site and rebuilds its embeddings. It can run for a long time and '
+        + 'makes a lot of requests to other people’s servers.',
+      action: 'Re-scrape',
+    },
+  },
+];
+
 const TASKS_REFRESH_SECONDS = 15;
 
 let taskData = null;
+// Which trigger is mid-request, so its button can say so and cannot be pressed
+// twice; the work itself is not tracked here -- that is what the timeline is.
+let taskTriggerPending = null;
 let taskFilters = { hours: 24, kinds: null, statuses: null, view: 'timeline' };
 let tasksTimer = null;
 
@@ -132,6 +184,7 @@ function renderTasks() {
 
   render($('tasksPageBody'),
     taskSummaryTiles(data),
+    taskTriggerBar(),
     taskFilterBar(),
     data.truncated
       ? h('div', { class: 'alert alert-warning text-xs mb-3' },
@@ -164,6 +217,64 @@ function windowLabel(hours) {
   if (hours <= 24) return `${hours} hour${hours === 1 ? '' : 's'}`;
   const days = Math.round(hours / 24);
   return `${days} day${days === 1 ? '' : 's'}`;
+}
+
+// ---------- run now ----------
+
+// Asking for a pass now. Rendered as plain buttons rather than a menu: there
+// are four, and the whole point is that the one you want is one press away
+// while you are watching the timeline it feeds.
+function taskTriggerBar() {
+  const buttons = TASK_TRIGGERS.map((trigger) =>
+    h('button', {
+      class: `btn btn-sm ${taskTriggerPending === trigger.task ? 'btn-disabled' : ''}`,
+      title: trigger.help,
+      onclick: () => {
+        if (!trigger.confirm) return runTaskNow(trigger);
+        confirmDialog({
+          ...trigger.confirm,
+          onConfirm: () => runTaskNow(trigger),
+        });
+        showModal('confirmModal');
+      },
+    },
+      taskTriggerPending === trigger.task
+        ? h('span', { class: 'loading loading-spinner loading-xs' })
+        : null,
+      trigger.label));
+
+  return sectionCard('Run a task now',
+    'These all run on a schedule already; this just asks for one immediately',
+    h('div', { class: 'flex flex-wrap gap-2' }, buttons));
+}
+
+// The answer says whether the pass actually started: a queue already being
+// worked is not started a second time, and a button that claimed otherwise
+// would have you pressing it again.
+async function runTaskNow(trigger) {
+  if (taskTriggerPending) return;
+  taskTriggerPending = trigger.task;
+  renderTasks();
+  try {
+    const result = await sdk.tasksRun({ task: trigger.task });
+    toast(result.detail, result.started ? 'alert-success' : 'alert-warning');
+    // A pass that just started is a bar the timeline does not have yet, and
+    // the auto-refresh may be off.
+    if (result.started && !taskFilterIncludes(result.kind)) {
+      taskFilters.kinds = null;
+    }
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  } finally {
+    taskTriggerPending = null;
+    await loadTasks();
+  }
+}
+
+// Whether the timeline currently shows a kind at all -- a run you just asked
+// for landing in a filtered-out lane looks like nothing happened.
+function taskFilterIncludes(kind) {
+  return taskFilters.kinds === null || taskFilters.kinds.includes(kind);
 }
 
 // ---------- filters ----------

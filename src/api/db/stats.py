@@ -104,7 +104,8 @@ def base_domain(host: Optional[str]) -> str:
 # is exactly the picture the image embedder would be handed.
 #
 # The first parameter is the backfill's attempt ceiling: an article whose
-# picture has been retried that many times has left the backfill queue for good,
+# picture has been retried that many times -- or whose host has said outright
+# that the picture is gone -- has left the backfill queue for good,
 # which is the difference between "the embedder hasn't got to it yet" and "the
 # embedder can't have it" -- worth telling apart on a page whose whole job is
 # showing what the recommender is missing.
@@ -123,7 +124,8 @@ WITH user_item_rows AS (
         (i.image_embeddings IS NOT NULL
             AND i.image_embeddings::text NOT IN ('null', '{}'))
             AS has_image_embedding,
-        (i.image_embed_attempts >= %s) AS image_embed_given_up,
+        (i.image_embed_attempts >= %s OR i.image_gone_at IS NOT NULL)
+            AS image_embed_given_up,
         (i.content IS NOT NULL AND i.content <> '') AS has_content,
         (i.excerpt IS NOT NULL AND i.excerpt <> '') AS has_excerpt,
         (i.author IS NOT NULL AND i.author <> '') AS has_author,
