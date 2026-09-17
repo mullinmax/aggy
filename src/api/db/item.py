@@ -1,6 +1,7 @@
 from pydantic import field_validator, StringConstraints, HttpUrl, model_validator
 from datetime import datetime
 import base64
+import binascii
 import logging
 import dateparser
 import httpx
@@ -9,7 +10,7 @@ from typing import ClassVar, Optional, List, Dict
 import html
 import json
 import warnings
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import unquote, unquote_to_bytes, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from config import config
@@ -211,6 +212,13 @@ class ItemBase(AggyBaseModel):
                 absolute_url = urljoin(base_url, href)
                 a_tag["href"] = absolute_url
 
+            # A data: link is not navigation, whatever it claims to be, and
+            # allowing the scheme below is only meant to keep inline pictures.
+            # Dropped here so the sanitizer's protocol list doesn't have to
+            # carry it for <a> as well.
+            if parsed_href.scheme == "data":
+                del a_tag["href"]
+
         # Find and fix relative src in <img> tags
         for img_tag in soup.find_all("img", src=True):
             src = img_tag["src"]
@@ -231,6 +239,12 @@ class ItemBase(AggyBaseModel):
                 "td": ["colspan", "rowspan"],
                 "th": ["colspan", "rowspan"],
             },
+            # "data" is bleach's default protocol list plus the one feeds use
+            # to inline a thumbnail: <img src="data:image/png;base64,...">.
+            # Without it the picture is stripped to a srcless <img>, which the
+            # reader shows as a broken card and the image embedder never sees.
+            # Only <img> can reach the scheme -- data: hrefs are removed above.
+            protocols=["http", "https", "mailto", "data"],
             strip=True,
         )
         return self
@@ -399,9 +413,10 @@ class ItemBase(AggyBaseModel):
         urls = []
 
         for url in (image_url, html.unescape(image_url)):
-            fetchable = fetchable_image_url(url)
-            if fetchable and fetchable not in urls:
-                urls.append(fetchable)
+            usable = usable_image_url(url)
+            # data: URIs are read directly by embed_image, never requested
+            if usable and not usable.startswith("data:") and usable not in urls:
+                urls.append(usable)
 
         for url in list(urls):
             parsed = urlparse(url)
@@ -480,10 +495,51 @@ class ItemBase(AggyBaseModel):
 # ---------------------------------------------------------------------------
 
 
-def fetchable_image_url(
+def data_image_base64(image_url: str) -> Optional[str]:
+    """The bytes of a ``data:`` image URI, base64-encoded, or ``None``.
+
+    A data URI carries the picture itself instead of somewhere to fetch it
+    from, so it needs no request at all -- and plenty of feeds inline their
+    thumbnails this way, so treating one as "no image" would drop real preview
+    pictures out of the recommender.
+
+    Returns ``None`` when the URI isn't an image data URI (any other scheme, or
+    a ``data:`` URI holding something that isn't an image); raises
+    :class:`ImageEmbedError` when it is one but its payload is unusable, which
+    is a property of the item rather than of a host we could retry.
+    """
+    if not image_url or not image_url[:5].lower() == "data:":
+        return None
+
+    header, comma, payload = image_url[len("data:") :].partition(",")
+    if not comma:
+        raise ImageEmbedError("malformed data: image url")
+
+    parameters = [p.strip().lower() for p in header.split(";")]
+    if not parameters[0].startswith("image/"):
+        return None
+
+    try:
+        if "base64" in parameters[1:]:
+            # re-encoded rather than passed through: the stored payload can
+            # carry whitespace or missing padding, which the embedding service
+            # decodes with validate=True and rejects
+            raw = base64.b64decode(unquote(payload), validate=False)
+        else:
+            raw = unquote_to_bytes(payload)
+    except (binascii.Error, ValueError) as e:
+        raise ImageEmbedError(f"could not decode data: image url: {e}")
+
+    if not raw:
+        raise ImageEmbedError("data: image url is empty")
+
+    return base64.b64encode(raw).decode("ascii")
+
+
+def usable_image_url(
     image_url: Optional[str], base_url: Optional[str] = None
 ) -> Optional[str]:
-    """``image_url`` as something httpx can actually fetch, or ``None``.
+    """``image_url`` as a picture we can actually turn into an embedding.
 
     A stored image URL isn't always an absolute http(s) one. Feeds and page
     markup are full of protocol-relative ("//cdn.example.com/x.jpg") and
@@ -493,8 +549,9 @@ def fetchable_image_url(
     which surfaces as a failed embedding rather than as the bad URL it is.
 
     Resolve what can be resolved (against the item's own URL when we have one,
-    otherwise assuming https for a protocol-relative host) and treat everything
-    that still isn't http(s) as no picture at all: a ``data:`` URI or a
+    otherwise assuming https for a protocol-relative host), keep ``data:``
+    image URIs as they are (:func:`data_image_base64` reads the picture
+    straight out of them), and treat everything else as no picture at all: a
     ``chrome-extension://`` src is never going to be downloaded, and reporting
     it as "no embeddable image url" stops the backfill burning attempts on a
     fetch that cannot succeed.
@@ -522,6 +579,10 @@ def fetchable_image_url(
             return None
         parsed = urlparse(candidate)
 
+    if parsed.scheme == "data":
+        # cheap shape check only; decoding happens once, at embedding time
+        return candidate if parsed.path[:6].lower() == "image/" else None
+
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None
 
@@ -534,13 +595,13 @@ def embeddable_image_url(
     """The picture an item actually shows, given its ``image_url``/``content``.
 
     See :attr:`ItemBase.embeddable_image_url` for why the content fallback
-    exists. Either source can hold something that isn't a fetchable URL, so
-    both go through :func:`fetchable_image_url`, and a stored ``image_url``
-    that can't be fetched still falls back to the content image.
+    exists. Either source can hold something we can't make an embedding from,
+    so both go through :func:`usable_image_url`, and a stored ``image_url``
+    that isn't usable still falls back to the content image.
     """
-    fetchable = fetchable_image_url(image_url, base_url)
-    if fetchable:
-        return fetchable
+    usable = usable_image_url(image_url, base_url)
+    if usable:
+        return usable
     if not content:
         return None
     # content is stored sanitized, with relative srcs already made absolute --
@@ -549,7 +610,7 @@ def embeddable_image_url(
     img = BeautifulSoup(content, "html.parser").find("img", src=True)
     if not img:
         return None
-    return fetchable_image_url(img["src"], base_url)
+    return usable_image_url(img["src"], base_url)
 
 
 def embed_image(image_url: str) -> List[float]:
@@ -559,21 +620,24 @@ def embed_image(image_url: str) -> List[float]:
     the item — when the picture can't be fetched from any candidate URL or the
     embedding service won't produce a vector for it.
     """
-    candidates = ItemBase._image_fetch_urls(image_url)
-    if not candidates:
-        raise ImageEmbedError(f"not a fetchable image url: {image_url[:100]}")
-
-    image_base64 = None
-    failures = []
-    for candidate in candidates:
-        try:
-            image_base64 = ItemBase._fetch_image_base64(candidate)
-            break
-        except Exception as e:
-            failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+    # a data: URI is the picture, not an address to fetch it from
+    image_base64 = data_image_base64(image_url)
 
     if image_base64 is None:
-        raise ImageEmbedError(f"could not fetch image: {'; '.join(failures)}")
+        candidates = ItemBase._image_fetch_urls(image_url)
+        if not candidates:
+            raise ImageEmbedError(f"not a usable image url: {image_url[:100]}")
+
+        failures = []
+        for candidate in candidates:
+            try:
+                image_base64 = ItemBase._fetch_image_base64(candidate)
+                break
+            except Exception as e:
+                failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+
+        if image_base64 is None:
+            raise ImageEmbedError(f"could not fetch image: {'; '.join(failures)}")
 
     host = config.get("IMAGE_EMBED_HOST", None)
     port = config.get_int("IMAGE_EMBED_PORT")
