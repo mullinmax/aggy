@@ -465,7 +465,7 @@ def download_embedding_model_job() -> None:
         ollama.pull(embedding_model)
 
 
-def _image_is_gone(error: ImageEmbedError, attempts_so_far: int) -> bool:
+def _image_is_gone(error: ImageEmbedError, missed_before: bool) -> bool:
     """Whether to stop asking for this picture entirely.
 
     A 410 is the host saying the resource is gone, which it is not going to
@@ -473,21 +473,28 @@ def _image_is_gone(error: ImageEmbedError, attempts_so_far: int) -> bool:
     an expired signed preview, a deleted upload -- but is also what a CDN says
     mid-deploy, so it gets one more attempt before we treat it as final.
 
+    ``missed_before`` is that first strike, and it comes from the item's own
+    ``image_missing_at`` rather than from its attempt count: the manual retry
+    resets the attempts, so counting strikes there meant a 404 never reached
+    two and was fetched again every single pass, forever.
+
     Everything else keeps its full budget of retries: a 403, a timeout or a
     refusal page is the kind of thing that fixes itself.
     """
     if error.image_is_gone:
         return True
-    return error.image_is_missing and attempts_so_far >= 1
+    return error.image_is_missing and missed_before
 
 
 def _backfill_one_image(row: dict) -> tuple:
     """Embed one candidate row's preview image.
 
-    Returns ``(embedding_or_None, error_or_None, image_gone)``, the last saying
-    the picture is gone for good rather than failing for now. Runs on a worker
-    thread and takes no database connection of its own — results are written by
-    the caller — so a wide fan-out can't drain the pool.
+    Returns ``(embedding_or_None, error_or_None, image_gone, image_missing)``:
+    the third says the picture is gone for good rather than failing for now,
+    the fourth that it answered 404 and has used up its one benefit of the
+    doubt. Runs on a worker thread and takes no database connection of its own
+    — results are written by the caller — so a wide fan-out can't drain the
+    pool.
     """
     try:
         image_url = embeddable_image_url(row["image_url"], row["content"], row["url"])
@@ -495,12 +502,13 @@ def _backfill_one_image(row: dict) -> tuple:
             # the candidate query matches "<img" anywhere in the content, which
             # a sanitized body can carry without a usable src; count it as a
             # failure so the row backs off instead of being re-picked each pass
-            return None, "no embeddable image url", False
-        return embed_image(image_url), None, False
+            return None, "no embeddable image url", False, False
+        return embed_image(image_url), None, False, False
     except ImageEmbedError as e:
-        return None, str(e), _image_is_gone(e, row.get("image_embed_attempts", 0))
+        gone = _image_is_gone(e, row.get("image_missing_at") is not None)
+        return None, str(e), gone, e.image_is_missing
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}", False
+        return None, f"{type(e).__name__}: {e}", False, False
 
 
 def _failure_summary(reasons: Counter) -> str:
@@ -578,13 +586,15 @@ def backfill_image_embeddings_job() -> None:
         futures = {pool.submit(_backfill_one_image, row): row for row in rows}
         for future in as_completed(futures):
             row = futures[future]
-            embedding, error, image_gone = future.result()
+            embedding, error, image_gone, image_missing = future.result()
             try:
                 if embedding is not None:
                     save_image_embedding(row["url_hash"], model_name, embedding)
                     embedded += 1
                 else:
-                    record_image_embed_failure(row["url_hash"], error, image_gone)
+                    record_image_embed_failure(
+                        row["url_hash"], error, image_gone, image_missing
+                    )
                     reasons[_failure_reason(error)] += 1
                     retired += image_gone
             except Exception as e:

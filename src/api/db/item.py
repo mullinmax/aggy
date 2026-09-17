@@ -740,7 +740,7 @@ _MAX_STORED_IMAGE_EMBED_ERROR = 500
 # within a tier the newest go first, since those are what the recommender is
 # about to rank.
 _BACKFILL_CANDIDATES_SQL = """
-SELECT url_hash, url, image_url, content, image_embed_attempts
+SELECT url_hash, url, image_url, content, image_embed_attempts, image_missing_at
 FROM items
 WHERE (image_url IS NOT NULL OR content ILIKE '%%<img%%')
   AND (image_embeddings IS NULL OR NOT jsonb_exists(image_embeddings, %(model)s))
@@ -804,15 +804,21 @@ def save_image_embedding(
 
 
 def record_image_embed_failure(
-    url_hash: str, error: str, image_gone: bool = False
+    url_hash: str, error: str, image_gone: bool = False, image_missing: bool = False
 ) -> None:
     """Count a failed image-embedding attempt so the item backs off.
 
     ``image_gone`` retires the item instead: the host said the picture is not
     there, so the remaining attempts would each be a request made to be told
     the same thing. The stamp is also what the recommender reads to know this
-    article's picture went away (see :func:`ranking.engine`), so it is a fact
+    article's picture went away (see :mod:`ranking.engine`), so it is a fact
     worth recording rather than a queue flag.
+
+    ``image_missing`` marks a 404 without retiring anything. It is the first
+    strike of the two a 404 gets, kept in its own column rather than counted
+    with the attempts, because the manual retry resets the attempts -- which
+    left a 404 permanently on "strike one" for anyone who used the button, and
+    fetched forever. Only a re-scrape finding a different picture clears it.
     """
     with get_db_con() as cur:
         cur.execute(
@@ -820,9 +826,16 @@ def record_image_embed_failure(
             "image_embed_attempts = image_embed_attempts + 1, "
             "image_embed_failed_at = NOW(), "
             "image_embed_error = %s, "
-            "image_gone_at = CASE WHEN %s THEN NOW() ELSE image_gone_at END "
+            "image_gone_at = CASE WHEN %s THEN NOW() ELSE image_gone_at END, "
+            "image_missing_at = CASE WHEN %s THEN COALESCE(image_missing_at, NOW()) "
+            "ELSE image_missing_at END "
             "WHERE url_hash = %s",
-            (error[:_MAX_STORED_IMAGE_EMBED_ERROR], image_gone, url_hash),
+            (
+                error[:_MAX_STORED_IMAGE_EMBED_ERROR],
+                image_gone,
+                image_missing,
+                url_hash,
+            ),
         )
 
 
@@ -840,7 +853,7 @@ def reset_image_embed_attempts(url_hash: str) -> None:
         cur.execute(
             "UPDATE items SET image_embed_attempts = 0, "
             "image_embed_failed_at = NULL, image_embed_error = NULL, "
-            "image_gone_at = NULL "
+            "image_gone_at = NULL, image_missing_at = NULL "
             "WHERE url_hash = %s "
             "AND (image_embed_attempts > 0 OR image_gone_at IS NOT NULL)",
             (url_hash,),
@@ -861,6 +874,10 @@ def reset_failed_image_embeds() -> Tuple[int, int]:
     Items whose host said the picture is gone are left alone. Re-queueing those
     is a request made to be told the same thing, several thousand times over;
     the way back for one of them is a re-scrape turning up a different picture.
+
+    A 404 already seen once keeps that strike (``image_missing_at`` is not
+    cleared here): it gets its second try, and if the picture is still missing
+    it retires instead of coming back round forever.
 
     Returns ``(re-queued, left as gone)`` -- the second number is worth saying
     out loud, because "nothing happened" and "those pictures no longer exist"

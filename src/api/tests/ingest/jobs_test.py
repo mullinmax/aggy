@@ -124,7 +124,8 @@ def _embed_state(url_hash: str) -> dict:
     with get_db_con() as cur:
         cur.execute(
             "SELECT image_embed_attempts, image_embed_failed_at, "
-            "image_embed_error, image_gone_at FROM items WHERE url_hash = %s",
+            "image_embed_error, image_gone_at, image_missing_at "
+            "FROM items WHERE url_hash = %s",
             (url_hash,),
         )
         return dict(cur.fetchone())
@@ -635,3 +636,59 @@ def test_a_re_scrape_with_a_new_picture_revives_a_retired_item(
     state = _embed_state(existing_item_strict.url_hash)
     assert state["image_gone_at"] is None
     assert state["image_embed_attempts"] == 0
+
+
+def test_a_missing_picture_is_retired_even_across_a_manual_retry(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """The bug this column exists for: "retry failed images" zeroes the attempt
+    counter, so counting a 404's two strikes there meant it never reached two.
+    Pressing retry between passes left every 404 in the table being fetched
+    again, every pass, forever."""
+    from db.item import reset_failed_image_embeds
+
+    def fail(image_url):
+        raise _gone_error(404)
+
+    monkeypatch.setattr(jobs, "embed_image", fail)
+
+    jobs.backfill_image_embeddings_job()
+    assert _embed_state(existing_item_strict.url_hash)["image_missing_at"] is not None
+
+    # the person presses the button, which is exactly what it is for
+    reset_failed_image_embeds()
+    state = _embed_state(existing_item_strict.url_hash)
+    assert state["image_embed_attempts"] == 0
+    # ... and the strike survives it
+    assert state["image_missing_at"] is not None
+
+    jobs.backfill_image_embeddings_job()
+
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is not None
+
+
+def test_a_picture_that_comes_back_is_not_held_against_the_item(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """A 404 that was a CDN mid-deploy ends with an embedding, not a retirement:
+    the strike only decides what a *second* 404 means."""
+
+    def fail(image_url):
+        raise _gone_error(404)
+
+    monkeypatch.setattr(jobs, "embed_image", fail)
+    jobs.backfill_image_embeddings_job()
+
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_failed_at = NOW() - interval '30 days' "
+            "WHERE url_hash = %s",
+            (existing_item_strict.url_hash,),
+        )
+    monkeypatch.setattr(jobs, "embed_image", lambda url: [0.1, 0.2])
+
+    jobs.backfill_image_embeddings_job()
+
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_embeddings == {"clip-model": [0.1, 0.2]}
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is None
