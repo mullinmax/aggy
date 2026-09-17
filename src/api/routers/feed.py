@@ -378,6 +378,10 @@ def get_item_duplicates(
     badge into the copies it is standing in for. The first member is the one
     being shown; it is included rather than filtered out so the UI can mark it
     without having to work out which one it already has.
+
+    Groups are per account, so an unknown group reads as 404 rather than as an
+    empty list: there is no such thing as a group this caller can see but has
+    no members in.
     """
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
     rows = feed.duplicate_group_members(group_hash)

@@ -137,7 +137,8 @@ WITH user_item_rows AS (
     JOIN items i ON i.url_hash = c.item_url_hash
     LEFT JOIN user_item_votes uv
         ON uv.user_hash = c.user_hash AND uv.item_url_hash = c.item_url_hash
-    LEFT JOIN item_duplicates d ON d.item_url_hash = i.url_hash
+    LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash
+        AND d.item_url_hash = i.url_hash AND d.group_hash IS NOT NULL
     WHERE c.user_hash = %s
     ORDER BY i.url_hash, c.added_at
 ), user_items AS (
@@ -317,8 +318,9 @@ SELECT
 FROM (
     SELECT d.group_hash, COUNT(DISTINCT c.item_url_hash) AS copies
     FROM feed_items c
-    JOIN item_duplicates d ON d.item_url_hash = c.item_url_hash
-    WHERE c.user_hash = %s
+    JOIN item_duplicates d ON d.user_hash = c.user_hash
+        AND d.item_url_hash = c.item_url_hash
+    WHERE c.user_hash = %s AND d.group_hash IS NOT NULL
     GROUP BY d.group_hash
     HAVING COUNT(DISTINCT c.item_url_hash) > 1
 ) groups

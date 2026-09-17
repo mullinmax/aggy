@@ -68,9 +68,7 @@ def propagate_items(
     with get_db_con() as cur:
         subs = subscriber_sources(cur, user_hash, origin_feed_hash)
         for sub in subs:
-            _mirror_into(
-                cur, user_hash, sub["feed_hash"], sub["name_hash"], url_hashes
-            )
+            _mirror_into(cur, user_hash, sub["feed_hash"], sub["name_hash"], url_hashes)
 
     # Recurse after committing this level so downstream feeds see the rows.
     for sub in subs:
@@ -91,6 +89,11 @@ def propagate_items(
 # unvoted, unread, looking like a bug. Spreading the vote across the group is
 # what stops that.
 #
+# Groups are per account (see dedup/detect), and every query below is scoped to
+# one ``user_hash`` on both sides of the join, so a vote never travels to
+# another account's copy of an article and another account's vote never arrives
+# on yours.
+#
 # A member that the user has already voted on is never touched: an explicit
 # judgement on this copy outranks an inherited one. A row that exists only
 # because the item was marked read keeps its ``is_read``; just the score is
@@ -106,12 +109,15 @@ def propagate_vote_to_duplicates(user_hash: str, item_url_hash: str) -> int:
     """Copy this user's vote on ``item_url_hash`` to the rest of its duplicate
     group. Returns the number of item_states rows written.
 
-    A no-op for an item that is not in a group, or has no vote to spread.
+    A no-op for an item that is not in a group for this user, or has no vote
+    to spread.
     """
     with get_db_con() as cur:
         cur.execute(
-            "SELECT group_hash FROM item_duplicates WHERE item_url_hash = %s",
-            (item_url_hash,),
+            "SELECT group_hash FROM item_duplicates "
+            "WHERE user_hash = %s AND item_url_hash = %s "
+            "AND group_hash IS NOT NULL",
+            (user_hash, item_url_hash),
         )
         group = cur.fetchone()
         if not group:
@@ -133,7 +139,8 @@ def propagate_vote_to_duplicates(user_hash: str, item_url_hash: str) -> int:
             "(user_hash, feed_hash, item_url_hash, score, score_date) "
             "SELECT c.user_hash, c.feed_hash, c.item_url_hash, %s, %s "
             "FROM feed_items c "
-            "JOIN item_duplicates d ON d.item_url_hash = c.item_url_hash "
+            "JOIN item_duplicates d ON d.user_hash = c.user_hash "
+            " AND d.item_url_hash = c.item_url_hash "
             "WHERE c.user_hash = %s AND d.group_hash = %s "
             "AND c.item_url_hash <> %s "
             "AND NOT EXISTS (SELECT 1 FROM user_item_votes v "
@@ -150,7 +157,7 @@ def propagate_vote_to_duplicates(user_hash: str, item_url_hash: str) -> int:
         return cur.rowcount
 
 
-def inherit_votes_from_duplicates(url_hash: str) -> int:
+def inherit_votes_from_duplicates(user_hash: str, url_hash: str) -> int:
     """Give a newly grouped item the votes its twins already carry.
 
     The other direction of ``propagate_vote_to_duplicates``: an item that
@@ -169,17 +176,20 @@ def inherit_votes_from_duplicates(url_hash: str) -> int:
             "SELECT DISTINCT ON (c.user_hash, c.feed_hash) "
             " c.user_hash, c.feed_hash, c.item_url_hash, v.score, v.score_date "
             "FROM feed_items c "
-            "JOIN item_duplicates mine ON mine.item_url_hash = c.item_url_hash "
-            "JOIN item_duplicates sib ON sib.group_hash = mine.group_hash "
+            "JOIN item_duplicates mine ON mine.user_hash = c.user_hash "
+            " AND mine.item_url_hash = c.item_url_hash "
+            "JOIN item_duplicates sib ON sib.user_hash = mine.user_hash "
+            " AND sib.group_hash = mine.group_hash "
             " AND sib.item_url_hash <> c.item_url_hash "
             "JOIN user_item_votes v ON v.user_hash = c.user_hash "
             " AND v.item_url_hash = sib.item_url_hash "
-            "WHERE c.item_url_hash = %s "
+            "WHERE c.user_hash = %s AND c.item_url_hash = %s "
+            "AND mine.group_hash IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM user_item_votes uv "
             " WHERE uv.user_hash = c.user_hash "
             "  AND uv.item_url_hash = c.item_url_hash) "
             "ORDER BY c.user_hash, c.feed_hash, v.score_date DESC NULLS LAST"
             + _INHERIT_CONFLICT_SQL,
-            (url_hash,),
+            (user_hash, url_hash),
         )
         return cur.rowcount

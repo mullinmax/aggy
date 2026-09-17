@@ -286,7 +286,8 @@ class Feed(ItemCollection):
         dup_group_size = (
             "CASE WHEN d.group_hash IS NULL THEN 1 ELSE ("
             " SELECT COUNT(*) FROM feed_items fc"
-            " JOIN item_duplicates fd ON fd.item_url_hash = fc.item_url_hash"
+            " JOIN item_duplicates fd ON fd.user_hash = fc.user_hash"
+            "  AND fd.item_url_hash = fc.item_url_hash"
             " WHERE fc.user_hash = c.user_hash AND fc.feed_hash = c.feed_hash"
             "  AND fd.group_hash = d.group_hash) END"
         )
@@ -309,7 +310,9 @@ class Feed(ItemCollection):
             f"{dup_group_size} AS dup_group_size "
             "FROM items i "
             "JOIN feed_items c ON c.item_url_hash = i.url_hash "
-            "LEFT JOIN item_duplicates d ON d.item_url_hash = c.item_url_hash "
+            "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+            " AND d.item_url_hash = c.item_url_hash"
+            " AND d.group_hash IS NOT NULL "
             "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
             " AND st.feed_hash = c.feed_hash"
             " AND st.item_url_hash = c.item_url_hash "
@@ -421,6 +424,9 @@ class Feed(ItemCollection):
         Same ordering as the ``dup_rank`` window in
         ``query_items_with_sources``, so the first row is the one the feed is
         currently showing and the rest are what its badge stands for.
+
+        Groups are per account, and this is scoped to both this account and
+        this feed, so it can only ever return copies the caller holds.
         """
         with self.db_con() as cur:
             cur.execute(
@@ -436,7 +442,7 @@ class Feed(ItemCollection):
                 "JOIN items i ON i.url_hash = d.item_url_hash "
                 "JOIN feed_items c ON c.item_url_hash = d.item_url_hash "
                 " AND c.user_hash = %s AND c.feed_hash = %s "
-                "WHERE d.group_hash = %s "
+                "WHERE d.user_hash = c.user_hash AND d.group_hash = %s "
                 "ORDER BY c.predicted_score DESC NULLS LAST, "
                 " c.predicted_confidence DESC NULLS LAST, "
                 " i.date_published ASC NULLS LAST, i.url_hash",

@@ -81,6 +81,7 @@ KNOWN_CONFIG_VALUES = [
     "DUPLICATE_DETECTION_BATCH_SIZE",
     "DUPLICATE_WINDOW_DAYS",
     "DUPLICATE_MAX_GROUP",
+    "DUPLICATE_RECHECK_DAYS",
     "DUPLICATE_COLLAPSE_DEFAULT",
 ]
 
@@ -202,6 +203,13 @@ DEFAULT_CONFIG = {
     # overflow a group is left ungrouped -- an uncollapsed duplicate is a far
     # cheaper mistake than a wrong collapse.
     "DUPLICATE_MAX_GROUP": 25,
+    # Being unique is not permanent: a second copy of an article arrives later,
+    # and by then the copy that arrived first has already been examined. Items
+    # examined and found unique are re-examined once their check is this old,
+    # which is what makes detection reach articles it has already seen. Only
+    # once the never-examined backlog is clear, so a busy install always spends
+    # its budget on new articles first.
+    "DUPLICATE_RECHECK_DAYS": 3,
     # Whether the feed collapses duplicate groups by default. The API and the
     # UI can both ask for the full list instead.
     "DUPLICATE_COLLAPSE_DEFAULT": True,

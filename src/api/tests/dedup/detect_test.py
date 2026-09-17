@@ -51,19 +51,37 @@ def _source(user, feed, name):
     return source
 
 
-def _group_of(url_hash):
+def _group_of(user, url_hash):
+    """This account's grouping for an item, or None when it is not in a group.
+
+    An examined-but-unique item has a row with a NULL group_hash, which is what
+    the re-sweep queues off, so "not in a group" is the NULL rather than the
+    row's absence.
+    """
     with get_db_con() as cur:
         cur.execute(
             "SELECT group_hash, signal, confidence FROM item_duplicates "
-            "WHERE item_url_hash = %s",
-            (url_hash,),
+            "WHERE user_hash = %s AND item_url_hash = %s "
+            "AND group_hash IS NOT NULL",
+            (user.name_hash, url_hash),
         )
         return cur.fetchone()
 
 
-def _groups():
+def _groups(user=None):
+    """Group sizes, for one account or across all of them."""
     with get_db_con() as cur:
-        cur.execute("SELECT group_hash, COUNT(*) AS n FROM item_duplicates GROUP BY 1")
+        if user is None:
+            cur.execute(
+                "SELECT group_hash, COUNT(*) AS n FROM item_duplicates "
+                "WHERE group_hash IS NOT NULL GROUP BY 1"
+            )
+        else:
+            cur.execute(
+                "SELECT group_hash, COUNT(*) AS n FROM item_duplicates "
+                "WHERE user_hash = %s AND group_hash IS NOT NULL GROUP BY 1",
+                (user.name_hash,),
+            )
         return {row["group_hash"]: row["n"] for row in cur.fetchall()}
 
 
@@ -78,10 +96,13 @@ def test_tracking_parameters_alone_make_a_duplicate(existing_user, existing_feed
 
     duplicate_detection_job()
 
-    assert _group_of(a.url_hash)["group_hash"] == _group_of(b.url_hash)["group_hash"]
-    assert _group_of(a.url_hash)["signal"] == "canonical_url"
+    assert (
+        _group_of(existing_user, a.url_hash)["group_hash"]
+        == _group_of(existing_user, b.url_hash)["group_hash"]
+    )
+    assert _group_of(existing_user, a.url_hash)["signal"] == "canonical_url"
     # the canonical URL is the one signal that is effectively certain
-    assert _group_of(a.url_hash)["confidence"] == 1.0
+    assert _group_of(existing_user, a.url_hash)["confidence"] == 1.0
 
 
 def test_amp_rendition_is_the_same_article(existing_user, existing_feed):
@@ -94,7 +115,8 @@ def test_amp_rendition_is_the_same_article(existing_user, existing_feed):
     duplicate_detection_job()
 
     assert (
-        _group_of(plain.url_hash)["group_hash"] == _group_of(amp.url_hash)["group_hash"]
+        _group_of(existing_user, plain.url_hash)["group_hash"]
+        == _group_of(existing_user, amp.url_hash)["group_hash"]
     )
 
 
@@ -115,9 +137,9 @@ def test_every_variant_lands_in_one_group(existing_user, existing_feed):
 
     duplicate_detection_job()
 
-    groups = {_group_of(i.url_hash)["group_hash"] for i in items}
+    groups = {_group_of(existing_user, i.url_hash)["group_hash"] for i in items}
     assert len(groups) == 1
-    assert _groups()[groups.pop()] == 4
+    assert _groups(existing_user)[groups.pop()] == 4
 
 
 def test_unrelated_articles_are_not_grouped(existing_user, existing_feed):
@@ -126,8 +148,8 @@ def test_unrelated_articles_are_not_grouped(existing_user, existing_feed):
 
     duplicate_detection_job()
 
-    assert _group_of(a.url_hash) is None
-    assert _group_of(b.url_hash) is None
+    assert _group_of(existing_user, a.url_hash) is None
+    assert _group_of(existing_user, b.url_hash) is None
 
 
 def test_a_discussion_post_is_not_the_article_it_links_to(existing_user, existing_feed):
@@ -150,8 +172,8 @@ def test_a_discussion_post_is_not_the_article_it_links_to(existing_user, existin
 
     duplicate_detection_job()
 
-    assert _group_of(article.url_hash) is None
-    assert _group_of(discussion.url_hash) is None
+    assert _group_of(existing_user, article.url_hash) is None
+    assert _group_of(existing_user, discussion.url_hash) is None
 
 
 def test_the_same_story_republished_much_later_is_not_a_duplicate(
@@ -175,8 +197,8 @@ def test_the_same_story_republished_much_later_is_not_a_duplicate(
 
     duplicate_detection_job()
 
-    assert _group_of(old.url_hash) is None
-    assert _group_of(new.url_hash) is None
+    assert _group_of(existing_user, old.url_hash) is None
+    assert _group_of(existing_user, new.url_hash) is None
 
 
 def test_a_group_is_capped(existing_user, existing_feed, monkeypatch):
@@ -193,9 +215,9 @@ def test_a_group_is_capped(existing_user, existing_feed, monkeypatch):
 
     duplicate_detection_job()
 
-    sizes = list(_groups().values())
+    sizes = list(_groups(existing_user).values())
     assert sizes == [4]
-    ungrouped = [i for i in items if _group_of(i.url_hash) is None]
+    ungrouped = [i for i in items if _group_of(existing_user, i.url_hash) is None]
     assert len(ungrouped) == 6
 
 
@@ -221,12 +243,17 @@ def test_the_job_is_restartable_and_idempotent(existing_user, existing_feed):
     _add_item(existing_feed, "https://example.com/story?utm_source=b")
 
     duplicate_detection_job()
-    first = _groups()
+    first = _groups(existing_user)
     duplicate_detection_job()
 
-    assert _groups() == first
+    assert _groups(existing_user) == first
     with get_db_con() as cur:
-        cur.execute("SELECT COUNT(*) AS n FROM items WHERE dedup_computed_at IS NULL")
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM feed_items c "
+            "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash "
+            " AND d.item_url_hash = c.item_url_hash "
+            "WHERE d.item_url_hash IS NULL"
+        )
         assert cur.fetchone()["n"] == 0
 
 
@@ -237,10 +264,11 @@ def test_the_job_backfills_a_missing_canonical_url(existing_user, existing_feed)
     item = _add_item(existing_feed, "https://example.com/story?utm_source=a")
     with get_db_con() as cur:
         cur.execute(
-            "UPDATE items SET canonical_url = NULL, canonical_url_hash = NULL, "
-            "dedup_computed_at = NULL WHERE url_hash = %s",
+            "UPDATE items SET canonical_url = NULL, canonical_url_hash = NULL "
+            "WHERE url_hash = %s",
             (item.url_hash,),
         )
+        cur.execute("DELETE FROM item_duplicates")
 
     duplicate_detection_job()
 
@@ -269,8 +297,11 @@ def test_an_unusable_url_costs_that_item_only(existing_user, existing_feed):
 
     duplicate_detection_job()
 
-    assert _group_of(odd.url_hash) is None
-    assert _group_of(a.url_hash)["group_hash"] == _group_of(b.url_hash)["group_hash"]
+    assert _group_of(existing_user, odd.url_hash) is None
+    assert (
+        _group_of(existing_user, a.url_hash)["group_hash"]
+        == _group_of(existing_user, b.url_hash)["group_hash"]
+    )
 
 
 # ---------- collapsing in the feed ----------
@@ -596,7 +627,7 @@ def test_item_duplicates_lists_the_group(client, existing_user, existing_feed, t
     )
     duplicate_detection_job()
 
-    group = _group_of(shown.url_hash)["group_hash"]
+    group = _group_of(existing_user, shown.url_hash)["group_hash"]
     args = build_api_request_args(
         path="/feed/item_duplicates",
         params={"feed_name_hash": existing_feed.name_hash, "group_hash": group},
@@ -744,3 +775,204 @@ def test_feed_items_only_duplicates_over_the_api(
     assert len(items(only_duplicates="true")) == 1
     assert len(items(only_duplicates="true", collapse_duplicates="false")) == 2
     assert items(only_duplicates="true")[0]["item_duplicate_count"] == 1
+
+
+# ---------- the account boundary ----------
+
+
+def _second_account(name="somebody-else"):
+    """Another account with a feed of its own."""
+    from db.feed import Feed
+    from db.user import User
+
+    other = User(name=name)
+    other.set_password("password")
+    other.create()
+    feed = Feed(user_hash=other.name_hash, name=f"Feed {name}")
+    feed.create()
+    return other, feed
+
+
+def test_the_same_article_in_two_accounts_is_not_a_duplicate(
+    existing_user, existing_feed
+):
+    """Matching never crosses accounts. Two people collecting the same story
+    each hold one copy of it, and one copy is not a duplicate of anything."""
+    mine = _add_item(existing_feed, "https://example.com/story?utm_source=mine")
+    _, their_feed = _second_account()
+    theirs = _add_item(their_feed, "https://example.com/story?utm_source=theirs")
+
+    duplicate_detection_job()
+
+    assert _group_of(existing_user, mine.url_hash) is None
+    assert _groups() == {}  # not for anyone, not just not for me
+    # and the item that is only in the other account's feed is not in mine
+    rows = existing_feed.query_items_with_sources(collapse_duplicates=False)
+    assert [item.url_hash for item, _ in rows] == [mine.url_hash]
+    assert theirs.url_hash != mine.url_hash
+
+
+def test_another_account_cannot_fill_my_group(
+    existing_user, existing_feed, monkeypatch
+):
+    """The concrete cost of a shared group: DUPLICATE_MAX_GROUP counting
+    strangers' copies would let a widely-held article push my own copies out of
+    their group, so another account's data would change my feed."""
+    monkeypatch.setattr(
+        config, "get_int", _with_override(config, "DUPLICATE_MAX_GROUP", 2)
+    )
+
+    # six other accounts holding the same story
+    for i in range(6):
+        _, feed = _second_account(f"stranger-{i}")
+        _add_item(feed, f"https://example.com/story?utm_source=s{i}")
+    # and my own two copies
+    mine = [
+        _add_item(existing_feed, f"https://example.com/story?utm_source=mine-{i}")
+        for i in range(2)
+    ]
+
+    duplicate_detection_job()
+
+    groups = _groups(existing_user)
+    assert list(groups.values()) == [2]
+    assert all(_group_of(existing_user, i.url_hash) for i in mine)
+
+
+def test_votes_never_travel_between_accounts(existing_user, existing_feed):
+    """A group is per account, so there is no path for a vote to reach another
+    account's copy of an article."""
+    other, their_feed = _second_account()
+    shared_url = "https://example.com/story?utm_source=a"
+    mine = _add_item(existing_feed, shared_url)
+    mine_too = _add_item(existing_feed, "https://example.com/story?utm_source=b")
+    theirs = _add_item(their_feed, "https://example.com/story?utm_source=theirs")
+
+    duplicate_detection_job()
+    ItemState.set_state(
+        user_hash=existing_user.name_hash,
+        feed_hash=existing_feed.name_hash,
+        item_url_hash=mine.url_hash,
+        score=-1.0,
+        is_read=True,
+    )
+
+    with get_db_con() as cur:
+        # my own twin inherited it
+        cur.execute(
+            "SELECT score FROM user_item_votes "
+            "WHERE user_hash = %s AND item_url_hash = %s",
+            (existing_user.name_hash, mine_too.url_hash),
+        )
+        assert cur.fetchone()["score"] == -1.0
+        # the other account has no vote on anything
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM item_states WHERE user_hash = %s",
+            (other.name_hash,),
+        )
+        assert cur.fetchone()["n"] == 0
+    assert theirs.url_hash not in (mine.url_hash, mine_too.url_hash)
+
+
+# ---------- re-examining articles already seen ----------
+
+
+def _age_checks(days=30):
+    """Push every "examined and unique" check into the past, so the re-sweep
+    considers those items due."""
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE item_duplicates SET checked_at = NOW() - make_interval(days => %s) "
+            "WHERE group_hash IS NULL",
+            (days,),
+        )
+
+
+def test_an_already_examined_article_is_grouped_when_its_twin_arrives(
+    existing_user, existing_feed
+):
+    """Detection is not ingestion-only. The copy that arrives first is examined
+    and found unique; when the second copy turns up, the first must be pulled
+    into the group with it rather than left behind."""
+    first = _add_item(existing_feed, "https://example.com/story?utm_source=a")
+    duplicate_detection_job()
+    assert _group_of(existing_user, first.url_hash) is None
+
+    late = _add_item(existing_feed, "https://example.com/story?utm_source=b")
+    duplicate_detection_job()
+
+    assert (
+        _group_of(existing_user, first.url_hash)["group_hash"]
+        == _group_of(existing_user, late.url_hash)["group_hash"]
+    )
+
+
+def test_the_re_sweep_recovers_items_a_full_group_turned_away(
+    existing_user, existing_feed, monkeypatch
+):
+    """An item left ungrouped is not left ungrouped forever. The cap is the
+    reproducible case: raise it, and the copies it turned away are grouped on
+    the next sweep rather than staying out permanently."""
+    monkeypatch.setattr(
+        config, "get_int", _with_override(config, "DUPLICATE_MAX_GROUP", 2)
+    )
+    items = [
+        _add_item(existing_feed, f"https://example.com/story?utm_source=s{i}")
+        for i in range(4)
+    ]
+    duplicate_detection_job()
+    assert list(_groups(existing_user).values()) == [2]
+    monkeypatch.undo()
+
+    # a sweep only revisits checks older than DUPLICATE_RECHECK_DAYS, so a
+    # re-run straight away is deliberately a no-op
+    duplicate_detection_job()
+    assert list(_groups(existing_user).values()) == [2]
+
+    _age_checks()
+    duplicate_detection_job()
+
+    assert list(_groups(existing_user).values()) == [4]
+    assert all(_group_of(existing_user, i.url_hash) for i in items)
+
+
+def test_the_re_sweep_leaves_grouped_items_alone(existing_user, existing_feed):
+    """Only the unique ones are queued. A grouped item is never revisited, so a
+    group cannot drift as its neighbours are re-examined."""
+    a = _add_item(existing_feed, "https://example.com/story?utm_source=a")
+    _add_item(existing_feed, "https://example.com/story?utm_source=b")
+    _add_item(existing_feed, "https://example.com/alone")
+    duplicate_detection_job()
+    before = _group_of(existing_user, a.url_hash)["group_hash"]
+
+    _age_checks()
+    duplicate_detection_job()
+
+    assert _group_of(existing_user, a.url_hash)["group_hash"] == before
+
+
+def test_new_articles_are_examined_before_the_re_sweep(
+    existing_user, existing_feed, monkeypatch
+):
+    """A busy install must spend its budget on articles it has never seen. The
+    sweep only runs with what is left of the batch once the backlog is clear."""
+    _add_item(existing_feed, "https://example.com/old-unique")
+    duplicate_detection_job()
+    _age_checks()
+
+    # a batch of one, and one never-examined article waiting
+    monkeypatch.setattr(
+        config,
+        "get_int",
+        _with_override(config, "DUPLICATE_DETECTION_BATCH_SIZE", 1),
+    )
+    fresh = _add_item(existing_feed, "https://example.com/brand-new")
+    duplicate_detection_job()
+
+    # the new article was examined; the aged one waited its turn
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT 1 FROM item_duplicates WHERE user_hash = %s AND item_url_hash = %s",
+            (existing_user.name_hash, fresh.url_hash),
+        )
+        assert cur.fetchone() is not None
