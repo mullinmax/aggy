@@ -3,9 +3,12 @@
 //
 // The timeline is the point of the page. A log line says a pass happened; a bar
 // across a time axis says how often it happens and how long it takes, which is
-// what you actually want to know about a background job. One lane per task, so
-// the rhythm of a lane reads at a glance: evenly spaced short bars is a healthy
-// ingest, one long bar is a retrain, a wall of bars is something thrashing.
+// what you actually want to know about a background job. One lane per task
+// *kind*, so the rhythm of a lane reads at a glance: evenly spaced short bars is
+// a healthy ingest, one long bar is a retrain, a wall of bars is something
+// thrashing. Which source or feed a given pass was working on is on its hover
+// tooltip and in the table, because a lane per source grew a row for every
+// source added and left most rows near-empty.
 //
 // Colour encodes *status*, not task kind. Which task a bar belongs to is
 // already carried by its lane, so spending hue on identity would re-encode the
@@ -48,6 +51,11 @@ const TASK_KIND_META = {
     help: 'Embedding preview pictures the recommender has not seen yet',
   },
 };
+
+// The canonical display order, and the one kind the lane subtitle needs to name
+// by hand (a source ingest covers sources; everything else covers feeds).
+const TASK_KINDS = Object.keys(TASK_KIND_META);
+const KIND_SOURCE_INGEST = 'source_ingest';
 
 // Status is the reserved palette: never a task-kind hue, always with a word
 // beside it. `bar` paints the mark, `text` the label, so a status never relies
@@ -245,28 +253,37 @@ function taskFilterBar() {
 // One lane per task, a lane being a kind plus what it worked on -- so each
 // source gets its own row and its cadence is visible, rather than every ingest
 // piling into one "source ingest" line.
+// One lane per task kind, not per target. A lane per source meant the timeline
+// grew a row for every source added and most rows were near-empty; five lanes
+// answer "what kind of work is happening, and how often" at a glance, and the
+// bar's tooltip says which source or feed each pass was working on.
 function taskLanes(runs) {
   const lanes = new Map();
   for (const run of runs) {
-    const key = `${run.kind} ${run.target || ''}`;
-    if (!lanes.has(key)) {
-      lanes.set(key, {
+    if (!lanes.has(run.kind)) {
+      lanes.set(run.kind, {
         kind: run.kind,
-        target: run.target,
         systemWide: run.system_wide,
+        targets: new Set(),
         runs: [],
       });
     }
-    lanes.get(key).runs.push(run);
+    const lane = lanes.get(run.kind);
+    lane.runs.push(run);
+    if (run.target) lane.targets.add(run.target);
   }
 
-  // Busiest lane first: the rows worth looking at are the ones with something
-  // in them, and a lane with one bar reads fine at the bottom.
-  return [...lanes.values()].sort(
-    (a, b) =>
-      b.runs.length - a.runs.length ||
-      a.kind.localeCompare(b.kind) ||
-      String(a.target).localeCompare(String(b.target)));
+  // Fixed order, never by how busy a lane is. The page refreshes itself every
+  // few seconds, and a lane that changes row because its count moved makes the
+  // reader re-find it -- the whole value of a lane is that the same task is
+  // always in the same place.
+  //
+  // A kind this page has no label for still gets a lane, after the known ones:
+  // a task the backend added and the UI has not caught up with is exactly the
+  // thing a page about what ran must not hide.
+  const known = TASK_KINDS.filter((kind) => lanes.has(kind));
+  const unknown = [...lanes.keys()].filter((kind) => !TASK_KIND_META[kind]).sort();
+  return [...known, ...unknown].map((kind) => lanes.get(kind));
 }
 
 function taskTimeline(data) {
@@ -282,28 +299,79 @@ function taskTimeline(data) {
   const span = Math.max(end - start, 1);
   const pct = (t) => ((t - start) / span) * 100;
 
+  // One tooltip for the whole chart rather than one per bar: there are hundreds
+  // of bars and only ever one under the pointer.
+  const tip = h('div', {
+    class: 'pointer-events-none absolute z-20 hidden max-w-xs rounded-lg '
+      + 'border border-base-300 bg-base-100 px-2.5 py-1.5 shadow-lg',
+  });
+
   const lane = (l) =>
     h('div', { class: 'flex items-center gap-2 py-0.5' },
       h('div', { class: 'w-40 sm:w-56 flex-none min-w-0' },
         h('div', { class: 'text-xs truncate', title: kindMeta(l.kind).help },
-          l.target || kindMeta(l.kind).label),
+          kindMeta(l.kind).label),
         h('div', { class: 'text-[10px] text-base-content/50 truncate' },
-          l.target ? kindMeta(l.kind).label : 'system-wide',
-          ' · ', `${fmtInt(l.runs.length)} run${l.runs.length === 1 ? '' : 's'}`)),
+          laneSubtitle(l))),
       // The track is the lane's time axis; a bar is positioned and sized on it
       // as a percentage, so the whole thing reflows with the window.
       h('div', { class: 'relative flex-1 h-5 rounded bg-base-300/40 overflow-hidden' },
-        l.runs.map((run) => taskBar(run, pct))));
+        l.runs.map((run) => taskBar(run, pct, tip))));
 
   return sectionCard(
     `Timeline (last ${windowLabel(data.hours)})`,
-    'One row per task. Bar position is when the pass ran, bar width is how long it took.',
+    'One row per task kind. Bar position is when the pass ran, bar width is how '
+      + 'long it took. Hover a bar for what that pass was working on.',
     timelineAxis(start, end),
-    h('div', { class: 'flex flex-col' }, lanes.map(lane)),
+    h('div', { class: 'relative' },
+      h('div', { class: 'flex flex-col' }, lanes.map(lane)),
+      tip),
     timelineLegend());
 }
 
-function taskBar(run, pct) {
+// What a collapsed lane is covering: how many sources or feeds, and how many
+// passes over them. Naming the count is what tells the reader the lane holds
+// more than one thing and is worth hovering.
+function laneSubtitle(l) {
+  const runs = `${fmtInt(l.runs.length)} run${l.runs.length === 1 ? '' : 's'}`;
+  if (l.systemWide) return `system-wide · ${runs}`;
+  const noun = l.kind === KIND_SOURCE_INGEST ? 'source' : 'feed';
+  const n = l.targets.size;
+  if (!n) return runs;
+  return `${fmtInt(n)} ${noun}${n === 1 ? '' : 's'} · ${runs}`;
+}
+
+// The hover layer. Positioned against the lane stack, and clamped so a bar at
+// either edge does not push the tooltip off the card.
+function showBarTip(tip, bar, run) {
+  const meta = statusMeta(run.status);
+  render(tip,
+    h('div', { class: 'text-xs font-medium' },
+      run.target || kindMeta(run.kind).label),
+    h('div', { class: 'text-[11px] text-base-content/70' },
+      h('span', { class: meta.text }, meta.mark),
+      ' ', meta.label, ' · ', fmtDuration(run.duration_seconds),
+      run.target ? ` · ${kindMeta(run.kind).label}` : null),
+    h('div', { class: 'text-[10px] text-base-content/50' },
+      new Date(run.started_at).toLocaleString()),
+    run.detail
+      ? h('div', { class: 'text-[10px] text-base-content/60 mt-1' }, run.detail)
+      : null);
+
+  tip.classList.remove('hidden');
+
+  const box = tip.offsetParent.getBoundingClientRect();
+  const at = bar.getBoundingClientRect();
+  const left = Math.max(0, Math.min(
+    box.width - tip.offsetWidth,
+    at.left - box.left + at.width / 2 - tip.offsetWidth / 2));
+  // Above the bar by default, below it for the top lane where there is no room.
+  const above = at.top - box.top - tip.offsetHeight - 6;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${above < 0 ? at.bottom - box.top + 6 : above}px`;
+}
+
+function taskBar(run, pct, tip) {
   const startedAt = Date.parse(run.started_at);
   const finishedAt = run.finished_at ? Date.parse(run.finished_at) : Date.now();
   const left = Math.max(0, Math.min(100, pct(startedAt)));
@@ -313,20 +381,20 @@ function taskBar(run, pct) {
   const width = Math.max(0, Math.min(100 - left, pct(finishedAt) - left));
   const meta = statusMeta(run.status);
 
-  const title = [
-    `${kindMeta(run.kind).label}${run.target ? `: ${run.target}` : ''}`,
-    `${meta.label} · ${fmtDuration(run.duration_seconds)}`,
-    new Date(run.started_at).toLocaleString(),
-    run.detail || null,
-  ].filter(Boolean).join('\n');
-
-  return h('span', {
+  // Now that lanes are per kind, the target is only readable on hover, so this
+  // is the custom layer rather than a native title: a browser tooltip waits
+  // about a second and cannot be styled, which is too slow for running along a
+  // lane to see which source ran when. The table view carries the same columns
+  // for anyone not using a pointer.
+  const bar = h('span', {
     // 2px ring in the surface colour so bars that abut stay countable, and
     // rounded ends per the mark spec.
     class: `absolute top-0.5 bottom-0.5 rounded ${meta.bar} ring-1 ring-base-100`,
     style: `left:${left}%;width:${width}%;min-width:3px`,
-    title,
+    onmouseenter: () => showBarTip(tip, bar, run),
+    onmouseleave: () => tip.classList.add('hidden'),
   });
+  return bar;
 }
 
 // A hairline axis with a handful of ticks -- recessive, never dashed, and
