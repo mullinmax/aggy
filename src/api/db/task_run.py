@@ -27,6 +27,7 @@ from .base import get_db_con
 KIND_FEED_TRAINING = "feed_training"
 KIND_FEED_SCORING = "feed_scoring"
 KIND_SOURCE_INGEST = "source_ingest"
+KIND_SOURCE_RESCRAPE = "source_rescrape"
 KIND_DUPLICATE_DETECTION = "duplicate_detection"
 KIND_IMAGE_EMBED_BACKFILL = "image_embed_backfill"
 
@@ -36,6 +37,7 @@ TASK_KINDS = (
     KIND_FEED_TRAINING,
     KIND_FEED_SCORING,
     KIND_SOURCE_INGEST,
+    KIND_SOURCE_RESCRAPE,
     KIND_DUPLICATE_DETECTION,
     KIND_IMAGE_EMBED_BACKFILL,
 )
@@ -143,6 +145,58 @@ def task_run(kind: str, user_hash: Optional[str] = None, target: Optional[str] =
         finish_run(run_id, STATUS_ERROR, handle.detail or f"{type(e).__name__}: {e}")
         raise
     finish_run(run_id, STATUS_OK, handle.detail)
+
+
+# A run still marked running long after it started belongs to a process that
+# died without closing it (`abandon_running_runs` only tidies those at start
+# up). Counting one forever would leave a manual trigger refusing to fire until
+# the next restart, so the "is this already running" check ignores anything
+# older than a pass could plausibly be.
+_RUNNING_STALE_HOURS = 6
+
+
+def running_runs(
+    kind: str, user_hash: Optional[str] = None, target: Optional[str] = None
+) -> int:
+    """How many passes of this kind are in flight right now.
+
+    Used to answer a manual trigger with "it is already running" rather than
+    starting a second pass over the same queue. ``user_hash`` scopes the count
+    to one account (pass None for the system-wide kinds, which are recorded
+    with no owner) and ``target`` narrows it further, so a manual "all sources"
+    batch is only blocked by another batch rather than by whichever single
+    source the scheduler happens to be ingesting.
+
+    Counts nothing on a database error: refusing a trigger because the check
+    itself broke is worse than letting a second pass start.
+    """
+    clauses = ["kind = %s", "status = %s"]
+    params: list = [kind, STATUS_RUNNING]
+
+    if user_hash is None:
+        clauses.append("user_hash IS NULL")
+    else:
+        clauses.append("user_hash = %s")
+        params.append(user_hash)
+
+    if target is not None:
+        clauses.append("target = %s")
+        params.append(target)
+
+    clauses.append("started_at >= NOW() - make_interval(hours => %s)")
+    params.append(_RUNNING_STALE_HOURS)
+
+    try:
+        with get_db_con() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS running FROM task_runs WHERE "
+                + " AND ".join(clauses),
+                tuple(params),
+            )
+            return cur.fetchone()["running"]
+    except Exception as e:
+        logging.error(f"Could not check for running {kind} runs: {e}")
+        return 0
 
 
 def abandon_running_runs() -> int:

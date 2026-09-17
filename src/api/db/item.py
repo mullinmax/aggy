@@ -767,6 +767,26 @@ def reset_image_embed_attempts(url_hash: str) -> None:
         )
 
 
+def reset_failed_image_embeds() -> int:
+    """Give every item whose image embedding failed a fresh retry budget.
+
+    The backfill backs a failing item off and eventually drops it from the
+    queue for good, which is right for a picture that is simply gone -- and
+    wrong the moment the thing that was broken gets fixed, whether that is a
+    bug in how we built the URL, an image host that was down for a day, or the
+    embedding service itself being misconfigured. There is no way to tell those
+    apart from the row, so this is the manual answer: clear the failures and
+    let the backfill judge them again. Returns the number of items re-queued.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_embed_attempts = 0, "
+            "image_embed_failed_at = NULL, image_embed_error = NULL "
+            "WHERE image_embed_attempts > 0"
+        )
+        return cur.rowcount
+
+
 class ItemStrict(ItemBase):
     title: Annotated[str, StringConstraints(strict=True, min_length=1)]
     domain: str

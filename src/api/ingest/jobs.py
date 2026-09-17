@@ -19,12 +19,14 @@ from db.source import Source
 from db.task_run import (
     KIND_IMAGE_EMBED_BACKFILL,
     KIND_SOURCE_INGEST,
+    KIND_SOURCE_RESCRAPE,
     STATUS_ERROR,
     STATUS_OK,
     finish_run,
     prune_runs,
     set_run_target,
     start_run,
+    task_run,
 )
 from db.source_attempt import (
     OUTCOME_ERROR,
@@ -245,6 +247,81 @@ def ingest_source_now(source: Source) -> None:
     except Exception as e:
         logging.exception(f"First check of source '{source.name}' failed: {e}")
         source.mark_ingest_error(str(e))
+
+
+# The target recorded for a manually triggered pass over every source an
+# account owns. Distinct from the per-source passes the scheduler records, so
+# the tasks page can tell them apart -- and so "is this already running" asks
+# about another batch rather than about whichever single source the scheduler
+# happens to be working on right now.
+ALL_SOURCES_TARGET = "all sources"
+
+
+def user_sources(user_hash: str) -> list:
+    """Every source an account owns, once.
+
+    The same feed URL can be a source of several feeds, and re-fetching or
+    re-scraping it once per feed is the same work done twice; deduplicated on
+    the URL so a manual pass costs what it looks like it costs.
+    """
+    seen = set()
+    sources = []
+    for feed in Feed.read_all(user_hash=user_hash):
+        for source in feed.sources:
+            if source.url in seen:
+                continue
+            seen.add(source.url)
+            sources.append(source)
+    return sources
+
+
+def ingest_user_sources(user_hash: str) -> None:
+    """Fetch every source an account owns, now, outside the schedule.
+
+    One run is recorded for the batch rather than one per source: the scheduler
+    already records a pass per source, and a manual sweep is one thing the
+    person asked for, not fifty.
+    """
+    sources = user_sources(user_hash)
+    logging.info(f"Ingesting {len(sources)} source(s) on request")
+
+    with task_run(KIND_SOURCE_INGEST, user_hash, ALL_SOURCES_TARGET) as run:
+        failed = 0
+        for source in sources:
+            try:
+                ingest_source_now(source)
+            except Exception as e:
+                # ingest_source_now records the failure on the source itself;
+                # the batch keeps going, because one dead site must not cost
+                # the person the other forty-nine.
+                failed += 1
+                logging.warning(f"Ingesting source '{source.name}' failed: {e}")
+        run.detail = f"{len(sources)} source(s) ingested" + (
+            f", {failed} failed" if failed else ""
+        )
+
+
+def rescrape_user_sources(user_hash: str) -> None:
+    """Re-scrape every source an account owns, now.
+
+    The expensive one: every stored item of every source is re-fetched from its
+    original site and re-embedded. Recorded as one run for the batch, whose
+    detail says how far it got.
+    """
+    sources = user_sources(user_hash)
+    logging.info(f"Re-scraping {len(sources)} source(s) on request")
+
+    with task_run(KIND_SOURCE_RESCRAPE, user_hash, ALL_SOURCES_TARGET) as run:
+        failed = 0
+        for source in sources:
+            try:
+                rescrape_source(source)
+            except Exception as e:
+                failed += 1
+                logging.exception(f"Re-scraping source '{source.name}' failed: {e}")
+        run.detail = f"{len(sources)} source(s) re-scraped" + (
+            f", {failed} failed" if failed else ""
+        )
 
 
 def _feeds_with_votes_on(url_hash: str) -> set:

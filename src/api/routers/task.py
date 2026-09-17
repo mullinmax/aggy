@@ -1,19 +1,34 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query
 
+from config import config
+from db.item import reset_failed_image_embeds
 from db.task_run import (
+    KIND_DUPLICATE_DETECTION,
+    KIND_IMAGE_EMBED_BACKFILL,
+    KIND_SOURCE_INGEST,
+    KIND_SOURCE_RESCRAPE,
     TASK_KINDS,
     TASK_STATUSES,
     recent_runs,
     run_summary,
+    running_runs,
 )
 from db.user import User
+from dedup.detect import duplicate_detection_job
+from ingest.jobs import (
+    ALL_SOURCES_TARGET,
+    backfill_image_embeddings_job,
+    ingest_user_sources,
+    rescrape_user_sources,
+)
 from route_models.task import (
     TaskKindSummaryResponse,
     TaskRunResponse,
     TaskRunsResponse,
+    TaskTriggerResponse,
 )
 from routers.auth import authenticate
 
@@ -131,3 +146,125 @@ def get_task_runs(
         window_end=now,
         truncated=len(runs) >= RUN_LIMIT,
     )
+
+
+# The background work a person can ask for by hand, and what each one means.
+#
+# Everything here is work the scheduler already does on an interval; a trigger
+# only says "now", because waiting an hour to find out whether a fix worked is
+# how a fix goes unverified. Deliberately a fixed list rather than "run any
+# job": these are the passes it makes sense to ask for, with an account's own
+# work scoped to that account.
+#
+# `system` marks a pass over a global queue, which is nobody's in particular --
+# those are checked for "already running" across the whole install, since a
+# second pass over the same queue is only duplicated work. An account's own
+# passes are checked against a batch of theirs (`target`), so a manual sweep
+# isn't refused because the scheduler happens to be ingesting one source.
+_TRIGGERS = {
+    "image_embed_retry": {
+        "kind": KIND_IMAGE_EMBED_BACKFILL,
+        "system": True,
+        "label": "image embedding retry",
+    },
+    "duplicate_detection": {
+        "kind": KIND_DUPLICATE_DETECTION,
+        "system": True,
+        "label": "duplicate detection",
+    },
+    "ingest_sources": {
+        "kind": KIND_SOURCE_INGEST,
+        "system": False,
+        "target": ALL_SOURCES_TARGET,
+        "label": "source ingest",
+    },
+    "rescrape_sources": {
+        "kind": KIND_SOURCE_RESCRAPE,
+        "system": False,
+        "target": ALL_SOURCES_TARGET,
+        "label": "source re-scrape",
+    },
+}
+
+TRIGGERS = tuple(_TRIGGERS)
+
+
+@task_router.post(
+    "/run/{task}",
+    summary="Run a background task now",
+    response_model=TaskTriggerResponse,
+)
+def run_task_now(
+    background_tasks: BackgroundTasks,
+    task: str = Path(
+        ...,
+        description="Which task to run: " + ", ".join(TRIGGERS),
+    ),
+    user: User = Depends(authenticate),
+) -> TaskTriggerResponse:
+    """Ask a background task to start now rather than at its next interval.
+
+    Answers as soon as the work is queued, not when it finishes -- a re-scrape
+    of every source runs for as long as it runs. Watch the timeline for the
+    run this produces; it appears under the kind named in the response.
+
+    A pass that is already running is not started a second time: the response
+    comes back with ``started`` false and says so, rather than stacking two
+    passes over one queue.
+    """
+    trigger = _TRIGGERS.get(task)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail=f"Unknown task '{task}'")
+
+    kind = trigger["kind"]
+    running = running_runs(
+        kind,
+        user_hash=None if trigger["system"] else user.name_hash,
+        target=trigger.get("target"),
+    )
+    if running:
+        return TaskTriggerResponse(
+            task=task,
+            kind=kind,
+            started=False,
+            detail=f"A {trigger['label']} pass is already running.",
+        )
+
+    if task == "image_embed_retry":
+        if config.get("IMAGE_EMBED_HOST", None) is None:
+            # The backfill no-ops without the service, so queueing it would be
+            # a button reporting work it knows will not happen.
+            return TaskTriggerResponse(
+                task=task,
+                kind=kind,
+                started=False,
+                detail="The image embedding service is not configured, "
+                "so there are no pictures to embed.",
+            )
+
+        # Done here rather than in the background task so the answer can say
+        # how much work was just re-queued -- it is one UPDATE, and a person
+        # pressing a button deserves a number back.
+        requeued = reset_failed_image_embeds()
+        background_tasks.add_task(backfill_image_embeddings_job)
+        detail = (
+            f"Re-queued {requeued} item(s) whose image embedding failed; "
+            "embedding them now."
+            if requeued
+            else "No failed image embeddings to retry; "
+            "embedding anything still missing."
+        )
+    elif task == "duplicate_detection":
+        background_tasks.add_task(duplicate_detection_job)
+        detail = "Checking for duplicate articles now."
+    elif task == "ingest_sources":
+        background_tasks.add_task(ingest_user_sources, user.name_hash)
+        detail = "Fetching new articles from every one of your sources now."
+    else:
+        background_tasks.add_task(rescrape_user_sources, user.name_hash)
+        detail = (
+            "Re-scraping every article of every source you have. "
+            "This one takes a while."
+        )
+
+    return TaskTriggerResponse(task=task, kind=kind, started=True, detail=detail)
