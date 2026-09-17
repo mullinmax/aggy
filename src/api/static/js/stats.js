@@ -130,6 +130,22 @@ const COVERAGE_METRICS = [
   },
 ];
 
+// Duplicates are not coverage: being one of several copies is not a field an
+// article "has", and a high share is not a good thing, so this stays out of the
+// coverage chart and its "the gaps are what the recommender is missing"
+// framing. It earns a table column because duplication is spread very unevenly
+// across sites -- an aggregator and the publisher it links to look nothing
+// alike here.
+const DUPLICATE_METRIC = {
+  key: 'in_duplicate_group',
+  label: 'Duplicate',
+  short: 'Dupes',
+  help: 'Article is one of several copies of the same content in your feeds',
+};
+
+// The per-site table carries the coverage columns and the duplicate one.
+const DOMAIN_METRICS = [...COVERAGE_METRICS, DUPLICATE_METRIC];
+
 // Which coverage the daily chart shades in; the rest of the column is the
 // uncovered remainder.
 const TIMELINE_METRICS = [
@@ -197,6 +213,7 @@ function renderArticleStats() {
     statsCard('Coverage across all articles',
       'Share of your articles that carry each field — the gaps are what the recommender is missing.',
       coverageChart(summary)),
+    duplicateCard(summary),
     statsCard(`Articles collected per day (last ${STATS_TIMELINE_DAYS} days)`,
       'How many articles arrived each day, and how many of them the pipeline has processed.',
       timelineChart(timeline)),
@@ -273,6 +290,56 @@ function coverageChart(summary) {
     : null;
 
   return h('div', { class: 'flex flex-col gap-2' }, COVERAGE_METRICS.map(row), note);
+}
+
+// ---------- duplicates ----------
+
+// The same story reaches a feed from several sources, under a different URL
+// from each, so it is stored and shown several times over. These are the
+// numbers that say how much of that is happening, and therefore whether
+// duplicate detection is earning its keep.
+//
+// Only groups where two or more copies are actually in the user's feeds count:
+// detection is global, so a group routinely has members nobody here can see.
+function duplicateCard(summary) {
+  const total = summary.total_articles;
+  const groups = summary.duplicate_groups || 0;
+
+  if (!groups) {
+    return statsCard('Duplicates',
+      'The same story arriving from more than one source, under a different URL from each.',
+      h('p', { class: 'text-sm text-base-content/50' },
+        'No duplicates found among your articles yet.'),
+      pendingNote());
+  }
+
+  const figure = (label, value, desc) =>
+    h('div', {},
+      h('div', { class: 'text-xs text-base-content/60' }, label),
+      h('div', { class: 'text-xl tabular-nums' }, value),
+      desc ? h('div', { class: 'text-xs text-base-content/50' }, desc) : null);
+
+  return statsCard('Duplicates',
+    'The same story arriving from more than one source, under a different URL from each.',
+    h('div', { class: 'grid grid-cols-2 sm:grid-cols-4 gap-4' },
+      figure('Duplicated stories', fmtInt(groups),
+        'stories you have more than one copy of'),
+      figure('Copies', fmtInt(summary.duplicated_articles || 0),
+        `${fmtPct(summary.in_duplicate_group, total)} of your articles`),
+      figure('Hidden by the feed', fmtInt(summary.redundant_articles || 0),
+        'extra copies the feed collapses away'),
+      figure('Largest group', fmtInt(summary.largest_duplicate_group || 0),
+        'copies of one story')),
+    pendingNote());
+}
+
+// Detection runs as a background pass, so a fresh install (or a big import)
+// has articles it has not looked at yet. Saying so is the difference between
+// "no duplicates" and "not checked yet", which otherwise read identically.
+function pendingNote() {
+  return h('p', { class: 'text-xs text-base-content/50' },
+    'Articles are checked for duplicates by a background pass, so recently ' +
+    'collected ones may not be counted yet.');
 }
 
 // ---------- daily timeline chart ----------
@@ -516,7 +583,7 @@ function domainTableBody(summary, domains) {
               class: 'block h-full rounded-r bg-primary',
               style: `width:${pct(row.article_count, total).toFixed(1)}%`,
             })))),
-      COVERAGE_METRICS.map((m) => pctCell(row[m.key], row.article_count, m.meter)),
+      DOMAIN_METRICS.map((m) => pctCell(row[m.key], row.article_count, m.meter)),
       h('td', { class: 'text-right text-xs tabular-nums' }, fmtCompact(row.avg_content_chars)),
       h('td', { class: 'text-right text-xs tabular-nums whitespace-nowrap' },
         row.up_votes || row.down_votes
@@ -531,7 +598,7 @@ function domainTableBody(summary, domains) {
   const totalsRow = h('tr', { class: 'border-t-2 border-base-300 font-semibold' },
     h('td', { class: 'text-xs' }, 'All sites'),
     h('td', { class: 'text-right text-xs tabular-nums' }, fmtInt(total)),
-    COVERAGE_METRICS.map((m) =>
+    DOMAIN_METRICS.map((m) =>
       h('td', { class: 'text-right text-xs tabular-nums' }, fmtPct(summary[m.key], total))),
     h('td', { class: 'text-right text-xs tabular-nums' }, fmtCompact(summary.avg_content_chars)),
     h('td', { class: 'text-right text-xs tabular-nums whitespace-nowrap' },
@@ -549,7 +616,7 @@ function domainTableBody(summary, domains) {
               h('tr', {},
                 sortHeader('Site', 'domain', { align: 'left' }),
                 sortHeader('Articles', 'article_count', { help: 'Articles linking to this site' }),
-                COVERAGE_METRICS.map((m) => sortHeader(m.short, m.key, { help: m.help })),
+                DOMAIN_METRICS.map((m) => sortHeader(m.short, m.key, { help: m.help })),
                 sortHeader('Body', 'avg_content_chars', { help: 'Average body length in characters' }),
                 sortHeader('Votes', 'votes', { help: 'Your up and down votes on articles from this site' }),
                 sortHeader('Newest', 'last_added_at', { help: 'When the most recent article arrived' }))),

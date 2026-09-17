@@ -126,8 +126,8 @@ class AggySDK {
   }
 
   /** List all items in a feed */
-  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates }) {
-    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates } });
+  async feedItems({ feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates }) {
+    return this._request("GET", "/feed/items", { query: { feed_name_hash, skip, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates } });
   }
 
   /** List feeds a user has created */

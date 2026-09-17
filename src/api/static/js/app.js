@@ -14,7 +14,8 @@ let lastItemBand = null; // sort-band of the last rendered item, for threshold d
 // filter/sort state for the current feed; sources and postTypes: null means
 // "everything" (no filter), an array means only those
 const defaultFilters = () =>
-  ({ sort: 'predicted', includeRead: false, postTypes: null, maxAge: 'all', sources: null });
+  ({ sort: 'predicted', includeRead: false, postTypes: null, maxAge: 'all', sources: null,
+    onlyDuplicates: false });
 // Post types a feed can be filtered by, matching the API's post_types values.
 // They overlap on purpose — an illustrated article is both an image post and
 // a text post — so ticking boxes widens the view rather than slicing it up.
@@ -90,6 +91,7 @@ function bindControls() {
   });
   $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
   $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
+  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; reloadItems(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
@@ -449,6 +451,7 @@ function syncFilterControls() {
   $('filterSort').value = feedFilters.sort;
   $('filterDate').value = feedFilters.maxAge;
   $('filterIncludeRead').checked = feedFilters.includeRead;
+  $('filterOnlyDuplicates').checked = feedFilters.onlyDuplicates;
   const types = feedFilters.postTypes; // null = every type
   postTypeCheckboxes().forEach((box) => {
     box.checked = types === null || types.includes(box.dataset.postType);
@@ -464,7 +467,8 @@ function reloadItems() {
 function isFiltered() {
   return feedFilters.postTypes !== null
     || feedFilters.sources !== null
-    || feedFilters.maxAge !== 'all';
+    || feedFilters.maxAge !== 'all'
+    || feedFilters.onlyDuplicates;
 }
 
 function clearFilters() {
@@ -866,6 +870,7 @@ async function loadFeedItems() {
       // an empty string is meaningful here: no post type ticked shows nothing
       post_types: feedFilters.postTypes === null ? null : feedFilters.postTypes.join(','),
       max_age: feedFilters.maxAge,
+      only_duplicates: feedFilters.onlyDuplicates,
     });
     if (seq !== itemsRequestSeq) return; // a newer request superseded this one
     if (itemSkip === 0) render(list);

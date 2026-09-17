@@ -627,3 +627,120 @@ def test_item_duplicates_404s_for_an_unknown_group(
         token=token,
     )
     assert client.get(**args).status_code == 404
+
+
+# ---------- the "only duplicates" filter ----------
+
+
+def test_only_duplicates_keeps_just_the_duplicated_stories(
+    existing_user, existing_feed
+):
+    """The filter exists to audit what the collapse is hiding, so collapsed it
+    is one row per duplicated story."""
+    _add_item(existing_feed, "https://example.com/story?utm_source=a", predicted=0.1)
+    survivor = _add_item(
+        existing_feed, "https://example.com/story?utm_source=b", predicted=0.9
+    )
+    _add_item(existing_feed, "https://example.com/alone", predicted=0.5)
+    _add_item(existing_feed, "https://example.com/also-alone", predicted=0.4)
+
+    duplicate_detection_job()
+
+    rows = existing_feed.query_items_with_sources(
+        sort="newest", only_duplicates=True, collapse_duplicates=True
+    )
+    assert [item.url_hash for item, _ in rows] == [survivor.url_hash]
+    assert rows[0][1]["duplicate_count"] == 1
+
+
+def test_only_duplicates_uncollapsed_shows_every_copy(existing_user, existing_feed):
+    a = _add_item(existing_feed, "https://example.com/story?utm_source=a")
+    b = _add_item(existing_feed, "https://example.com/story?utm_source=b")
+    _add_item(existing_feed, "https://example.com/alone")
+
+    duplicate_detection_job()
+
+    rows = existing_feed.query_items_with_sources(
+        sort="newest", only_duplicates=True, collapse_duplicates=False
+    )
+    assert {item.url_hash for item, _ in rows} == {a.url_hash, b.url_hash}
+
+
+def test_only_duplicates_on_a_feed_with_none_is_empty(existing_user, existing_feed):
+    """Empty rather than unfiltered: asking for duplicates in a feed that has
+    none has an answer, and it is not "here is everything"."""
+    for i in range(3):
+        _add_item(existing_feed, f"https://example.com/{i}")
+
+    duplicate_detection_job()
+
+    assert (
+        existing_feed.query_items_with_sources(sort="newest", only_duplicates=True)
+        == []
+    )
+
+
+def test_being_a_duplicate_does_not_depend_on_the_other_filters(
+    existing_user, existing_feed
+):
+    """Whether an article arrived twice is a fact about the feed, not about the
+    filters in force. Counting the group over the filtered rows instead would
+    make a source filter quietly redefine what a duplicate is -- and would
+    disagree with the list /feed/item_duplicates expands the badge into."""
+    s1 = _source(existing_user, existing_feed, "S1")
+    s2 = _source(existing_user, existing_feed, "S2")
+    a = _add_item(
+        existing_feed,
+        "https://example.com/story?utm_source=a",
+        source=s1,
+        predicted=0.1,
+    )
+    _add_item(
+        existing_feed,
+        "https://example.com/story?utm_source=b",
+        source=s2,
+        predicted=0.9,
+    )
+
+    duplicate_detection_job()
+
+    # narrowed to the one source that holds the *hidden* copy: it is still a
+    # duplicate, and still reports the whole group
+    rows = existing_feed.query_items_with_sources(
+        sort="newest",
+        only_duplicates=True,
+        collapse_duplicates=False,
+        source_hashes=[s1.name_hash],
+    )
+    assert [item.url_hash for item, _ in rows] == [a.url_hash]
+    assert rows[0][1]["duplicate_count"] == 1
+
+
+def test_feed_items_only_duplicates_over_the_api(
+    client, existing_user, existing_feed, token
+):
+    _add_item(existing_feed, "https://example.com/story?utm_source=a", predicted=0.1)
+    _add_item(existing_feed, "https://example.com/story?utm_source=b", predicted=0.9)
+    _add_item(existing_feed, "https://example.com/alone", predicted=0.5)
+
+    duplicate_detection_job()
+
+    def items(**params):
+        args = build_api_request_args(
+            path="/feed/items",
+            params={
+                "feed_name_hash": existing_feed.name_hash,
+                "sort": "newest",
+                **params,
+            },
+            token=token,
+        )
+        response = client.get(**args)
+        assert response.status_code == 200
+        return response.json()
+
+    # the default is unchanged: every story, duplicates collapsed
+    assert len(items()) == 2
+    assert len(items(only_duplicates="true")) == 1
+    assert len(items(only_duplicates="true", collapse_duplicates="false")) == 2
+    assert items(only_duplicates="true")[0]["item_duplicate_count"] == 1

@@ -176,6 +176,13 @@ def get_feed_items(
         "many others it stands for. False returns every member. Omit for the "
         "server default.",
     ),
+    only_duplicates: bool = Query(
+        False,
+        description="Keep only articles that arrived more than once, for "
+        "reviewing what the collapse is hiding. Composes with "
+        "collapse_duplicates: collapsed, one row per duplicated story; "
+        "uncollapsed, every copy of them.",
+    ),
     user: User = Depends(authenticate),
 ) -> List[ItemResponse]:
     feed = Feed.read(user_hash=user.name_hash, name_hash=feed_name_hash)
@@ -213,6 +220,7 @@ def get_feed_items(
             post_types=types,
             max_age=None if max_age == "all" else max_age,
             collapse_duplicates=collapse_duplicates,
+            only_duplicates=only_duplicates,
         )
     ]
 

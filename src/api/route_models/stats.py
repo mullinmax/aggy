@@ -26,6 +26,10 @@ class ArticleCountsResponse(BaseRouteModel):
     up_votes: int
     down_votes: int
     neutral_votes: int
+    # articles that are one of several copies of the same content the user has
+    # collected -- counted only where they hold two or more copies, since
+    # detection is global and a group often has members in nobody else's feeds
+    in_duplicate_group: int
     # average body length in characters (tags stripped), over the articles
     # that have a body at all
     avg_content_chars: Optional[int] = None
@@ -42,6 +46,17 @@ class DomainStatsResponse(ArticleCountsResponse):
 class ArticleStatsSummaryResponse(ArticleCountsResponse):
     total_articles: int
     domain_count: int
+    # Group-level duplicate numbers, which are summary-only: copies are grouped
+    # by canonical URL and can arrive under different hosts, so a group does not
+    # belong to any one base domain and these cannot be folded up per domain.
+    #
+    # duplicated_articles counts every copy; redundant_articles is how many of
+    # them the feed collapses away, which is the number that says whether
+    # duplicate detection is earning its keep.
+    duplicate_groups: int
+    duplicated_articles: int
+    redundant_articles: int
+    largest_duplicate_group: int
 
 
 class ArticleTimelinePointResponse(BaseRouteModel):
