@@ -176,11 +176,12 @@ async def app_lifespan(app: FastAPI):
 
     # Group articles that are the same content reaching the user under several
     # URLs. Runs at start up too, so an existing install starts working through
-    # its backlog straight away rather than after the first interval; a NULL
-    # dedup_computed_at just means "not in a group yet", so the feed keeps
-    # working throughout. A pass held up by a large backlog can outlast the
-    # interval, and since the job keeps its progress on the rows themselves,
-    # skipping the overlapping run and coalescing the missed ones loses nothing.
+    # its backlog straight away rather than after the first interval; an item
+    # with no item_duplicates row yet reads as "not in a group", so the feed
+    # keeps working throughout. A pass held up by a large backlog can outlast
+    # the interval, and since the job keeps its progress on the rows
+    # themselves, skipping the overlapping run and coalescing the missed ones
+    # loses nothing.
     scheduler.add_job(
         func=duplicate_detection_job,
         trigger="interval",
