@@ -396,7 +396,7 @@ def _backfill_one_image(row: dict) -> tuple:
     — so a wide fan-out can't drain the pool.
     """
     try:
-        image_url = embeddable_image_url(row["image_url"], row["content"])
+        image_url = embeddable_image_url(row["image_url"], row["content"], row["url"])
         if not image_url:
             # the candidate query matches "<img" anywhere in the content, which
             # a sanitized body can carry without a usable src; count it as a

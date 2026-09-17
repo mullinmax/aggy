@@ -198,12 +198,15 @@ class ItemBase(AggyBaseModel):
 
         base_url = str(self.url)
 
-        # Find all <a> tags with a relative href attribute
+        # Find all <a> tags with a relative href attribute. Tested on the
+        # scheme rather than the host: a protocol-relative URL
+        # ("//cdn.example.com/x.jpg") has a host but is still unusable on its
+        # own, and urljoin fills in the base's scheme for it.
         for a_tag in soup.find_all("a", href=True):
             # Check if the link is relative
             href = a_tag["href"]
             parsed_href = urlparse(href)
-            if not parsed_href.netloc:
+            if not parsed_href.scheme:
                 # Join the relative link with the base URL
                 absolute_url = urljoin(base_url, href)
                 a_tag["href"] = absolute_url
@@ -212,7 +215,7 @@ class ItemBase(AggyBaseModel):
         for img_tag in soup.find_all("img", src=True):
             src = img_tag["src"]
             parsed_src = urlparse(src)
-            if not parsed_src.netloc:
+            if not parsed_src.scheme:
                 absolute_url = urljoin(base_url, src)
                 img_tag["src"] = absolute_url
 
@@ -356,7 +359,7 @@ class ItemBase(AggyBaseModel):
         image the reader promotes out of the article body into the hero slot,
         and a content image belongs in both places at once.
         """
-        return embeddable_image_url(self.image_url, self.content)
+        return embeddable_image_url(self.image_url, self.content, str(self.url))
 
     @staticmethod
     def _image_fetch_headers() -> Dict[str, str]:
@@ -388,12 +391,17 @@ class ItemBase(AggyBaseModel):
           that query string, so a mangled one is rejected outright.
         * reddit's signed preview host serves the same asset unsigned from
           ``i.redd.it``, which works even when the signature doesn't.
-        """
-        urls = [image_url]
 
-        unescaped = html.unescape(image_url)
-        if unescaped not in urls:
-            urls.append(unescaped)
+        Candidates that aren't absolute http(s) URLs are dropped rather than
+        handed to httpx, which rejects them with an error about the request URL
+        rather than about the image.
+        """
+        urls = []
+
+        for url in (image_url, html.unescape(image_url)):
+            fetchable = fetchable_image_url(url)
+            if fetchable and fetchable not in urls:
+                urls.append(fetchable)
 
         for url in list(urls):
             parsed = urlparse(url)
@@ -472,21 +480,76 @@ class ItemBase(AggyBaseModel):
 # ---------------------------------------------------------------------------
 
 
+def fetchable_image_url(
+    image_url: Optional[str], base_url: Optional[str] = None
+) -> Optional[str]:
+    """``image_url`` as something httpx can actually fetch, or ``None``.
+
+    A stored image URL isn't always an absolute http(s) one. Feeds and page
+    markup are full of protocol-relative ("//cdn.example.com/x.jpg") and
+    root-relative ("/img/x.jpg") srcs, and items scraped before the sanitizer
+    resolved the protocol-relative ones still carry them. httpx refuses both
+    outright -- "Request URL is missing an 'http://' or 'https://' protocol" --
+    which surfaces as a failed embedding rather than as the bad URL it is.
+
+    Resolve what can be resolved (against the item's own URL when we have one,
+    otherwise assuming https for a protocol-relative host) and treat everything
+    that still isn't http(s) as no picture at all: a ``data:`` URI or a
+    ``chrome-extension://`` src is never going to be downloaded, and reporting
+    it as "no embeddable image url" stops the backfill burning attempts on a
+    fetch that cannot succeed.
+    """
+    if not image_url:
+        return None
+
+    candidate = image_url.strip()
+    if not candidate:
+        return None
+
+    parsed = urlparse(candidate)
+    if not parsed.scheme:
+        # "//host/path" has a netloc but no scheme; anything else is relative
+        # to the item's own URL.
+        if candidate.startswith("//"):
+            base_scheme = urlparse(base_url).scheme if base_url else ""
+            candidate = urlunparse(
+                (base_scheme if base_scheme in ("http", "https") else "https",)
+                + tuple(parsed[1:])
+            )
+        elif base_url:
+            candidate = urljoin(base_url, candidate)
+        else:
+            return None
+        parsed = urlparse(candidate)
+
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+
+    return candidate
+
+
 def embeddable_image_url(
-    image_url: Optional[str], content: Optional[str]
+    image_url: Optional[str], content: Optional[str], base_url: Optional[str] = None
 ) -> Optional[str]:
     """The picture an item actually shows, given its ``image_url``/``content``.
 
     See :attr:`ItemBase.embeddable_image_url` for why the content fallback
-    exists.
+    exists. Either source can hold something that isn't a fetchable URL, so
+    both go through :func:`fetchable_image_url`, and a stored ``image_url``
+    that can't be fetched still falls back to the content image.
     """
-    if image_url:
-        return image_url
+    fetchable = fetchable_image_url(image_url, base_url)
+    if fetchable:
+        return fetchable
     if not content:
         return None
-    # content is stored sanitized, with relative srcs already made absolute
+    # content is stored sanitized, with relative srcs already made absolute --
+    # but items scraped before that covered protocol-relative srcs are still in
+    # the table, so resolve again here rather than trusting the stored value
     img = BeautifulSoup(content, "html.parser").find("img", src=True)
-    return img["src"] if img else None
+    if not img:
+        return None
+    return fetchable_image_url(img["src"], base_url)
 
 
 def embed_image(image_url: str) -> List[float]:
@@ -496,9 +559,13 @@ def embed_image(image_url: str) -> List[float]:
     the item — when the picture can't be fetched from any candidate URL or the
     embedding service won't produce a vector for it.
     """
+    candidates = ItemBase._image_fetch_urls(image_url)
+    if not candidates:
+        raise ImageEmbedError(f"not a fetchable image url: {image_url[:100]}")
+
     image_base64 = None
     failures = []
-    for candidate in ItemBase._image_fetch_urls(image_url):
+    for candidate in candidates:
         try:
             image_base64 = ItemBase._fetch_image_base64(candidate)
             break

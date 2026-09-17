@@ -3,7 +3,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from config import config
-from db.item import ImageEmbedError, ItemLoose, ItemStrict, embed_image
+from db.item import (
+    ImageEmbedError,
+    ItemLoose,
+    ItemStrict,
+    embed_image,
+    embeddable_image_url,
+    fetchable_image_url,
+)
 
 
 @pytest.mark.parametrize(
@@ -571,3 +578,91 @@ def test_excerpts_and_authors_are_unescaped_too(unique_item_strict):
 
     assert item.excerpt == "Ben & Jerry"
     assert item.author == "R&D team"
+
+
+def test_protocol_relative_image_urls_are_given_a_scheme():
+    """A protocol-relative src is a real picture, but httpx rejects it with
+    "Request URL is missing an 'http://' or 'https://' protocol" -- which is how
+    it showed up in the backfill: a failed embedding rather than a bad URL."""
+    assert (
+        fetchable_image_url("//cdn.example.com/a.jpg", "https://example.com/post")
+        == "https://cdn.example.com/a.jpg"
+    )
+    # http item, http asset: don't upgrade a host to a scheme it may not serve
+    assert (
+        fetchable_image_url("//cdn.example.com/a.jpg", "http://example.com/post")
+        == "http://cdn.example.com/a.jpg"
+    )
+    # nothing to resolve against: assume https rather than give up
+    assert (
+        fetchable_image_url("//cdn.example.com/a.jpg")
+        == "https://cdn.example.com/a.jpg"
+    )
+
+
+def test_relative_image_urls_are_resolved_against_the_item():
+    assert (
+        fetchable_image_url("/img/a.jpg", "https://example.com/posts/1")
+        == "https://example.com/img/a.jpg"
+    )
+    assert (
+        fetchable_image_url("a.jpg", "https://example.com/posts/1")
+        == "https://example.com/posts/a.jpg"
+    )
+
+
+def test_unfetchable_image_urls_are_treated_as_no_image():
+    """A src that can never be downloaded is not a failed fetch to retry; it is
+    an item with no picture, and saying so keeps the backfill from burning its
+    attempts on it."""
+    assert fetchable_image_url("data:image/png;base64,iVBORw0KGgo=") is None
+    assert fetchable_image_url("chrome-extension://abc/a.png") is None
+    assert fetchable_image_url("/img/a.jpg") is None
+    assert fetchable_image_url("   ") is None
+    assert fetchable_image_url(None) is None
+
+
+def test_embeddable_image_url_resolves_both_sources():
+    """Either source can hold a protocol-relative src -- items stored before the
+    sanitizer resolved them are still in the table."""
+    assert (
+        embeddable_image_url("//cdn.example.com/a.jpg", None, "https://example.com/p")
+        == "https://cdn.example.com/a.jpg"
+    )
+    assert (
+        embeddable_image_url(
+            None, '<p><img src="//cdn.example.com/b.jpg"></p>', "https://example.com/p"
+        )
+        == "https://cdn.example.com/b.jpg"
+    )
+    # an image_url that can't be fetched still falls back to the content image
+    assert (
+        embeddable_image_url(
+            "data:image/png;base64,iVBORw0KGgo=",
+            '<p><img src="https://cdn.example.com/b.jpg"></p>',
+            "https://example.com/p",
+        )
+        == "https://cdn.example.com/b.jpg"
+    )
+
+
+def test_embed_image_reports_an_unfetchable_url_without_calling_out():
+    """No request is attempted for a URL httpx would reject, and the stored
+    reason names the URL rather than the protocol error."""
+    with pytest.raises(ImageEmbedError, match="not a fetchable image url"):
+        embed_image("data:image/png;base64,iVBORw0KGgo=")
+
+
+def test_sanitizing_resolves_protocol_relative_srcs(unique_item_strict):
+    """The sanitizer only resolved srcs with no host, so "//host/a.jpg" was
+    stored as-is and later handed to httpx unusable."""
+    item = ItemStrict(
+        **unique_item_strict.model_copy(
+            update={
+                "url": "https://example.com/posts/1",
+                "content": '<p><img src="//cdn.example.com/a.jpg"></p>',
+            }
+        ).dict()
+    )
+
+    assert 'src="https://cdn.example.com/a.jpg"' in item.content
