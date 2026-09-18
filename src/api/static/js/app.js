@@ -49,6 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     .add('stats', showArticleStats)
     .add('tasks', showTasks)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
+    .add('feed/:hash/graph', ({ hash }) => showFeedGraph(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
 });
@@ -77,8 +78,11 @@ function bindControls() {
   $('manageSourcesBtn').onclick = () => switchFeedTab('sources');
   $('filterBtn').onclick = toggleFilterPanel;
   $('statsBtn').onclick = openStatsModal;
+  $('graphBtn').onclick = () => {
+    if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/graph`);
+  };
   $('rerankBtn').onclick = handleRerank;
-  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
+  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; onFiltersChanged(); };
   postTypeCheckboxes().forEach((box) => {
     box.onchange = () => {
       const picked = postTypeCheckboxes()
@@ -87,12 +91,12 @@ function bindControls() {
       // every type ticked is the same view as none ticked; keep the state as
       // "no filter" so the request stays clean
       feedFilters.postTypes = picked.length === POST_TYPES.length ? null : picked;
-      reloadItems();
+      onFiltersChanged();
     };
   });
-  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
-  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
-  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; reloadItems(); };
+  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; onFiltersChanged(); };
+  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; onFiltersChanged(); };
+  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; onFiltersChanged(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
@@ -123,6 +127,10 @@ function bindControls() {
     destroyPlayersIn($('readerMedia'));
     render($('readerMedia'));
     render($('readerVotes'));
+    // and drop the related rail, bumping the token so a request still in
+    // flight cannot paint into the next article's reader
+    readerRelatedToken += 1;
+    render($('readerRelated'));
     updateGifPlayback();
   });
 
@@ -165,6 +173,7 @@ function setView(name) {
   $('viewList').classList.toggle('hidden', name !== 'list');
   $('viewStats').classList.toggle('hidden', name !== 'stats');
   $('viewTasks').classList.toggle('hidden', name !== 'tasks');
+  $('viewGraph').classList.toggle('hidden', name !== 'graph');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -331,6 +340,7 @@ async function handleRenameFeed(e) {
 // ---------- feed view ----------
 async function showFeed(hash) {
   setView('feed');
+  adoptFilterPanel('feedFilterHost');
   currentList = null; // leaving any list-detail context
   itemSkip = 0;
   render($('itemList'), spinner());
@@ -383,6 +393,8 @@ function switchFeedTab(tab) {
   // The filter only applies to the article list; hide the button (and any
   // open panel) on the sources/settings tab.
   $('filterBtn').classList.toggle('hidden', tab !== 'items');
+  // the graph is a view of the articles, so it belongs with them
+  $('graphBtn').classList.toggle('hidden', tab !== 'items');
   if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
 }
@@ -465,6 +477,35 @@ function reloadItems() {
   loadFeedItems();
 }
 
+// The filter panel is one set of controls over one piece of state, shown on
+// whichever of the two screens is open. Which one has to reload is therefore
+// decided here rather than by each handler.
+function onFiltersChanged() {
+  if (!$('viewGraph').classList.contains('hidden')) {
+    loadFeedGraph();
+    return;
+  }
+  reloadItems();
+}
+
+// Move the shared panel to the screen that is being shown. One element rather
+// than two copies: a graph that filtered by its own controls would quietly
+// drift out of step with the list it is a picture of.
+function adoptFilterPanel(hostId) {
+  const panel = $('filterPanel');
+  const host = $(hostId);
+  if (panel && host && panel.parentElement !== host) host.appendChild(panel);
+
+  // The same control, honestly labelled for the screen it is on. In the list
+  // it orders the articles; in the graph nothing is in an order, so all it
+  // does is choose which ones get drawn — and a box marked "Sort by" over a
+  // picture invites you to read the arrangement as the sort, which it never is.
+  const label = $('filterSortLabel');
+  if (label) {
+    label.textContent = hostId === 'graphFilterHost' ? 'Show first' : 'Sort by';
+  }
+}
+
 // Whether anything but the sort is currently hiding articles.
 function isFiltered() {
   return feedFilters.postTypes !== null
@@ -479,7 +520,7 @@ function clearFilters() {
   feedFilters = { ...defaultFilters(), sort, includeRead };
   syncFilterControls();
   renderFilterSources();
-  reloadItems();
+  onFiltersChanged();
 }
 
 async function toggleFilterPanel() {
@@ -998,6 +1039,73 @@ function duplicateBadge(item) {
   }, `also in ${count} other source${count === 1 ? '' : 's'}`);
 
   return [badge, panel];
+}
+
+// ---------- related articles ----------
+
+// Which article the reader is currently loading related items for. Opening a
+// second article before the first request lands would otherwise paint the
+// wrong rail beside it.
+let readerRelatedToken = 0;
+
+// One entry in the reader's related rail: a thumbnail, the title, and how
+// alike the two articles are. Tapping it opens that article in the same
+// reader, which is why the endpoint returns whole items rather than summaries.
+function relatedCard(related) {
+  const thumb = related.item_image_url
+    ? h('img', {
+        src: related.item_image_url, alt: '', loading: 'lazy',
+        class: 'w-12 h-12 rounded object-cover bg-base-300 shrink-0',
+        onerror: (e) => e.target.remove(),
+      })
+    : null;
+  // A percentage reads as "how alike", which is what the number means here --
+  // the raw cosine similarity would be precision nobody asked for.
+  const pct = Math.round((related.item_similarity || 0) * 100);
+  return h('button', {
+    type: 'button',
+    class: 'w-full text-left flex gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors',
+    onclick: () => openReader(related),
+  },
+    thumb,
+    h('div', { class: 'min-w-0 flex-1' },
+      h('p', { class: 'text-xs font-medium line-clamp-2' }, related.item_title || related.item_url),
+      h('div', { class: 'flex items-center gap-1.5 mt-1 min-w-0' },
+        sourceBadge(related.item_source_name, related.item_source_color),
+        h('span', { class: 'text-[10px] text-base-content/40 shrink-0' }, `${pct}% alike`))));
+}
+
+// Fill the reader's side rail with what else in this feed is about the same
+// thing. Quietly empty when there is nothing: an article ingested minutes ago
+// has not been linked into the similarity graph yet, and an empty heading over
+// an empty list would read as a fault rather than as "not yet".
+async function loadRelated(item) {
+  const host = $('readerRelated');
+  if (!host) return;
+  render(host);
+  // a list has no feed behind it, so nothing to be related within
+  if (!currentFeed || currentList) return;
+
+  const token = ++readerRelatedToken;
+  try {
+    const data = await sdk.feedRelatedItems({
+      feed_name_hash: currentFeed.feed_name_hash,
+      item_url_hash: item.item_hash,
+      limit: 5,
+    });
+    if (token !== readerRelatedToken) return;
+    if (!data.related || !data.related.length) return;
+    render(host,
+      h('div', { class: 'lg:sticky lg:top-0' },
+        h('h3', { class: 'text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2 lg:mb-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-base-300' },
+          'Related in this feed'),
+        h('div', { class: 'flex flex-col gap-1' }, data.related.map(relatedCard))));
+  } catch {
+    // The rail is a bonus beside the article, never the point of opening it;
+    // a failure here leaves the reader alone rather than throwing a toast over
+    // something the reader did not ask for.
+    if (token === readerRelatedToken) render(host);
+  }
 }
 
 // "Open in new tab" icon (matches the modal close button's size/style),
@@ -1815,6 +1923,13 @@ function fieldPreview(p, field) {
   else if (field === 'author') txt = p.author ? `@${p.author}` : '(no author)';
   else if (field === 'recency') txt = p.date_published ? timeAgo(p.date_published) : '(no date)';
   else if (field === 'media') txt = p.has_media ? 'video / audio' : 'no media';
+  // How many of the nearest articles you had actually voted on. Zero is worth
+  // spelling out: it means the field had nothing to go on, which is a
+  // different thing from the model looking and deciding it did not matter.
+  else if (field === 'similar') {
+    const n = p.voted_neighbors || 0;
+    txt = n ? `${n} similar article${n === 1 ? '' : 's'} you voted on` : 'no votes nearby';
+  }
   return h('span', { class: 'shrink-0 badge badge-outline whitespace-nowrap' }, txt);
 }
 
@@ -2099,6 +2214,7 @@ function openReader(item) {
     : []);
 
   showModal('readerModal');
+  loadRelated(item);
 
   if (currentFeed) {
     sdk.itemSetState({

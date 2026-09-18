@@ -115,6 +115,16 @@ class AggySDK {
     return this._request("GET", "/feed/get", { query: { feed_name_hash } });
   }
 
+  /** The feed's articles and the similarity links between them */
+  async feedGraph({ feed_name_hash, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates }) {
+    return this._request("GET", "/feed/graph", { query: { feed_name_hash, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates } });
+  }
+
+  /** One article of this feed, in full */
+  async feedItem({ feed_name_hash, item_url_hash }) {
+    return this._request("GET", "/feed/item", { query: { feed_name_hash, item_url_hash } });
+  }
+
   /** The items a duplicate badge stands for */
   async feedItemDuplicates({ feed_name_hash, group_hash }) {
     return this._request("GET", "/feed/item_duplicates", { query: { feed_name_hash, group_hash } });
@@ -138,6 +148,11 @@ class AggySDK {
   /** Vote-prediction model performance for a feed */
   async feedRankingStats({ feed_name_hash }) {
     return this._request("GET", "/feed/ranking_stats", { query: { feed_name_hash } });
+  }
+
+  /** The articles in this feed most like a given one */
+  async feedRelatedItems({ feed_name_hash, item_url_hash, limit }) {
+    return this._request("GET", "/feed/related_items", { query: { feed_name_hash, item_url_hash, limit } });
   }
 
   /** Rename a feed */

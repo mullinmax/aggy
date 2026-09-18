@@ -22,13 +22,12 @@ import json
 import logging
 from typing import List, Optional
 
-import numpy as np
-
 from psycopg2.extras import execute_values
 
 from db.base import get_db_con
 from db.feed import Feed
 from db.task_run import KIND_FEED_SCORING, KIND_FEED_TRAINING, task_run
+from neighbors.search import parse_embedding
 from utils import is_playable_media_url
 from . import progress
 from .models import (
@@ -39,22 +38,6 @@ from .models import (
 )
 
 MIN_LABELS_TO_RANK = 3
-
-
-def _parse_embedding(embeddings) -> Optional[np.ndarray]:
-    """items.embeddings is a JSONB dict of {model_name: vector}; use the
-    first vector present (only one embedding model runs per deployment)."""
-    if not embeddings:
-        return None
-    if isinstance(embeddings, str):
-        try:
-            embeddings = json.loads(embeddings)
-        except (TypeError, ValueError):
-            return None
-    for vector in embeddings.values():
-        if vector:
-            return np.asarray(vector, dtype=float)
-    return None
 
 
 def _effective_label(vote, list_added_at):
@@ -71,7 +54,7 @@ def _effective_label(vote, list_added_at):
     return max(-1.0, min(1.0, base + 1.0))
 
 
-def _row_to_features(row) -> ItemFeatures:
+def _row_to_features(row, neighbors: Optional[dict] = None) -> ItemFeatures:
     media = row.get("media")
     if isinstance(media, str):
         try:
@@ -84,8 +67,9 @@ def _row_to_features(row) -> ItemFeatures:
     has_media = bool(media) or is_playable_media_url(row.get("url"))
     return ItemFeatures(
         url_hash=row["url_hash"],
-        embedding=_parse_embedding(row.get("embeddings")),
-        image_embedding=_parse_embedding(row.get("image_embeddings")),
+        embedding=parse_embedding(row.get("embeddings")),
+        image_embedding=parse_embedding(row.get("image_embeddings")),
+        neighbors=tuple((neighbors or {}).get(row["url_hash"], ())),
         source=row.get("source_name"),
         author=row.get("author"),
         date_published=row.get("date_published"),
@@ -140,6 +124,35 @@ _LABELED_ONLY_SQL = (
 _UNSCORED_ONLY_SQL = " AND c.predicted_at IS NULL"
 
 
+def _load_neighbors(cur, feed: Feed, url_hashes: List[str]) -> dict:
+    """Each article's nearest neighbours in this feed, best first.
+
+    Forward edges only: those are the node's own list of its nearest, which is
+    what the feature is about. The reverse edges (everything that named *it*)
+    are how the walk stays connected, and there can be hundreds of them on a
+    popular article -- they say that article is central, not that these are its
+    nearest.
+
+    An article nothing has linked yet is simply absent, and contributes a zero
+    neighbour block. That is the normal state for the first pass after ingest,
+    which is why the block carries a present/absent flag of its own.
+    """
+    if not url_hashes:
+        return {}
+    cur.execute(
+        "SELECT item_url_hash, neighbor_url_hash, similarity FROM item_neighbors "
+        "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = ANY(%s) "
+        "ORDER BY item_url_hash, similarity DESC, neighbor_url_hash",
+        (feed.user_hash, feed.name_hash, list(url_hashes)),
+    )
+    neighbors: dict = {}
+    for row in cur.fetchall():
+        neighbors.setdefault(row["item_url_hash"], []).append(
+            (row["neighbor_url_hash"], float(row["similarity"]))
+        )
+    return neighbors
+
+
 def load_feed_features(
     feed: Feed, labeled_only: bool = False, unscored_only: bool = False
 ) -> List[ItemFeatures]:
@@ -166,7 +179,8 @@ def load_feed_features(
     with get_db_con() as cur:
         cur.execute(sql, (feed.user_hash, feed.name_hash))
         rows = cur.fetchall()
-    return [_row_to_features(row) for row in rows]
+        neighbors = _load_neighbors(cur, feed, [row["url_hash"] for row in rows])
+    return [_row_to_features(row, neighbors) for row in rows]
 
 
 def save_model_stats(feed: Feed, stats: List[ModelStats]) -> None:

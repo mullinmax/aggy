@@ -78,6 +78,8 @@ class FieldPreviewResponse(BaseRouteModel):
     has_media: bool = False
     # whether the image is scored by a real vision embedding vs presence only
     image_embedded: bool = False
+    # how many of the article's nearest neighbours the user has voted on
+    voted_neighbors: int = 0
 
 
 class FieldContributionResponse(BaseRouteModel):

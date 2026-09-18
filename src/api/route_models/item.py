@@ -108,3 +108,27 @@ class DuplicateMemberResponse(BaseRouteModel):
 class ItemDuplicatesResponse(BaseRouteModel):
     duplicate_group: str
     members: List[DuplicateMemberResponse]
+
+
+class RelatedItemResponse(ItemResponse):
+    """An article near the one being read, and how near.
+
+    A whole ItemResponse rather than a summary: tapping one of these opens it
+    in the reader, and a reader needs the content, the media and the vote state
+    -- fetching each one again on tap would be a round trip to show something
+    the server already had in hand.
+    """
+
+    # Cosine similarity of the two articles' text embeddings, in [-1, 1].
+    item_similarity: float
+
+    @classmethod
+    def from_item(cls, db_model: ItemLoose, similarity: float, **meta):
+        """The same item payload the feed returns, plus the similarity."""
+        base = ItemResponse.from_db_model(db_model, **meta)
+        return cls.model_validate({**base.model_dump(), "item_similarity": similarity})
+
+
+class RelatedItemsResponse(BaseRouteModel):
+    item_hash: str
+    related: List[RelatedItemResponse]

@@ -8,11 +8,18 @@ from typing import List, Optional, Union
 from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
 from db.user import User
 from route_models.feed import FeedResponse
+from route_models.graph import (
+    FeedGraphResponse,
+    GraphEdgeResponse,
+    GraphNodeResponse,
+)
 from route_models.source import SourceRouteModel
 from route_models.item import (
     DuplicateMemberResponse,
     ItemDuplicatesResponse,
     ItemResponse,
+    RelatedItemResponse,
+    RelatedItemsResponse,
 )
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.ranking import (
@@ -343,6 +350,7 @@ def get_item_explanation(
             has_image=p.has_image,
             has_media=p.has_media,
             image_embedded=p.image_embedded,
+            voted_neighbors=p.voted_neighbors,
         )
 
     return ItemExplanationResponse(
@@ -404,6 +412,193 @@ def get_item_duplicates(
                 item_is_shown=index == 0,
             )
             for index, row in enumerate(rows)
+        ],
+    )
+
+
+@feed_router.get(
+    "/related_items",
+    summary="The articles in this feed most like a given one",
+    response_model=RelatedItemsResponse,
+)
+def get_related_items(
+    feed_name_hash: str,
+    item_url_hash: str,
+    limit: int = Query(
+        5,
+        ge=1,
+        le=25,
+        description="How many related articles to return, most similar first.",
+    ),
+    user: User = Depends(authenticate),
+) -> RelatedItemsResponse:
+    """What else in this feed is about the same thing, read out of the
+    nearest-neighbour graph.
+
+    Other copies of the same story are left out: those are what the duplicate
+    badge stands for, and repeating them here would fill the rail with the
+    article the reader already has open.
+
+    An empty list is a normal answer, not an error -- an article ingested
+    minutes ago has not been linked into the graph yet, and one in a feed of
+    two articles has nothing much to be near.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    return RelatedItemsResponse(
+        item_hash=item_url_hash,
+        related=[
+            RelatedItemResponse.from_item(
+                item,
+                meta["similarity"],
+                source_name=meta["source_name"],
+                source_color=meta["source_color"],
+                user_score=meta["user_score"],
+                is_read=meta["is_read"],
+                in_list=meta["in_list"],
+                predicted_score=meta["predicted_score"],
+                predicted_confidence=meta["predicted_confidence"],
+            )
+            for item, meta in feed.related_items(item_url_hash, limit)
+        ],
+    )
+
+
+@feed_router.get(
+    "/item",
+    summary="One article of this feed, in full",
+    response_model=ItemResponse,
+)
+def get_feed_item(
+    feed_name_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> ItemResponse:
+    """One article, with its body, media and vote state.
+
+    The graph view is what wants this. Its nodes carry only what a dot and its
+    detail card need, so opening one for real -- with its pictures, its player
+    and its text -- means asking for the article itself. Exactly one, rather
+    than paging the feed to find it.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    item, meta = feed.item(item_url_hash)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found in this feed")
+    return ItemResponse.from_db_model(item, **meta)
+
+
+@feed_router.get(
+    "/graph",
+    summary="The feed's articles and the similarity links between them",
+    response_model=FeedGraphResponse,
+)
+def get_feed_graph(
+    feed_name_hash: str,
+    limit: Optional[int] = Query(
+        300,
+        ge=10,
+        description="How many articles to draw. A picture of ten thousand "
+        "articles is a hairball, so the graph shows a window of the feed. "
+        "Omit for every article the filters leave, which is honest for a feed "
+        "of a few thousand and expensive for a very large one.",
+    ),
+    sort: str = Query(
+        "newest",
+        description="Which end of the feed a limited window keeps. The same "
+        "orders /feed/items takes: " + ", ".join(ITEM_SORTS),
+    ),
+    include_read: bool = True,
+    sources: Optional[str] = Query(
+        None, description="Comma-separated source name hashes to include"
+    ),
+    post_types: Optional[str] = Query(
+        None,
+        description="Comma-separated post types to keep: image, video, link, "
+        "text. Omit for all.",
+    ),
+    max_age: str = Query(
+        "all", description="Only items this recent: day, week, month, year, all"
+    ),
+    collapse_duplicates: Optional[bool] = Query(
+        None,
+        description="Draw one node per duplicate group rather than one per "
+        "copy. Omit for the server default.",
+    ),
+    only_duplicates: bool = Query(
+        False, description="Keep only articles that arrived more than once."
+    ),
+    user: User = Depends(authenticate),
+) -> FeedGraphResponse:
+    """Everything the graph view draws: the feed's articles under the filters
+    in force, and the stored links between the ones it returns.
+
+    Every filter /feed/items takes, this takes too, and applies through the
+    same code -- the graph is a picture of the list you were just looking at,
+    so the two must agree about what is hidden.
+
+    Edges with one end outside the window are left out rather than drawn
+    dangling, so what comes back is a true subgraph of the feed's own graph.
+
+    An article with no links yet is still a node -- it has been ingested and
+    not yet placed, and a feed mid-backfill should look like a graph filling in
+    rather than a graph with holes in it.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+
+    if sort not in ITEM_SORTS:
+        raise HTTPException(status_code=422, detail=f"Unknown sort '{sort}'")
+    if max_age != "all" and max_age not in ITEM_AGE_WINDOWS:
+        raise HTTPException(status_code=422, detail=f"Unknown max_age '{max_age}'")
+
+    source_hashes = (
+        [s for s in sources.split(",") if s] if sources is not None else None
+    )
+    types = (
+        [t.strip() for t in post_types.split(",") if t.strip()]
+        if post_types is not None
+        else None
+    )
+    unknown = [t for t in types or [] if t not in POST_TYPES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown post type '{unknown[0]}'")
+
+    nodes, edges = feed.graph(
+        limit=limit,
+        sort=sort,
+        include_read=include_read,
+        source_hashes=source_hashes,
+        post_types=types,
+        max_age=None if max_age == "all" else max_age,
+        collapse_duplicates=collapse_duplicates,
+        only_duplicates=only_duplicates,
+    )
+    return FeedGraphResponse(
+        total_items=feed.stats()["feed_item_count"],
+        nodes=[
+            GraphNodeResponse(
+                item_hash=node["url_hash"],
+                item_url=node["url"],
+                item_title=node["title"],
+                item_date_published=node["date_published"],
+                item_source_name=node["source_name"],
+                item_source_color=node["source_color"],
+                item_image_url=node["image_url"],
+                item_media=node["media"],
+                item_predicted_score=node["predicted_score"],
+                item_predicted_confidence=node["predicted_confidence"],
+                item_user_score=node["user_score"],
+                item_is_read=node["is_read"],
+                item_duplicate_group=node["duplicate_group"],
+            )
+            for node in nodes
+        ],
+        edges=[
+            GraphEdgeResponse(
+                source=edge["source"],
+                target=edge["target"],
+                similarity=edge["similarity"],
+            )
+            for edge in edges
         ],
     )
 
