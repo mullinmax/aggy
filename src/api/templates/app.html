@@ -167,6 +167,69 @@
     <div class="flex flex-col gap-2" id="listItemList"></div>
   </div>
 
+  <!-- Similarity Graph View -->
+  <div id="viewGraph" class="hidden">
+    <div class="breadcrumbs text-sm mb-4">
+      <ul>
+        <li><a href="#/">Feeds</a></li>
+        <li id="graphBreadcrumb"></li>
+        <li>Similarity graph</li>
+      </ul>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div>
+        <h1 class="text-2xl font-bold">Similarity Graph</h1>
+        <p class="text-sm text-base-content/60 mt-1" id="graphSubtitle">
+          Every line is a link between two articles Aggy found to be alike
+        </p>
+      </div>
+      <div class="flex flex-wrap items-end gap-2">
+        <div class="form-control">
+          <label class="label py-0.5" for="graphRank"><span class="label-text text-xs">Show</span></label>
+          <select class="select select-bordered select-sm" id="graphRank">
+            <option value="newest">Newest articles</option>
+            <option value="predicted">Best predicted</option>
+          </select>
+        </div>
+        <div class="form-control">
+          <label class="label py-0.5" for="graphLimit"><span class="label-text text-xs">How many</span></label>
+          <select class="select select-bordered select-sm" id="graphLimit">
+            <option value="100">100</option>
+            <option value="300" selected>300</option>
+            <option value="600">600</option>
+            <option value="1000">1000</option>
+          </select>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="graphRefreshBtn">Refresh</button>
+      </div>
+    </div>
+
+    <!-- The canvas and its overlays share a stacking context: the legend and
+         the detail card float over the drawing rather than pushing it down. -->
+    <div class="relative rounded-box border border-base-300 bg-base-200 overflow-hidden"
+         id="graphStage" style="height:min(72vh,720px)">
+      <canvas id="graphCanvas" class="block w-full h-full touch-none"></canvas>
+
+      <!-- what the drawing means -->
+      <div class="absolute left-3 top-3 pointer-events-none max-w-[45%]" id="graphLegend"></div>
+
+      <!-- the selected article -->
+      <div class="absolute right-3 top-3 w-72 max-w-[calc(100%-1.5rem)] hidden" id="graphDetail"></div>
+
+      <!-- spinner / empty state, centred over the canvas -->
+      <div class="absolute inset-0 flex items-center justify-center pointer-events-none" id="graphOverlay"></div>
+
+      <div class="absolute left-3 bottom-3 flex items-center gap-1">
+        <button class="btn btn-xs btn-neutral" id="graphZoomOut" title="Zoom out">−</button>
+        <button class="btn btn-xs btn-neutral" id="graphZoomIn" title="Zoom in">+</button>
+        <button class="btn btn-xs btn-neutral" id="graphReset" title="Fit the whole graph on screen">Fit</button>
+      </div>
+    </div>
+
+    <p class="text-xs text-base-content/50 mt-2" id="graphFooter"></p>
+  </div>
+
   <!-- Feed Detail View -->
   <div id="viewFeed" class="hidden">
     <div class="breadcrumbs text-sm mb-4">
@@ -191,6 +254,12 @@
         <!-- lit while a training run is going, so leaving this screen doesn't
              mean losing track of it -->
         <span class="hidden absolute top-1 right-1 w-2 h-2 rounded-full bg-primary animate-pulse" id="statsTrainingDot"></span>
+      </button>
+      <button class="btn btn-ghost btn-sm btn-square" id="graphBtn" title="Similarity graph">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+          <circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="17" r="2.2"/><circle cx="12" cy="6" r="2.2"/>
+          <path stroke-linecap="round" d="M7.6 16.4 10.8 8M13.4 7.6l3.4 7.5M8.1 18.4l7.8-.8"/>
+        </svg>
       </button>
       <button class="btn btn-ghost btn-sm btn-square" id="manageSourcesBtn" title="Manage sources">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -659,4 +728,5 @@
 <script src="{{ static_url('js/app.js') }}"></script>
 <script src="{{ static_url('js/stats.js') }}"></script>
 <script src="{{ static_url('js/tasks.js') }}"></script>
+<script src="{{ static_url('js/graph.js') }}"></script>
 {% endblock %}

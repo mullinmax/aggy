@@ -25,6 +25,15 @@ ITEM_SORTS = {
 # these sorts skip the round-robin source interleaving the browse sorts use.
 MONOTONIC_SORTS = {"predicted", "predicted_asc", "controversial", "confident"}
 
+# Which articles the graph view draws, when a feed holds more than it can
+# usefully show at once. Both keep the *most interesting* end of the feed
+# rather than a random slice: the newest is what you are here to look at, and
+# the best-predicted is where the recommender thinks the good clusters are.
+GRAPH_RANKS = {
+    "newest": "COALESCE(i.date_published, c.added_at) DESC, i.url_hash",
+    "predicted": "c.predicted_score DESC NULLS LAST, i.url_hash",
+}
+
 # date-filter name -> postgres interval. "all" (or None) means no cutoff.
 # The cutoff runs against the item's publish date, falling back to when the
 # feed picked it up for items that never carried one.
@@ -548,6 +557,72 @@ class Feed(ItemCollection):
             }
             results.append((ItemStrict.from_row(row), meta))
         return results
+
+    def graph(self, limit: int = 300, rank: str = "newest") -> tuple:
+        """The neighbour graph over this feed, as (nodes, edges).
+
+        A window rather than the whole feed: the graph is a picture, and a
+        picture of ten thousand articles is a hairball that takes a second to
+        lay out and tells you nothing. ``rank`` decides which end of the feed
+        the window keeps.
+
+        Edges are the stored links with *both* ends inside that window. An edge
+        to an article the window left out is not drawn half way off the canvas;
+        it is simply not drawn, so what you see is a true subgraph rather than
+        a graph with dangling ends.
+
+        The graph stores each link in both directions (see V25). Here they are
+        folded into one undirected edge per pair, keyed on the hash pair in a
+        fixed order, because two lines drawn on top of each other is just a
+        thicker line.
+        """
+        order = GRAPH_RANKS.get(rank, GRAPH_RANKS["newest"])
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT i.url_hash, i.url, i.title, i.date_published, "
+                "c.predicted_score, c.predicted_confidence, "
+                "uv.score AS user_score, st.is_read AS is_read, "
+                "d.group_hash AS duplicate_group, "
+                "src.name AS source_name, src.color AS source_color "
+                "FROM feed_items c "
+                "JOIN items i ON i.url_hash = c.item_url_hash "
+                "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+                " AND st.feed_hash = c.feed_hash"
+                " AND st.item_url_hash = c.item_url_hash "
+                "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
+                " AND uv.item_url_hash = c.item_url_hash "
+                "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+                " AND d.item_url_hash = c.item_url_hash"
+                " AND d.group_hash IS NOT NULL "
+                "LEFT JOIN LATERAL ("
+                " SELECT s.name, s.color FROM source_items si"
+                " JOIN sources s ON s.user_hash = si.user_hash"
+                "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+                " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+                "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
+                "WHERE c.user_hash = %s AND c.feed_hash = %s "
+                f"ORDER BY {order} LIMIT %s",
+                (self.user_hash, self.name_hash, limit),
+            )
+            nodes = cur.fetchall()
+            drawn = [node["url_hash"] for node in nodes]
+
+            if not drawn:
+                return [], []
+
+            cur.execute(
+                "SELECT LEAST(item_url_hash, neighbor_url_hash) AS source, "
+                "GREATEST(item_url_hash, neighbor_url_hash) AS target, "
+                "MAX(similarity) AS similarity "
+                "FROM item_neighbors "
+                "WHERE user_hash = %s AND feed_hash = %s "
+                "AND item_url_hash = ANY(%s) AND neighbor_url_hash = ANY(%s) "
+                "GROUP BY 1, 2 ORDER BY 1, 2",
+                (self.user_hash, self.name_hash, drawn, drawn),
+            )
+            edges = cur.fetchall()
+
+        return nodes, edges
 
     def stats(self) -> dict:
         """Dashboard summary numbers: total items, unvoted items, and the

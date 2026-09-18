@@ -39,6 +39,7 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 - **[Browser extension](./src/extension)** (Chrome/Chromium): from the page you're on, save it into a feed as an article — with an optional up- or downvote — or start following the site. It asks the instance how that page is best read (its subreddit, its channel, a feed the page advertises, a template, or a scraped feed as the fallback) and previews the items before anything is created
 - **Embedding generation** for text to improve content relevance
 - **Duplicate post detection**: the same article reaching you from several sources is collapsed to whichever copy the model rates highest. Two signals find them - a canonical URL (the same link with different tracking parameters, an AMP rendition, a news redirect) and the article's own text, so the story a second outlet rewrote is caught too
+- **Graph view**: see a whole feed as the network of those links - a force layout where linked articles pull together, coloured by source and sized by how well the model rates them, so a feed's clusters, its duplicates and the sources that cover the same ground are all visible at once
 - **Related articles**: every article is linked to the few most like it in the same feed, shown beside it while you read. The links are found by walking a graph of those same links rather than by comparing against the whole feed, which is also what the duplicate check and the recommender read
 
 ### In the works:

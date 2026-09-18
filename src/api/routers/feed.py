@@ -5,9 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from typing import List, Optional, Union
 
-from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
+from db.feed import Feed, GRAPH_RANKS, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
 from db.user import User
 from route_models.feed import FeedResponse
+from route_models.graph import (
+    FeedGraphResponse,
+    GraphEdgeResponse,
+    GraphNodeResponse,
+)
 from route_models.source import SourceRouteModel
 from route_models.item import (
     DuplicateMemberResponse,
@@ -454,6 +459,74 @@ def get_related_items(
                 predicted_confidence=meta["predicted_confidence"],
             )
             for item, meta in feed.related_items(item_url_hash, limit)
+        ],
+    )
+
+
+@feed_router.get(
+    "/graph",
+    summary="The feed's articles and the similarity links between them",
+    response_model=FeedGraphResponse,
+)
+def get_feed_graph(
+    feed_name_hash: str,
+    limit: int = Query(
+        300,
+        ge=10,
+        le=1000,
+        description="How many articles to draw. A picture of ten thousand "
+        "articles is a hairball, so the graph shows a window of the feed.",
+    ),
+    rank: str = Query(
+        "newest",
+        description="Which end of the feed that window keeps: "
+        + ", ".join(GRAPH_RANKS),
+    ),
+    user: User = Depends(authenticate),
+) -> FeedGraphResponse:
+    """Everything the graph view draws: a window of the feed's articles, and
+    the stored links between the ones inside it.
+
+    Edges with one end outside the window are left out rather than drawn
+    dangling, so what comes back is a true subgraph of the feed's own graph.
+
+    An article with no links yet is still a node -- it has been ingested and
+    not yet placed, and a feed mid-backfill should look like a graph filling in
+    rather than a graph with holes in it.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    if rank not in GRAPH_RANKS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"rank must be one of: {', '.join(GRAPH_RANKS)}",
+        )
+
+    nodes, edges = feed.graph(limit=limit, rank=rank)
+    return FeedGraphResponse(
+        total_items=feed.stats()["feed_item_count"],
+        nodes=[
+            GraphNodeResponse(
+                item_hash=node["url_hash"],
+                item_url=node["url"],
+                item_title=node["title"],
+                item_date_published=node["date_published"],
+                item_source_name=node["source_name"],
+                item_source_color=node["source_color"],
+                item_predicted_score=node["predicted_score"],
+                item_predicted_confidence=node["predicted_confidence"],
+                item_user_score=node["user_score"],
+                item_is_read=node["is_read"],
+                item_duplicate_group=node["duplicate_group"],
+            )
+            for node in nodes
+        ],
+        edges=[
+            GraphEdgeResponse(
+                source=edge["source"],
+                target=edge["target"],
+                similarity=edge["similarity"],
+            )
+            for edge in edges
         ],
     )
 

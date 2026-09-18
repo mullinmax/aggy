@@ -1,14 +1,16 @@
 """Database-backed tests for the nearest-neighbour graph.
 
-The walk itself is covered in ``search_test.py`` against hand-built graphs.
-What is left for here is everything the database adds: that a walk placed into
-a real feed finds the right articles, that the back-insert keeps the graph
-navigable in both directions, that the queue drains, and that neither feeds nor
-accounts leak into each other.
+The walk itself is covered in ``search_test.py`` against hand-built graphs, and
+the graph view's layout in ``tests/js/graph_layout_test.js``. What is left for
+here is everything the database adds: that a walk placed into a real feed finds
+the right articles, that the back-insert keeps the graph navigable in both
+directions, that the queue drains, that neither feeds nor accounts leak into
+each other, and that the view's query answers with a true subgraph.
 """
 
 import json
 import math
+from datetime import datetime, timezone
 
 import pytest
 
@@ -16,8 +18,10 @@ from config import config
 from db.base import get_db_con
 from db.feed import Feed
 from db.item import ItemLoose
+from db.source import Source
 from db.user import User
 from neighbors.graph import link_item, neighbor_graph_job, neighbor_similarities
+from tests.testing_utils import build_api_request_args
 
 LINKS = config.get_int("NEIGHBOR_LINKS")
 
@@ -28,7 +32,7 @@ def _vector(angle: float) -> list:
     return [math.cos(angle), math.sin(angle)]
 
 
-def _add_item(feed, url, angle=None, title="Title", published=None):
+def _add_item(feed, url, angle=None, title="Title", published=None, predicted=None):
     """An article in a feed, optionally with a text embedding.
 
     ``angle=None`` is an article whose embedding never arrived -- the normal
@@ -52,6 +56,14 @@ def _add_item(feed, url, angle=None, title="Title", published=None):
                 (json.dumps({"test-model": _vector(angle)}), item.url_hash),
             )
     feed.add_items(item)
+    if predicted is not None:
+        with get_db_con() as cur:
+            cur.execute(
+                "UPDATE feed_items SET predicted_score = %s, "
+                "predicted_confidence = 0.5, predicted_at = NOW() "
+                "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = %s",
+                (predicted, feed.user_hash, feed.name_hash, item.url_hash),
+            )
     return item
 
 
@@ -444,3 +456,152 @@ def test_link_item_places_one_article_on_its_own(existing_feed):
         )
 
     assert [h for h, _s in found] == [a.url_hash]
+
+
+# ---------- the graph view ----------
+#
+# What the drawing is made of. The layout itself is arithmetic and is checked
+# without a browser in tests/js/graph_layout_test.js; what is left for here is
+# the query behind it.
+
+
+def test_the_view_returns_the_articles_and_the_links_between_them(existing_feed):
+    items = [
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
+        for i in range(4)
+    ]
+    _settle(existing_feed)
+
+    nodes, edges = existing_feed.graph()
+
+    assert {node["url_hash"] for node in nodes} == {item.url_hash for item in items}
+    assert edges
+    for edge in edges:
+        assert edge["source"] < edge["target"]
+        assert 0 < edge["similarity"] <= 1
+
+
+def test_the_two_stored_directions_are_drawn_as_one_line(existing_feed):
+    """The graph holds each link both ways round so a walk stays connected.
+    Two lines on top of each other is just a thicker line, so the view folds
+    them."""
+    a = _add_item(existing_feed, "https://example.com/a", angle=0.0)
+    b = _add_item(existing_feed, "https://example.com/b", angle=0.05)
+    _settle(existing_feed)
+
+    # both directions really are stored
+    assert _neighbors(existing_feed, a) and _neighbors(existing_feed, b)
+
+    _nodes, edges = existing_feed.graph()
+
+    assert len(edges) == 1
+
+
+def test_an_edge_with_one_end_outside_the_window_is_not_drawn(existing_feed):
+    """A window has to be a true subgraph. An edge to an article that was left
+    out would be a line running off the side of the canvas to nothing."""
+    for i in range(6):
+        _add_item(
+            existing_feed,
+            f"https://example.com/{i}",
+            angle=0.05 * i,
+            published=datetime(2024, 1, i + 1, tzinfo=timezone.utc),
+        )
+    _settle(existing_feed)
+
+    nodes, edges = existing_feed.graph(limit=3)
+    drawn = {node["url_hash"] for node in nodes}
+
+    assert len(nodes) == 3
+    for edge in edges:
+        assert edge["source"] in drawn
+        assert edge["target"] in drawn
+
+
+def test_the_window_keeps_the_end_of_the_feed_it_was_asked_for(existing_feed):
+    best = _add_item(
+        existing_feed, "https://example.com/best", angle=0.0, predicted=0.9
+    )
+    _add_item(existing_feed, "https://example.com/worst", angle=0.1, predicted=-0.9)
+    _add_item(existing_feed, "https://example.com/middling", angle=0.2, predicted=0.0)
+
+    nodes, _edges = existing_feed.graph(limit=1, rank="predicted")
+
+    assert [node["url_hash"] for node in nodes] == [best.url_hash]
+
+
+def test_an_unlinked_article_is_still_a_node(existing_feed):
+    """A feed mid-backfill should look like a graph filling in, not a graph
+    with holes in it."""
+    lonely = _add_item(existing_feed, "https://example.com/lonely", angle=0.0)
+
+    nodes, edges = existing_feed.graph()
+
+    assert [node["url_hash"] for node in nodes] == [lonely.url_hash]
+    assert edges == []
+
+
+def test_the_view_carries_what_the_drawing_needs(existing_feed):
+    """Colour comes from the source, size from the prediction, and a ring from
+    a real vote -- so all three have to actually arrive."""
+    source = Source(
+        user_hash=existing_feed.user_hash,
+        feed_hash=existing_feed.name_hash,
+        name="Some source",
+        url="http://some-source.example.com/rss",
+    )
+    source.create()
+    item = _add_item(existing_feed, "https://example.com/a", angle=0.0, predicted=0.4)
+    source.add_items(item)
+
+    nodes, _edges = existing_feed.graph()
+
+    assert nodes[0]["source_name"] == "Some source"
+    assert nodes[0]["predicted_score"] == pytest.approx(0.4)
+    assert nodes[0]["title"] == "Title"
+
+
+def test_the_graph_endpoint_answers_with_nodes_and_edges(
+    client, existing_user, existing_feed, token
+):
+    _add_item(existing_feed, "https://example.com/a", angle=0.0)
+    _add_item(existing_feed, "https://example.com/b", angle=0.05)
+    _settle(existing_feed)
+
+    args = build_api_request_args(
+        path="/feed/graph",
+        params={"feed_name_hash": existing_feed.name_hash},
+        token=token,
+    )
+    body = client.get(**args).json()
+
+    assert len(body["nodes"]) == 2
+    assert len(body["edges"]) == 1
+    assert body["total_items"] == 2
+    assert body["nodes"][0]["item_hash"]
+    assert body["edges"][0]["similarity"] > 0
+
+
+def test_the_graph_endpoint_rejects_a_rank_it_does_not_have(
+    client, existing_user, existing_feed, token
+):
+    args = build_api_request_args(
+        path="/feed/graph",
+        params={"feed_name_hash": existing_feed.name_hash, "rank": "vibes"},
+        token=token,
+    )
+    assert client.get(**args).status_code == 400
+
+
+def test_the_graph_endpoint_cannot_be_pointed_at_another_account(
+    client, existing_user, existing_feed, token
+):
+    _stranger, their_feed = _second_account("graph-stranger")
+    _add_item(their_feed, "https://example.com/theirs", angle=0.0)
+
+    args = build_api_request_args(
+        path="/feed/graph",
+        params={"feed_name_hash": their_feed.name_hash},
+        token=token,
+    )
+    assert client.get(**args).status_code == 404

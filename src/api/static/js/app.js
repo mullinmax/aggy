@@ -49,6 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     .add('stats', showArticleStats)
     .add('tasks', showTasks)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
+    .add('feed/:hash/graph', ({ hash }) => showFeedGraph(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
 });
@@ -77,6 +78,9 @@ function bindControls() {
   $('manageSourcesBtn').onclick = () => switchFeedTab('sources');
   $('filterBtn').onclick = toggleFilterPanel;
   $('statsBtn').onclick = openStatsModal;
+  $('graphBtn').onclick = () => {
+    if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/graph`);
+  };
   $('rerankBtn').onclick = handleRerank;
   $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
   postTypeCheckboxes().forEach((box) => {
@@ -169,6 +173,7 @@ function setView(name) {
   $('viewList').classList.toggle('hidden', name !== 'list');
   $('viewStats').classList.toggle('hidden', name !== 'stats');
   $('viewTasks').classList.toggle('hidden', name !== 'tasks');
+  $('viewGraph').classList.toggle('hidden', name !== 'graph');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -387,6 +392,8 @@ function switchFeedTab(tab) {
   // The filter only applies to the article list; hide the button (and any
   // open panel) on the sources/settings tab.
   $('filterBtn').classList.toggle('hidden', tab !== 'items');
+  // the graph is a view of the articles, so it belongs with them
+  $('graphBtn').classList.toggle('hidden', tab !== 'items');
   if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
 }

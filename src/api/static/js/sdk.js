@@ -115,6 +115,11 @@ class AggySDK {
     return this._request("GET", "/feed/get", { query: { feed_name_hash } });
   }
 
+  /** The feed's articles and the similarity links between them */
+  async feedGraph({ feed_name_hash, limit, rank }) {
+    return this._request("GET", "/feed/graph", { query: { feed_name_hash, limit, rank } });
+  }
+
   /** The items a duplicate badge stands for */
   async feedItemDuplicates({ feed_name_hash, group_hash }) {
     return this._request("GET", "/feed/item_duplicates", { query: { feed_name_hash, group_hash } });
