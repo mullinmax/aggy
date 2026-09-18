@@ -46,6 +46,8 @@ const TASK_KIND_META = {
     label: 'Source re-scrape',
     help: 'Re-collecting content, pictures and media for articles already stored',
   },
+  // retired: duplicate checks are now part of the similarity pass, but runs
+  // from before the change are still in the timeline and deserve their label
   duplicate_detection: {
     label: 'Duplicate checks',
     help: 'Grouping articles that are the same content under different URLs',
@@ -55,8 +57,9 @@ const TASK_KIND_META = {
     help: 'Embedding preview pictures the recommender has not seen yet',
   },
   neighbor_graph: {
-    label: 'Similarity linking',
-    help: 'Linking each article to the ones most like it in the same feed',
+    label: 'Similar articles',
+    help: 'Linking each article to the ones most like it in the same feed, and '
+      + 'grouping the ones that turn out to be the same story',
   },
 };
 
@@ -98,18 +101,12 @@ const TASK_TRIGGERS = [
       + 'its next scheduled turn.',
   },
   {
-    task: 'duplicate_detection',
-    label: 'Find duplicates',
-    help: 'Re-group articles that reach you as the same story under different '
-      + 'URLs.',
-  },
-  {
     task: 'neighbor_graph',
     label: 'Link similar articles',
     help: 'Work through the articles waiting to be linked to the ones most '
-      + 'like them. These links are what duplicate detection walks, what the '
-      + 'recommender reads your neighbouring votes from, and what the reader '
-      + 'shows beside an article.',
+      + 'like them, and re-group the ones that reach you as the same story. '
+      + 'These links are also what the recommender reads your neighbouring '
+      + 'votes from, and what the reader shows beside an article.',
   },
   {
     task: 'rescrape_sources',

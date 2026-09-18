@@ -19,6 +19,8 @@ from db.item import ItemLoose
 from db.user import User
 from neighbors.graph import link_item, neighbor_graph_job, neighbor_similarities
 
+LINKS = config.get_int("NEIGHBOR_LINKS")
+
 
 def _vector(angle: float) -> list:
     """A unit vector on the circle. Two articles are as alike as their angles
@@ -170,6 +172,102 @@ def test_a_node_keeps_only_its_best_links(existing_feed, monkeypatch):
         )
         counts = [row["n"] for row in cur.fetchall()]
     assert counts and max(counts) <= 2
+
+
+def _clear_cooldown(feed):
+    """Age every link so the next pass is willing to re-walk it.
+
+    The cooldown is a rate limit, not part of what these tests are about: they
+    ask where the queue ends up, not how many days it takes to get there.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE feed_items SET neighbors_linked_at = "
+            "neighbors_linked_at - make_interval(days => 365) "
+            "WHERE user_hash = %s AND feed_hash = %s",
+            (feed.user_hash, feed.name_hash),
+        )
+
+
+def _still_queued(feed):
+    """Articles still asking to be walked again."""
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT item_url_hash FROM feed_items "
+            "WHERE user_hash = %s AND feed_hash = %s AND neighbors_stale",
+            (feed.user_hash, feed.name_hash),
+        )
+        return [row["item_url_hash"] for row in cur.fetchall()]
+
+
+def _settle(feed, passes=6):
+    """Run the pass until the graph stops moving."""
+    for _ in range(passes):
+        _clear_cooldown(feed)
+        neighbor_graph_job()
+
+
+def test_every_article_ends_up_with_a_full_list(existing_feed):
+    """The promise the queue makes. An article placed into a thin graph comes
+    up short -- the first one in a feed has nothing to link to at all -- so it
+    stays queued until it holds a full list rather than being left with two
+    links forever."""
+    items = [
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
+        for i in range(LINKS + 3)
+    ]
+
+    _settle(existing_feed)
+
+    for item in items:
+        assert len(_neighbors(existing_feed, item)) == LINKS
+
+
+def test_a_feed_too_small_to_fill_a_list_stops_asking(existing_feed):
+    """The other half of that rule. A feed of three articles can never give
+    anything in it five neighbours, and a node that kept asking would be
+    re-walked forever for an answer that is not coming."""
+    items = [
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
+        for i in range(3)
+    ]
+
+    _settle(existing_feed)
+
+    for item in items:
+        assert len(_neighbors(existing_feed, item)) == len(items) - 1
+    assert _still_queued(existing_feed) == []
+
+
+def test_a_graph_at_rest_stops_walking_itself(existing_feed):
+    """A re-walk writes the same edges back, so marking every neighbour stale
+    would have each re-walk dirty five more nodes, each dirtying five more. The
+    queue has to reach a fixed point, or a feed nobody has touched re-walks
+    most of itself every cooldown for no change at all."""
+    for i in range(LINKS + 4):
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
+
+    _settle(existing_feed)
+
+    assert _still_queued(existing_feed) == []
+
+
+def test_a_new_arrival_still_wakes_the_neighbours_it_changed(existing_feed):
+    """...without the fixed point becoming a graph that ignores new articles.
+    A node whose list this arrival genuinely changed is queued; one it did not
+    reach is left alone."""
+    for i in range(LINKS + 4):
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
+    _settle(existing_feed)
+    assert _still_queued(existing_feed) == []
+
+    arrival = _add_item(existing_feed, "https://example.com/new", angle=0.0)
+    neighbor_graph_job()
+
+    woken = set(_still_queued(existing_feed))
+    assert woken  # the ones it displaced a link of
+    assert arrival.url_hash not in woken  # it was placed, not displaced
+    assert len(woken) <= LINKS
 
 
 def test_an_article_with_no_embedding_stays_on_the_queue(existing_feed):
@@ -333,10 +431,9 @@ def test_neighbor_similarities_spans_an_accounts_feeds(existing_user, existing_f
         )
 
 
-def test_linking_on_demand_places_an_article_the_job_has_not_reached(existing_feed):
-    """Duplicate detection reaches an article on its own schedule, so it can
-    place one itself rather than wait a recheck cycle for a signal that is one
-    walk away."""
+def test_link_item_places_one_article_on_its_own(existing_feed):
+    """The unit the pass is built out of: given a cursor, it places one article
+    in one feed and answers with what it found."""
     a = _add_item(existing_feed, "https://example.com/a", angle=0.0)
     neighbor_graph_job()
     b = _add_item(existing_feed, "https://example.com/b", angle=0.05)

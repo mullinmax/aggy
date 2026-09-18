@@ -77,15 +77,15 @@ KNOWN_CONFIG_VALUES = [
     "EXTRA_CORS_ORIGINS",
     # Near-duplicate article detection (src/api/dedup). Every threshold is
     # config so it can be tuned against a real corpus without a code change.
-    "DUPLICATE_DETECTION_INTERVAL_MINUTES",
-    "DUPLICATE_DETECTION_BATCH_SIZE",
+    # It has no interval or batch size of its own: examining an article is the
+    # second half of the similarity pass below, and shares its budget.
     "DUPLICATE_WINDOW_DAYS",
     "DUPLICATE_MAX_GROUP",
     "DUPLICATE_RECHECK_DAYS",
     "DUPLICATE_SIMILARITY_THRESHOLD",
-    # The nearest-neighbour graph over each feed (src/api/neighbors), which
-    # the embedding duplicate signal, the recommender and the reader's
-    # related-articles rail are all read out of.
+    # The similarity pass (src/api/neighbors): the nearest-neighbour graph over
+    # each feed, which the embedding duplicate signal, the recommender and the
+    # reader's related-articles rail are all read out of.
     "NEIGHBOR_GRAPH_INTERVAL_MINUTES",
     "NEIGHBOR_GRAPH_BATCH_SIZE",
     "NEIGHBOR_LINKS",
@@ -202,12 +202,8 @@ DEFAULT_CONFIG = {
     # are pruned to this window.
     "SOURCE_ATTEMPT_HISTORY_DAYS": 30,
     "ATTEMPT_PRUNE_INTERVAL_MINUTES": 360,
-    # Duplicate detection. Items that have never been examined are worked a
-    # batch at a time on this interval, so an install with a large backlog
-    # catches up over several passes instead of one long one.
-    "DUPLICATE_DETECTION_INTERVAL_MINUTES": 30,
-    "DUPLICATE_DETECTION_BATCH_SIZE": 500,
-    # Only items published within this many days of each other are compared.
+    # Duplicate detection. Only items published within this many days of each
+    # other are compared.
     # The same story republished months later is not a duplicate worth hiding,
     # and the window is what keeps the candidate set small.
     "DUPLICATE_WINDOW_DAYS": 7,
@@ -217,12 +213,12 @@ DEFAULT_CONFIG = {
     # overflow a group is left ungrouped -- an uncollapsed duplicate is a far
     # cheaper mistake than a wrong collapse.
     "DUPLICATE_MAX_GROUP": 25,
-    # Being unique is not permanent: a second copy of an article arrives later,
-    # and by then the copy that arrived first has already been examined. Items
-    # examined and found unique are re-examined once their check is this old,
-    # which is what makes detection reach articles it has already seen. Only
-    # once the never-examined backlog is clear, so a busy install always spends
-    # its budget on new articles first.
+    # Being unique is not always permanent. Most of the time the second copy's
+    # own examination is what catches the pair, but an item DUPLICATE_MAX_GROUP
+    # turned away from a group that has since shrunk is revisited by nothing
+    # else, so items examined and found unique are looked at again once their
+    # check is this old. Only with what is left of the similarity pass's batch,
+    # so a busy install always spends its budget on new articles first.
     "DUPLICATE_RECHECK_DAYS": 3,
     # How alike two articles' text embeddings must be before the graph walk
     # calls them the same story. Deliberately high: the walk is approximate, so
@@ -231,14 +227,17 @@ DEFAULT_CONFIG = {
     # gets to see. An uncollapsed duplicate is the cheaper mistake, which is the
     # same bias the canonical-URL signal has.
     "DUPLICATE_SIMILARITY_THRESHOLD": 0.93,
-    # The neighbour graph. Nodes are linked a batch at a time on this interval,
-    # so an install with a large backlog builds its graph over several passes
-    # rather than one long one.
+    # The similarity pass: place articles in the neighbour graph, then group
+    # the duplicates that finds. A batch at a time on this interval, so an
+    # install with a large backlog builds its graph over several passes rather
+    # than one long one. The batch covers both halves.
     "NEIGHBOR_GRAPH_INTERVAL_MINUTES": 10,
     "NEIGHBOR_GRAPH_BATCH_SIZE": 300,
     # How many nearest articles each one records. Five is enough to walk on and
     # enough to show beside an article; the cost of more is paid on every
-    # ingest, in edges written and vectors fetched per hop.
+    # ingest, in edges written and vectors fetched per hop. An article stays on
+    # the queue until it holds this many, or until the feed turns out to be too
+    # small to give it that many.
     "NEIGHBOR_LINKS": 5,
     # How many candidates a walk carries. Above NEIGHBOR_LINKS it keeps
     # runners-up alive as places to explore from, which is what lets a walk
@@ -255,9 +254,11 @@ DEFAULT_CONFIG = {
     # expands it. A hub can be named by hundreds of others, and expanding all of
     # them is the scan the graph exists to avoid.
     "NEIGHBOR_MAX_FANOUT": 24,
-    # Every new article dirties the neighbours it displaced. Without a cooldown
-    # a busy feed would re-walk its popular nodes on every pass and never reach
-    # the backlog, so a node is re-walked at most this often.
+    # How often a node may be re-walked. Every new article dirties the
+    # neighbours it displaced, and an article whose link list came up short
+    # stays queued until it fills, so without a cooldown a busy feed would
+    # re-walk its popular nodes on every pass and never reach its backlog.
+    # Lower it to converge a thin graph faster, at the cost of walking more.
     "NEIGHBOR_RELINK_DAYS": 2,
     # One row per pass of every background job, so the tasks page can show how
     # often things run and how long they take. A week is enough to see a daily

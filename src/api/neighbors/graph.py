@@ -11,9 +11,13 @@ of *their* existing links is -- but re-walking those five to find out would
 cost five more searches per ingested article. Instead the walk's similarities,
 which are exact and already computed, are written straight back as edges in the
 reverse direction, each neighbour's list is trimmed to its best
-``NEIGHBOR_LINKS``, and the neighbour is marked stale so a later pass re-walks
-it properly. The cheap exact update happens immediately; the expensive
-approximate one happens on the background job's own schedule.
+``NEIGHBOR_LINKS``, and a neighbour whose list actually changed is marked stale
+so a later pass re-walks it properly. The cheap exact update happens
+immediately; the expensive approximate one happens on the background job's own
+schedule.
+
+That "actually changed" is what lets the queue reach a fixed point: a graph
+nothing has disturbed stops asking to be walked.
 
 Everything here takes a cursor and does no transaction management of its own,
 so a caller can place an article and act on the result atomically.
@@ -202,13 +206,21 @@ def _write_links(
     url_hash: str,
     neighbors: Sequence[Tuple[str, float]],
 ) -> None:
-    """Replace a node's links, mirror them back, and dirty what they displace.
+    """Replace a node's links, mirror them back, and dirty what that changed.
 
     The reverse edges carry the same measured similarity -- cosine is
     symmetric, so there is nothing approximate about writing it in both
-    directions. Trimming each neighbour afterwards is what keeps a node's list
-    to its best few; marking it stale is what eventually gets it re-walked, in
-    case the new arrival changed its neighbourhood by more than one link.
+    directions. Trimming each neighbour afterwards is what keeps its list to
+    its best few.
+
+    A neighbour is only marked stale when this actually changed its list: the
+    reverse edge is one it did not already hold, and it survived the trim.
+    Marking unconditionally looks harmless and is not -- a re-walk writes the
+    same edges back, so every re-walk would dirty five more nodes, each of
+    which would dirty five more. The queue would never reach a fixed point, and
+    a feed at rest would re-walk most of itself every cooldown for no change at
+    all. Gated on a real change, the cascade stops as soon as the graph stops
+    moving.
     """
     links = config.get_int("NEIGHBOR_LINKS")
     cur.execute(
@@ -216,6 +228,7 @@ def _write_links(
         "AND item_url_hash = %s",
         (user_hash, feed_hash, url_hash),
     )
+    changed = []
     for neighbor_hash, sim in neighbors:
         cur.execute(
             "INSERT INTO item_neighbors (user_hash, feed_hash, item_url_hash, "
@@ -224,20 +237,34 @@ def _write_links(
             "DO UPDATE SET similarity = EXCLUDED.similarity, linked_at = NOW()",
             (user_hash, feed_hash, url_hash, neighbor_hash, sim),
         )
+        # xmax = 0 on the returned row means this was a fresh insert rather
+        # than the upsert's update -- the only way to tell "the neighbour did
+        # not know about us" from "it already did".
         cur.execute(
             "INSERT INTO item_neighbors (user_hash, feed_hash, item_url_hash, "
             "neighbor_url_hash, similarity) VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (user_hash, feed_hash, item_url_hash, neighbor_url_hash) "
-            "DO UPDATE SET similarity = EXCLUDED.similarity, linked_at = NOW()",
+            "DO UPDATE SET similarity = EXCLUDED.similarity, linked_at = NOW() "
+            "RETURNING (xmax = 0) AS inserted",
             (user_hash, feed_hash, neighbor_hash, url_hash, sim),
         )
+        if cur.fetchone()["inserted"]:
+            changed.append(neighbor_hash)
         _trim(cur, user_hash, feed_hash, neighbor_hash, links)
 
-    if neighbors:
+    if changed:
+        # ...and only those whose new edge outlived the trim. One that was
+        # inserted and immediately trimmed away is a neighbour whose list is
+        # exactly as it was.
         cur.execute(
-            "UPDATE feed_items SET neighbors_stale = TRUE "
-            "WHERE user_hash = %s AND feed_hash = %s AND item_url_hash = ANY(%s)",
-            (user_hash, feed_hash, [n for n, _ in neighbors]),
+            "UPDATE feed_items c SET neighbors_stale = TRUE "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s "
+            "AND c.item_url_hash = ANY(%s) AND EXISTS ("
+            " SELECT 1 FROM item_neighbors n"
+            " WHERE n.user_hash = c.user_hash AND n.feed_hash = c.feed_hash"
+            "  AND n.item_url_hash = c.item_url_hash"
+            "  AND n.neighbor_url_hash = %s)",
+            (user_hash, feed_hash, changed, url_hash),
         )
 
 
@@ -259,38 +286,54 @@ def _mark_linked(
     )
 
 
+def _feed_can_fill(cur, user_hash: str, feed_hash: str, links: int) -> bool:
+    """Whether this feed even holds enough articles for a full link list.
+
+    A feed of three articles cannot give anything in it five neighbours, and a
+    node that keeps asking for what is not there would sit on the queue being
+    re-walked forever. Counted behind a LIMIT, so this reads a handful of rows
+    rather than the whole feed.
+    """
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM (SELECT 1 FROM feed_items "
+        "WHERE user_hash = %s AND feed_hash = %s LIMIT %s) enough",
+        (user_hash, feed_hash, links + 1),
+    )
+    return cur.fetchone()["n"] > links
+
+
 def link_item(
     cur, user_hash: str, feed_hash: str, url_hash: str
 ) -> List[Tuple[str, float]]:
     """Place one article in one feed's graph. Returns its neighbours, best
-    first."""
+    first.
+
+    A node only leaves the queue once it holds a full ``NEIGHBOR_LINKS``, or
+    once the feed is too small to give it one. The early articles in a feed
+    necessarily come up short -- the first has nothing to link to at all -- and
+    an article that walked into a thin part of the graph can too.
+
+    In practice the back-insert fills them long before a re-walk does: by the
+    sixth article in a feed, each of the first five has been named by every one
+    that followed it. The re-walk is the backstop for what that misses, which
+    is why it waits for the ordinary cooldown rather than running hot.
+    """
     vector, model = item_vector(cur, url_hash)
     if vector is None:
+        # Embedding can fail at ingest and be filled in later, so this is "not
+        # yet" rather than "never": the cooldown restarts and the node is tried
+        # again, instead of being dropped from the queue for good.
         _mark_linked(cur, user_hash, feed_hash, url_hash, None, done=False)
         return []
 
+    links = config.get_int("NEIGHBOR_LINKS")
     neighbors = nearest(cur, user_hash, feed_hash, url_hash, vector)
     _write_links(cur, user_hash, feed_hash, url_hash, neighbors)
-    _mark_linked(cur, user_hash, feed_hash, url_hash, model, done=True)
-    return neighbors
-
-
-def ensure_linked(cur, user_hash: str, url_hash: str) -> None:
-    """Place an article in every one of this account's feeds that holds it and
-    has not linked it yet.
-
-    Duplicate detection reaches an article on its own schedule, which can be
-    before the graph job does. Rather than wait a recheck cycle for a signal
-    that is a walk away, it places the article itself; the job then finds
-    nothing left to do for it.
-    """
-    cur.execute(
-        "SELECT feed_hash FROM feed_items "
-        "WHERE user_hash = %s AND item_url_hash = %s AND neighbors_linked_at IS NULL",
-        (user_hash, url_hash),
+    full = len(neighbors) >= links or not _feed_can_fill(
+        cur, user_hash, feed_hash, links
     )
-    for row in cur.fetchall():
-        link_item(cur, user_hash, row["feed_hash"], url_hash)
+    _mark_linked(cur, user_hash, feed_hash, url_hash, model, done=full)
+    return neighbors
 
 
 def neighbor_similarities(
@@ -329,31 +372,63 @@ def similarity_between(cur, left_hash: str, right_hash: str) -> Optional[float]:
 
 
 # The queue: stale nodes, never-linked ones first, then longest since the last
-# walk. Every new article dirties up to NEIGHBOR_LINKS of its neighbours, so
-# without the cooldown a busy feed would re-walk the same popular nodes on
-# every pass and never reach its backlog.
+# walk. That ordering is what keeps a newly ingested article ahead of every
+# re-walk, however many are due.
+#
+# Two things make a node stale: a new arrival displaced one of its links, or it
+# came out of its own walk holding fewer than NEIGHBOR_LINKS. Both wait for the
+# cooldown, because every new article dirties up to NEIGHBOR_LINKS neighbours
+# and a busy feed would otherwise re-walk its popular nodes on every pass and
+# never reach its backlog.
+#
+# The article columns ride along because the second half of the pass -- asking
+# whether the walk just landed this article on top of a copy of itself -- needs
+# them, and they are a primary-key join away.
 _PENDING_SQL = """
-SELECT user_hash, feed_hash, item_url_hash
-FROM feed_items
-WHERE neighbors_stale
-  AND (neighbors_linked_at IS NULL
-       OR neighbors_linked_at < NOW() - make_interval(days => %s))
-ORDER BY neighbors_linked_at ASC NULLS FIRST
+SELECT c.user_hash, c.feed_hash, c.item_url_hash AS url_hash,
+       i.url, i.canonical_url_hash,
+       COALESCE(i.date_published, i.created_at) AS published
+FROM feed_items c
+JOIN items i ON i.url_hash = c.item_url_hash
+WHERE c.neighbors_stale
+  AND (c.neighbors_linked_at IS NULL
+       OR c.neighbors_linked_at < NOW() - make_interval(days => %s))
+ORDER BY c.neighbors_linked_at ASC NULLS FIRST
 LIMIT %s
 """
 
 
 def neighbor_graph_job() -> None:
-    """Link the articles that are due, a batch at a time.
+    """Place the articles that are due, and group the duplicates that finds.
 
-    On an existing install the first passes are the backfill: every row starts
-    stale, so the graph builds itself out over however many passes the corpus
-    needs. After that a pass is mostly newly ingested articles plus whichever
-    neighbours they displaced.
+    One pass rather than two, because the second half is a reading of what the
+    first half just built: an article's duplicates, beyond the ones that share
+    its URL, are whichever of its nearest neighbours turn out to be the same
+    story. Run apart, an article could be examined before it had been placed,
+    and the gap between "this arrived" and "this was collapsed" was a whole
+    extra interval wide.
+
+    Three queues, worked in order of value:
+
+    1. Articles nobody has placed yet. On an existing install that is the whole
+       corpus, which is what backfills the graph -- a batch per pass rather
+       than one long transaction.
+    2. Articles due a re-walk: their neighbourhood changed, or their link list
+       came up short. Only after the never-placed ones, and only past the
+       cooldown.
+    3. Whatever budget is left goes to articles due a second look for
+       duplicates alone (``dedup.detect.recheck_rows``) -- the ones a full
+       group turned away, which nothing else revisits.
 
     Each article is its own transaction, so one unusable row costs that article
     and not the batch.
     """
+    # Imported here rather than at the top: duplicate detection reads the graph
+    # this module builds, so it depends on us and we cannot depend on it in
+    # turn. This is the one edge running the other way -- the pass that places
+    # an article and then hands it on.
+    from dedup.detect import examine_for_duplicates, recheck_rows
+
     batch_size = config.get_int("NEIGHBOR_GRAPH_BATCH_SIZE")
     relink_days = config.get_int("NEIGHBOR_RELINK_DAYS")
 
@@ -361,7 +436,10 @@ def neighbor_graph_job() -> None:
         cur.execute(_PENDING_SQL, (relink_days, batch_size))
         rows = cur.fetchall()
 
-    if not rows:
+    # Articles due a second look, with what is left of the batch once the ones
+    # waiting to be placed have had theirs.
+    rechecks = recheck_rows(batch_size - len(rows))
+    if not rows and not rechecks:
         return
 
     # Recorded only once there is something to do: a timeline of empty passes
@@ -369,23 +447,50 @@ def neighbor_graph_job() -> None:
     # user_hash -- the queue spans every account.
     linked = 0
     edges = 0
+    grouped = 0
+    # An article in several of one account's feeds is placed once per feed, but
+    # duplicate groups are per account, so examining it once covers them all.
+    examined: set = set()
+
     with task_run(KIND_NEIGHBOR_GRAPH) as run:
         for row in rows:
             try:
                 with get_db_con() as cur:
                     found = link_item(
-                        cur, row["user_hash"], row["feed_hash"], row["item_url_hash"]
+                        cur, row["user_hash"], row["feed_hash"], row["url_hash"]
                     )
                 linked += 1
                 edges += len(found)
             except Exception as e:
                 logging.exception(
-                    f"Linking {row['item_url_hash']} into the neighbour graph "
-                    f"failed: {e}"
+                    f"Linking {row['url_hash']} into the neighbour graph failed: {e}"
                 )
-        run.detail = f"{linked} article(s) linked, {edges} neighbour(s) found"
+                continue
+            grouped += _examine(examine_for_duplicates, row, examined)
+
+        for row in rechecks:
+            grouped += _examine(examine_for_duplicates, row, examined)
+
+        run.detail = (
+            f"{linked} placed ({edges} neighbour(s) found), "
+            f"{len(examined)} examined ({len(rechecks)} re-examined), "
+            f"{grouped} grouped"
+        )
 
     logging.info(
-        f"Neighbour graph: {linked} of {len(rows)} article(s) linked, "
-        f"{edges} neighbour(s) found"
+        f"Similarity: {linked} of {len(rows)} article(s) placed, "
+        f"{len(examined)} examined, {grouped} added to a duplicate group"
     )
+
+
+def _examine(examine, row: dict, seen: set) -> int:
+    """Examine one article for duplicates, once per account per article."""
+    key = (row["user_hash"], row["url_hash"])
+    if key in seen:
+        return 0
+    seen.add(key)
+    try:
+        return examine(row)
+    except Exception as e:
+        logging.exception(f"Duplicate detection for {row['url']} failed: {e}")
+        return 0

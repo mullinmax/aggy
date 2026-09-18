@@ -1,5 +1,9 @@
 """Database-backed tests for grouping duplicates and collapsing them in a feed.
 
+Grouping is the second half of the similarity pass, so ``neighbor_graph_job``
+is what these drive: it places each article in the neighbour graph and then
+asks whether what the walk found beside it is the same story.
+
 The same article reaches a feed through several sources, under a different URL
 from each, so it is stored several times over and shown several times over.
 These cover what gets grouped, what deliberately does not, and which member
@@ -17,7 +21,6 @@ from db.base import get_db_con
 from db.item import ItemLoose
 from db.item_state import ItemState
 from db.source import Source
-from dedup.detect import duplicate_detection_job
 from neighbors.graph import neighbor_graph_job
 from tests.testing_utils import build_api_request_args
 
@@ -101,7 +104,7 @@ def test_tracking_parameters_alone_make_a_duplicate(existing_user, existing_feed
     a = _add_item(existing_feed, "https://example.com/story?utm_source=feed-a")
     b = _add_item(existing_feed, "https://example.com/story?utm_source=feed-b")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert (
         _group_of(existing_user, a.url_hash)["group_hash"]
@@ -119,7 +122,7 @@ def test_amp_rendition_is_the_same_article(existing_user, existing_feed):
         "https://example-com.cdn.ampproject.org/c/s/example.com/news/story",
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert (
         _group_of(existing_user, plain.url_hash)["group_hash"]
@@ -142,7 +145,7 @@ def test_every_variant_lands_in_one_group(existing_user, existing_feed):
         )
     ]
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     groups = {_group_of(existing_user, i.url_hash)["group_hash"] for i in items}
     assert len(groups) == 1
@@ -153,7 +156,7 @@ def test_unrelated_articles_are_not_grouped(existing_user, existing_feed):
     a = _add_item(existing_feed, "https://example.com/one")
     b = _add_item(existing_feed, "https://example.com/two")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _group_of(existing_user, a.url_hash) is None
     assert _group_of(existing_user, b.url_hash) is None
@@ -177,7 +180,7 @@ def test_a_discussion_post_is_not_the_article_it_links_to(existing_user, existin
             ('<a href="https://example.com/story">the story</a>', discussion.url_hash),
         )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _group_of(existing_user, article.url_hash) is None
     assert _group_of(existing_user, discussion.url_hash) is None
@@ -202,7 +205,7 @@ def test_the_same_story_republished_much_later_is_not_a_duplicate(
     )
     assert window < 150  # the dates above are far further apart than the window
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _group_of(existing_user, old.url_hash) is None
     assert _group_of(existing_user, new.url_hash) is None
@@ -220,7 +223,7 @@ def test_a_group_is_capped(existing_user, existing_feed, monkeypatch):
         for i in range(10)
     ]
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     sizes = list(_groups(existing_user).values())
     assert sizes == [4]
@@ -249,9 +252,9 @@ def test_the_job_is_restartable_and_idempotent(existing_user, existing_feed):
     _add_item(existing_feed, "https://example.com/story?utm_source=a")
     _add_item(existing_feed, "https://example.com/story?utm_source=b")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     first = _groups(existing_user)
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _groups(existing_user) == first
     with get_db_con() as cur:
@@ -277,7 +280,7 @@ def test_the_job_backfills_a_missing_canonical_url(existing_user, existing_feed)
         )
         cur.execute("DELETE FROM item_duplicates")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     with get_db_con() as cur:
         cur.execute(
@@ -302,7 +305,7 @@ def test_an_unusable_url_costs_that_item_only(existing_user, existing_feed):
     a = _add_item(existing_feed, "https://example.com/story?utm_source=a")
     b = _add_item(existing_feed, "https://example.com/story?utm_source=b")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _group_of(existing_user, odd.url_hash) is None
     assert (
@@ -324,7 +327,7 @@ def test_the_highest_scoring_member_survives(existing_user, existing_feed):
         existing_feed, "https://example.com/story?utm_source=b", predicted=0.9
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     shown = existing_feed.query_items_with_sources(
         sort="newest", collapse_duplicates=True
@@ -343,7 +346,7 @@ def test_collapsing_reports_how_many_it_stands_for(existing_user, existing_feed)
         )
     _add_item(existing_feed, "https://example.com/alone", predicted=0.5)
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     rows = existing_feed.query_items_with_sources(
         sort="newest", collapse_duplicates=True
@@ -360,7 +363,7 @@ def test_not_collapsing_returns_every_member(existing_user, existing_feed):
     for i in range(3):
         _add_item(existing_feed, f"https://example.com/story?utm_source=s{i}")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     collapsed = existing_feed.query_items_with_sources(
         sort="newest", collapse_duplicates=True
@@ -378,7 +381,7 @@ def test_an_ungrouped_feed_is_untouched_by_collapsing(existing_user, existing_fe
     them, so this is the guard on that."""
     items = [_add_item(existing_feed, f"https://example.com/{i}") for i in range(5)]
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     rows = existing_feed.query_items_with_sources(
         sort="newest", collapse_duplicates=True
@@ -431,7 +434,7 @@ def test_the_source_interleave_has_no_holes(existing_user, existing_feed):
         published="2024-03-10T00:00:00Z",
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     first_block = existing_feed.query_items_with_sources(
         sort="newest", limit=2, collapse_duplicates=True
@@ -459,7 +462,7 @@ def test_a_group_with_no_predictions_still_collapses(existing_user, existing_fee
         published="2024-03-01T00:00:00Z",
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     rows = existing_feed.query_items_with_sources(
         sort="newest", collapse_duplicates=True
@@ -483,7 +486,7 @@ def test_voting_on_the_survivor_covers_its_twins(existing_user, existing_feed):
         existing_feed, "https://example.com/story?utm_source=b", predicted=0.1
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     ItemState.set_state(
         user_hash=existing_user.name_hash,
         feed_hash=existing_feed.name_hash,
@@ -512,7 +515,7 @@ def test_an_explicit_vote_on_a_twin_is_never_overwritten(existing_user, existing
     copy themselves."""
     a = _add_item(existing_feed, "https://example.com/story?utm_source=a")
     b = _add_item(existing_feed, "https://example.com/story?utm_source=b")
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     for item, score in ((b, 1.0), (a, -1.0)):
         ItemState.set_state(
@@ -537,7 +540,7 @@ def test_marking_read_does_not_spread(existing_user, existing_feed):
     travels across the group."""
     a = _add_item(existing_feed, "https://example.com/story?utm_source=a")
     b = _add_item(existing_feed, "https://example.com/story?utm_source=b")
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     ItemState.set_state(
         user_hash=existing_user.name_hash,
@@ -559,7 +562,7 @@ def test_a_twin_arriving_later_inherits_the_vote(existing_user, existing_feed):
     """The other direction: an item that joins the group *after* the vote would
     otherwise arrive unvoted and resurface the story."""
     first = _add_item(existing_feed, "https://example.com/story?utm_source=a")
-    duplicate_detection_job()
+    neighbor_graph_job()
     ItemState.set_state(
         user_hash=existing_user.name_hash,
         feed_hash=existing_feed.name_hash,
@@ -569,7 +572,7 @@ def test_a_twin_arriving_later_inherits_the_vote(existing_user, existing_feed):
     )
 
     late = _add_item(existing_feed, "https://example.com/story?utm_source=b")
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     with get_db_con() as cur:
         cur.execute(
@@ -586,7 +589,7 @@ def test_a_twin_arriving_later_inherits_the_vote(existing_user, existing_feed):
 def test_feed_items_collapses_by_default(client, existing_user, existing_feed, token):
     _add_item(existing_feed, "https://example.com/story?utm_source=a", predicted=0.1)
     _add_item(existing_feed, "https://example.com/story?utm_source=b", predicted=0.9)
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     args = build_api_request_args(
         path="/feed/items",
@@ -603,7 +606,7 @@ def test_feed_items_collapses_by_default(client, existing_user, existing_feed, t
 def test_feed_items_can_show_every_member(client, existing_user, existing_feed, token):
     _add_item(existing_feed, "https://example.com/story?utm_source=a")
     _add_item(existing_feed, "https://example.com/story?utm_source=b")
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     args = build_api_request_args(
         path="/feed/items",
@@ -632,7 +635,7 @@ def test_item_duplicates_lists_the_group(client, existing_user, existing_feed, t
         source=s2,
         predicted=0.9,
     )
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     group = _group_of(existing_user, shown.url_hash)["group_hash"]
     args = build_api_request_args(
@@ -682,7 +685,7 @@ def test_only_duplicates_keeps_just_the_duplicated_stories(
     _add_item(existing_feed, "https://example.com/alone", predicted=0.5)
     _add_item(existing_feed, "https://example.com/also-alone", predicted=0.4)
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     rows = existing_feed.query_items_with_sources(
         sort="newest", only_duplicates=True, collapse_duplicates=True
@@ -696,7 +699,7 @@ def test_only_duplicates_uncollapsed_shows_every_copy(existing_user, existing_fe
     b = _add_item(existing_feed, "https://example.com/story?utm_source=b")
     _add_item(existing_feed, "https://example.com/alone")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     rows = existing_feed.query_items_with_sources(
         sort="newest", only_duplicates=True, collapse_duplicates=False
@@ -710,7 +713,7 @@ def test_only_duplicates_on_a_feed_with_none_is_empty(existing_user, existing_fe
     for i in range(3):
         _add_item(existing_feed, f"https://example.com/{i}")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert (
         existing_feed.query_items_with_sources(sort="newest", only_duplicates=True)
@@ -740,7 +743,7 @@ def test_being_a_duplicate_does_not_depend_on_the_other_filters(
         predicted=0.9,
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     # narrowed to the one source that holds the *hidden* copy: it is still a
     # duplicate, and still reports the whole group
@@ -761,7 +764,7 @@ def test_feed_items_only_duplicates_over_the_api(
     _add_item(existing_feed, "https://example.com/story?utm_source=b", predicted=0.9)
     _add_item(existing_feed, "https://example.com/alone", predicted=0.5)
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     def items(**params):
         args = build_api_request_args(
@@ -809,7 +812,7 @@ def test_the_same_article_in_two_accounts_is_not_a_duplicate(
     _, their_feed = _second_account()
     theirs = _add_item(their_feed, "https://example.com/story?utm_source=theirs")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _group_of(existing_user, mine.url_hash) is None
     assert _groups() == {}  # not for anyone, not just not for me
@@ -839,7 +842,7 @@ def test_another_account_cannot_fill_my_group(
         for i in range(2)
     ]
 
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     groups = _groups(existing_user)
     assert list(groups.values()) == [2]
@@ -855,7 +858,7 @@ def test_votes_never_travel_between_accounts(existing_user, existing_feed):
     mine_too = _add_item(existing_feed, "https://example.com/story?utm_source=b")
     theirs = _add_item(their_feed, "https://example.com/story?utm_source=theirs")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     ItemState.set_state(
         user_hash=existing_user.name_hash,
         feed_hash=existing_feed.name_hash,
@@ -902,11 +905,11 @@ def test_an_already_examined_article_is_grouped_when_its_twin_arrives(
     and found unique; when the second copy turns up, the first must be pulled
     into the group with it rather than left behind."""
     first = _add_item(existing_feed, "https://example.com/story?utm_source=a")
-    duplicate_detection_job()
+    neighbor_graph_job()
     assert _group_of(existing_user, first.url_hash) is None
 
     late = _add_item(existing_feed, "https://example.com/story?utm_source=b")
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert (
         _group_of(existing_user, first.url_hash)["group_hash"]
@@ -927,17 +930,17 @@ def test_the_re_sweep_recovers_items_a_full_group_turned_away(
         _add_item(existing_feed, f"https://example.com/story?utm_source=s{i}")
         for i in range(4)
     ]
-    duplicate_detection_job()
+    neighbor_graph_job()
     assert list(_groups(existing_user).values()) == [2]
     monkeypatch.undo()
 
     # a sweep only revisits checks older than DUPLICATE_RECHECK_DAYS, so a
     # re-run straight away is deliberately a no-op
-    duplicate_detection_job()
+    neighbor_graph_job()
     assert list(_groups(existing_user).values()) == [2]
 
     _age_checks()
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert list(_groups(existing_user).values()) == [4]
     assert all(_group_of(existing_user, i.url_hash) for i in items)
@@ -949,11 +952,11 @@ def test_the_re_sweep_leaves_grouped_items_alone(existing_user, existing_feed):
     a = _add_item(existing_feed, "https://example.com/story?utm_source=a")
     _add_item(existing_feed, "https://example.com/story?utm_source=b")
     _add_item(existing_feed, "https://example.com/alone")
-    duplicate_detection_job()
+    neighbor_graph_job()
     before = _group_of(existing_user, a.url_hash)["group_hash"]
 
     _age_checks()
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     assert _group_of(existing_user, a.url_hash)["group_hash"] == before
 
@@ -964,17 +967,17 @@ def test_new_articles_are_examined_before_the_re_sweep(
     """A busy install must spend its budget on articles it has never seen. The
     sweep only runs with what is left of the batch once the backlog is clear."""
     _add_item(existing_feed, "https://example.com/old-unique")
-    duplicate_detection_job()
+    neighbor_graph_job()
     _age_checks()
 
     # a batch of one, and one never-examined article waiting
     monkeypatch.setattr(
         config,
         "get_int",
-        _with_override(config, "DUPLICATE_DETECTION_BATCH_SIZE", 1),
+        _with_override(config, "NEIGHBOR_GRAPH_BATCH_SIZE", 1),
     )
     fresh = _add_item(existing_feed, "https://example.com/brand-new")
-    duplicate_detection_job()
+    neighbor_graph_job()
 
     # the new article was examined; the aged one waited its turn
     with get_db_con() as cur:
@@ -1015,7 +1018,6 @@ def test_the_same_story_from_two_outlets_is_grouped(existing_user, existing_feed
     b = _embed(_add_item(existing_feed, "https://outlet-b.com/different-slug"), 0.01)
 
     neighbor_graph_job()
-    duplicate_detection_job()
 
     group = _group_of(existing_user, a.url_hash)
     assert group["group_hash"] == _group_of(existing_user, b.url_hash)["group_hash"]
@@ -1033,7 +1035,6 @@ def test_merely_related_articles_are_not_the_same_story(existing_user, existing_
     b = _embed(_add_item(existing_feed, "https://outlet-b.com/story"), 0.6)
 
     neighbor_graph_job()
-    duplicate_detection_job()
 
     assert _group_of(existing_user, a.url_hash) is None
     assert _group_of(existing_user, b.url_hash) is None
@@ -1057,11 +1058,9 @@ def test_joining_a_group_means_matching_its_representative(
     a = _embed(_add_item(existing_feed, "https://outlet-a.com/s"), 0.0)
     b = _embed(_add_item(existing_feed, "https://outlet-b.com/s"), 0.10)
     neighbor_graph_job()
-    duplicate_detection_job()
 
     c = _embed(_add_item(existing_feed, "https://outlet-c.com/s"), 0.20)
     neighbor_graph_job()
-    duplicate_detection_job()
 
     a_group = _group_of(existing_user, a.url_hash)
     b_group = _group_of(existing_user, b.url_hash)
@@ -1091,7 +1090,6 @@ def test_the_window_applies_to_the_embedding_signal_too(existing_user, existing_
     )
 
     neighbor_graph_job()
-    duplicate_detection_job()
 
     assert _group_of(existing_user, old.url_hash) is None
     assert _group_of(existing_user, new.url_hash) is None
@@ -1105,7 +1103,6 @@ def test_the_embedding_signal_never_crosses_accounts(existing_user, existing_fee
     _embed(_add_item(their_feed, "https://outlet-b.com/story"), 0.001)
 
     neighbor_graph_job()
-    duplicate_detection_job()
 
     assert _group_of(existing_user, mine.url_hash) is None
     assert _groups() == {}
@@ -1117,23 +1114,22 @@ def test_a_url_match_is_recorded_over_an_embedding_match(existing_user, existing
     _embed(_add_item(existing_feed, "https://example.com/story?utm_source=b"), 0.001)
 
     neighbor_graph_job()
-    duplicate_detection_job()
 
     assert _group_of(existing_user, a.url_hash)["signal"] == "canonical_url"
     assert _group_of(existing_user, a.url_hash)["confidence"] == 1.0
 
 
-def test_detection_places_an_article_the_graph_job_has_not_reached(
+def test_an_article_is_grouped_in_the_same_pass_that_places_it(
     existing_user, existing_feed
 ):
-    """Detection reaches an article on its own schedule, so it links the
-    article itself rather than waiting a recheck cycle for a signal that is one
-    walk away."""
+    """The reason the two used to be separate jobs and no longer are: the
+    embedding signal is a reading of the graph, so examining an article the
+    moment it is placed costs nothing extra and saves it a whole interval of
+    showing up twice."""
     a = _embed(_add_item(existing_feed, "https://outlet-a.com/story"), 0.0)
     b = _embed(_add_item(existing_feed, "https://outlet-b.com/story"), 0.01)
 
-    # no neighbor_graph_job() at all
-    duplicate_detection_job()
+    neighbor_graph_job()  # one pass, from ingested to collapsed
 
     assert (
         _group_of(existing_user, a.url_hash)["group_hash"]
@@ -1200,7 +1196,6 @@ def test_related_items_leave_out_other_copies_of_the_same_story(
     other = _embed(_add_item(existing_feed, "https://example.com/other"), 0.5)
 
     neighbor_graph_job()
-    duplicate_detection_job()
 
     args = build_api_request_args(
         path="/feed/related_items",

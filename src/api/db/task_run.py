@@ -28,6 +28,9 @@ KIND_FEED_TRAINING = "feed_training"
 KIND_FEED_SCORING = "feed_scoring"
 KIND_SOURCE_INGEST = "source_ingest"
 KIND_SOURCE_RESCRAPE = "source_rescrape"
+# Retired: duplicate detection is now the second half of the similarity
+# pass, recorded under KIND_NEIGHBOR_GRAPH. Kept so runs already in the
+# timeline keep their label for as long as the history is held.
 KIND_DUPLICATE_DETECTION = "duplicate_detection"
 KIND_IMAGE_EMBED_BACKFILL = "image_embed_backfill"
 KIND_NEIGHBOR_GRAPH = "neighbor_graph"

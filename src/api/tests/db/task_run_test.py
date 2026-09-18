@@ -12,8 +12,8 @@ import pytest
 
 from db.base import get_db_con
 from db.task_run import (
-    KIND_DUPLICATE_DETECTION,
     KIND_FEED_TRAINING,
+    KIND_NEIGHBOR_GRAPH,
     KIND_SOURCE_INGEST,
     STATUS_ERROR,
     STATUS_OK,
@@ -108,12 +108,12 @@ def test_a_system_run_is_owned_by_nobody_and_seen_by_everybody(existing_user):
     other.set_password("password")
     other.create()
 
-    with task_run(KIND_DUPLICATE_DETECTION) as run:
-        run.detail = "500 examined"
+    with task_run(KIND_NEIGHBOR_GRAPH) as run:
+        run.detail = "500 placed"
 
     for user in (existing_user, other):
         rows = recent_runs(user.name_hash)
-        assert [r["kind"] for r in rows] == [KIND_DUPLICATE_DETECTION]
+        assert [r["kind"] for r in rows] == [KIND_NEIGHBOR_GRAPH]
         assert rows[0]["system_wide"] is True
 
 

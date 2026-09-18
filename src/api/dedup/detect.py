@@ -8,6 +8,12 @@ with strangers' copies, and your own two copies would stop being grouped), and
 the text and image signals still to come compare article *content*, which is
 exactly the comparison that must not cross accounts.
 
+Examining an article is the second half of the similarity pass in
+``neighbors.graph``: an article is placed in the graph, and then asked whether
+what the walk found next to it is the same story. Nothing here schedules
+itself -- there is one pass, because one of the two signals is a reading of the
+graph the pass has just built.
+
 Which member of a group is *shown* is then a per-feed decision made at query
 time, because the prediction it is decided by lives on ``feed_items`` -- see
 ``Feed.query_items_with_sources``.
@@ -35,7 +41,6 @@ feed actually shows is whichever the current model scores highest, so it
 changes as the model does.
 """
 
-import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
@@ -43,12 +48,7 @@ from typing import Optional
 from config import config
 from db.base import AggyBaseModel, get_db_con
 from db.propagation import inherit_votes_from_duplicates
-from db.task_run import KIND_DUPLICATE_DETECTION, task_run
-from neighbors.graph import (
-    ensure_linked,
-    neighbor_similarities,
-    similarity_between,
-)
+from neighbors.graph import neighbor_similarities, similarity_between
 
 from .canonical import canonical_url
 
@@ -230,9 +230,9 @@ def _embedding_match(cur, row: dict) -> Optional[DuplicateMatch]:
 
     The candidates are the item's neighbours in the graph -- the articles a
     walk found nearest to it -- and only those above
-    ``DUPLICATE_SIMILARITY_THRESHOLD`` are considered at all. The item is
-    linked into the graph first if nobody has got to it yet, because waiting a
-    recheck cycle for a signal that is one walk away is a poor trade.
+    ``DUPLICATE_SIMILARITY_THRESHOLD`` are considered at all. The article has
+    always been placed in the graph by the time this runs: examining it is the
+    second half of the pass that placed it (see ``neighbors.graph``).
 
     The star rule is what makes this more than "pick the nearest": joining an
     established group means matching its *representative*, and the neighbour
@@ -246,7 +246,6 @@ def _embedding_match(cur, row: dict) -> Optional[DuplicateMatch]:
     user_hash = row["user_hash"]
     url_hash = row["url_hash"]
 
-    ensure_linked(cur, user_hash, url_hash)
     candidates = [
         (neighbor_hash, sim)
         for neighbor_hash, sim in neighbor_similarities(cur, user_hash, url_hash)
@@ -410,30 +409,15 @@ def group_members(user_hash: str, group_hash: str) -> list:
         return cur.fetchall()
 
 
-# The pending queue: (account, item) pairs nobody has examined yet. An item in
-# several of one account's feeds is one candidate, hence the DISTINCT.
+# The re-examination queue: examined, still ungrouped, and not looked at
+# recently.
 #
-# Deliberately unordered. Pairing is symmetric -- whichever of two copies is
-# examined first pairs with the other -- and the representative is chosen from
-# the pair's publish dates rather than from processing order, so the outcome
-# does not depend on which rows come back. Letting Postgres stop at the limit
-# instead of sorting the whole anti-join is what keeps the first pass over a
-# large existing corpus affordable.
-_PENDING_SQL = """
-SELECT DISTINCT c.user_hash, i.url_hash, i.url, i.canonical_url_hash,
-       COALESCE(i.date_published, i.created_at) AS published
-FROM feed_items c
-JOIN items i ON i.url_hash = c.item_url_hash
-LEFT JOIN item_duplicates d
-    ON d.user_hash = c.user_hash AND d.item_url_hash = c.item_url_hash
-WHERE d.item_url_hash IS NULL
-LIMIT %s
-"""
-
-# The re-sweep queue: examined, still ungrouped, and not looked at recently.
-# This is what makes detection cover articles it has already seen -- an item is
-# only unique until a second copy of it arrives, and the item that arrived
-# first has already been examined by then.
+# Most of the time an article that becomes a duplicate later is caught without
+# this: the *second* copy is examined when it arrives, and pairing writes both
+# rows. What this queue is for is the case nothing else revisits -- an item
+# ``DUPLICATE_MAX_GROUP`` turned away from a group that has since shrunk, or a
+# threshold that has since been lowered. Without a record of having looked,
+# "unique" and "not yet examined" would be the same thing.
 _RECHECK_SQL = """
 SELECT d.user_hash, i.url_hash, i.url, i.canonical_url_hash,
        COALESCE(i.date_published, i.created_at) AS published
@@ -446,67 +430,32 @@ LIMIT %s
 """
 
 
-def duplicate_detection_job() -> None:
-    """Examine the (account, item) pairs that are due, and group what matches.
+def recheck_rows(limit: int) -> list:
+    """Articles due a second look, oldest check first.
 
-    Two queues, worked in order of value:
-
-    1. Pairs nobody has looked at yet. On an existing install that is the whole
-       corpus, which is what backfills it -- a batch per pass rather than one
-       long transaction.
-    2. Pairs examined before and found unique, re-examined once they are older
-       than DUPLICATE_RECHECK_DAYS. Being unique is not permanent: a second copy
-       arrives later, or a threshold changes, and the copy that arrived first
-       has already been examined by then.
-
-    Each item is its own transaction, so one unusable URL costs that item and
-    not the batch. ``canonical_url`` is filled in for rows that have none, which
-    is pure CPU over a URL already stored and so needs no pass of its own.
+    Read by the similarity pass with whatever is left of its batch once the
+    articles waiting to be placed have had theirs -- a busy install should
+    always spend its budget on articles it has never seen.
     """
-    batch_size = config.get_int("DUPLICATE_DETECTION_BATCH_SIZE")
-    recheck_days = config.get_int("DUPLICATE_RECHECK_DAYS")
-
+    if limit <= 0:
+        return []
     with get_db_con() as cur:
-        cur.execute(_PENDING_SQL, (batch_size,))
-        rows = cur.fetchall()
-
-    # Only sweep once the backlog is clear, and only up to the batch size, so a
-    # busy install always spends its budget on articles it has never examined.
-    rechecked = 0
-    if len(rows) < batch_size:
-        with get_db_con() as cur:
-            cur.execute(_RECHECK_SQL, (recheck_days, batch_size - len(rows)))
-            recheck_rows = cur.fetchall()
-        rechecked = len(recheck_rows)
-        rows = rows + recheck_rows
-
-    if not rows:
-        return
-
-    # Recorded only once there is something to examine: a pass with an empty
-    # queue returned above, and a timeline of empty passes every half hour
-    # would bury the ones that did work. System-wide, with no user_hash --
-    # the queue spans every account, so calling it any one account's work
-    # would be a lie.
-    grouped = 0
-    with task_run(KIND_DUPLICATE_DETECTION) as run:
-        for row in rows:
-            try:
-                grouped += _detect_one(row)
-            except Exception as e:
-                logging.exception(f"Duplicate detection for {row['url']} failed: {e}")
-        run.detail = (
-            f"{len(rows)} examined ({rechecked} re-examined), {grouped} grouped"
-        )
-
-    logging.info(
-        f"Duplicate detection: {len(rows)} item(s) examined "
-        f"({rechecked} re-examined), {grouped} added to a group"
-    )
+        cur.execute(_RECHECK_SQL, (config.get_int("DUPLICATE_RECHECK_DAYS"), limit))
+        return cur.fetchall()
 
 
-def _detect_one(row: dict) -> int:
-    """Examine one (account, item) pair. Returns 1 if it joined a group."""
+def examine_for_duplicates(row: dict) -> int:
+    """Examine one (account, item) pair and group it if it matches. Returns 1
+    if it joined a group.
+
+    ``row`` needs ``user_hash``, ``url_hash``, ``url``, ``canonical_url_hash``
+    and ``published``.
+
+    Its own transaction, so one unusable URL costs that article and not the
+    batch that contained it. ``canonical_url`` is filled in for a row that has
+    none, which is pure CPU over a URL already stored and so needs no pass of
+    its own.
+    """
     with get_db_con() as cur:
         if row["canonical_url_hash"] is None:
             canonical, canonical_hash = canonical_columns(row["url"])
