@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from typing import List, Optional, Union
 
-from db.feed import Feed, GRAPH_RANKS, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
+from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
 from db.user import User
 from route_models.feed import FeedResponse
 from route_models.graph import (
@@ -470,22 +470,47 @@ def get_related_items(
 )
 def get_feed_graph(
     feed_name_hash: str,
-    limit: int = Query(
+    limit: Optional[int] = Query(
         300,
         ge=10,
-        le=1000,
         description="How many articles to draw. A picture of ten thousand "
-        "articles is a hairball, so the graph shows a window of the feed.",
+        "articles is a hairball, so the graph shows a window of the feed. "
+        "Omit for every article the filters leave, which is honest for a feed "
+        "of a few thousand and expensive for a very large one.",
     ),
-    rank: str = Query(
+    sort: str = Query(
         "newest",
-        description="Which end of the feed that window keeps: "
-        + ", ".join(GRAPH_RANKS),
+        description="Which end of the feed a limited window keeps. The same "
+        "orders /feed/items takes: " + ", ".join(ITEM_SORTS),
+    ),
+    include_read: bool = True,
+    sources: Optional[str] = Query(
+        None, description="Comma-separated source name hashes to include"
+    ),
+    post_types: Optional[str] = Query(
+        None,
+        description="Comma-separated post types to keep: image, video, link, "
+        "text. Omit for all.",
+    ),
+    max_age: str = Query(
+        "all", description="Only items this recent: day, week, month, year, all"
+    ),
+    collapse_duplicates: Optional[bool] = Query(
+        None,
+        description="Draw one node per duplicate group rather than one per "
+        "copy. Omit for the server default.",
+    ),
+    only_duplicates: bool = Query(
+        False, description="Keep only articles that arrived more than once."
     ),
     user: User = Depends(authenticate),
 ) -> FeedGraphResponse:
-    """Everything the graph view draws: a window of the feed's articles, and
-    the stored links between the ones inside it.
+    """Everything the graph view draws: the feed's articles under the filters
+    in force, and the stored links between the ones it returns.
+
+    Every filter /feed/items takes, this takes too, and applies through the
+    same code -- the graph is a picture of the list you were just looking at,
+    so the two must agree about what is hidden.
 
     Edges with one end outside the window are left out rather than drawn
     dangling, so what comes back is a true subgraph of the feed's own graph.
@@ -495,13 +520,34 @@ def get_feed_graph(
     rather than a graph with holes in it.
     """
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
-    if rank not in GRAPH_RANKS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"rank must be one of: {', '.join(GRAPH_RANKS)}",
-        )
 
-    nodes, edges = feed.graph(limit=limit, rank=rank)
+    if sort not in ITEM_SORTS:
+        raise HTTPException(status_code=422, detail=f"Unknown sort '{sort}'")
+    if max_age != "all" and max_age not in ITEM_AGE_WINDOWS:
+        raise HTTPException(status_code=422, detail=f"Unknown max_age '{max_age}'")
+
+    source_hashes = (
+        [s for s in sources.split(",") if s] if sources is not None else None
+    )
+    types = (
+        [t.strip() for t in post_types.split(",") if t.strip()]
+        if post_types is not None
+        else None
+    )
+    unknown = [t for t in types or [] if t not in POST_TYPES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown post type '{unknown[0]}'")
+
+    nodes, edges = feed.graph(
+        limit=limit,
+        sort=sort,
+        include_read=include_read,
+        source_hashes=source_hashes,
+        post_types=types,
+        max_age=None if max_age == "all" else max_age,
+        collapse_duplicates=collapse_duplicates,
+        only_duplicates=only_duplicates,
+    )
     return FeedGraphResponse(
         total_items=feed.stats()["feed_item_count"],
         nodes=[

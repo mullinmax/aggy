@@ -18,8 +18,10 @@ from config import config
 from db.base import get_db_con
 from db.feed import Feed
 from db.item import ItemLoose
+from db.item_state import ItemState
 from db.source import Source
 from db.user import User
+from neighbors import graph as graph_module
 from neighbors.graph import link_item, neighbor_graph_job, neighbor_similarities
 from tests.testing_utils import build_api_request_args
 
@@ -100,6 +102,18 @@ def _with_override(cfg, key, value):
         return real(name, *args, **kwargs)
 
     return get_int
+
+
+def _with_float_override(cfg, key, value):
+    """config.get_float with one key forced, leaving every other key alone."""
+    real = cfg.get_float
+
+    def get_float(name, *args, **kwargs):
+        if name == key:
+            return value
+        return real(name, *args, **kwargs)
+
+    return get_float
 
 
 # ---------- placing an article ----------
@@ -342,25 +356,93 @@ def _all_edges(feed):
         return cur.fetchall()
 
 
-def test_a_batch_bounds_one_pass(existing_feed, monkeypatch):
-    """A large backlog is worked over several passes rather than one long
-    transaction."""
-    monkeypatch.setattr(
-        config, "get_int", _with_override(config, "NEIGHBOR_GRAPH_BATCH_SIZE", 2)
-    )
-    for i in range(6):
-        _add_item(existing_feed, f"https://example.com/{i}", angle=0.1 * i)
-
-    neighbor_graph_job()
-
+def _linked_count(feed):
     with get_db_con() as cur:
         cur.execute(
             "SELECT COUNT(*) AS n FROM feed_items "
             "WHERE user_hash = %s AND feed_hash = %s "
             "AND neighbors_linked_at IS NOT NULL",
-            (existing_feed.user_hash, existing_feed.name_hash),
+            (feed.user_hash, feed.name_hash),
         )
-        assert cur.fetchone()["n"] == 2
+        return cur.fetchone()["n"]
+
+
+def test_a_pass_keeps_going_until_its_queue_is_empty(existing_feed, monkeypatch):
+    """The batch size is how much of the queue to read at a time, not how much
+    to do. An install catching up should catch up, rather than placing a fixed
+    few and then sitting idle until the next interval."""
+    monkeypatch.setattr(
+        config, "get_int", _with_override(config, "NEIGHBOR_GRAPH_BATCH_SIZE", 2)
+    )
+    for i in range(7):
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.5 * i)
+
+    neighbor_graph_job()
+
+    assert _linked_count(existing_feed) == 7
+
+
+def test_a_pass_stops_when_its_time_is_up(existing_feed, monkeypatch):
+    """...but not past its deadline, so two passes never overlap. Progress is
+    kept on the rows, so stopping early loses nothing -- the next pass picks up
+    where this one stopped."""
+    for i in range(6):
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.5 * i)
+    monkeypatch.setattr(
+        config,
+        "get_float",
+        _with_float_override(config, "NEIGHBOR_GRAPH_TIME_BUDGET_SECONDS", 0.0),
+    )
+
+    neighbor_graph_job()
+    assert _linked_count(existing_feed) == 0
+
+    # and with its time back, the next pass does the lot
+    monkeypatch.undo()
+    neighbor_graph_job()
+    assert _linked_count(existing_feed) == 6
+
+
+def test_one_broken_article_does_not_eat_the_whole_pass(existing_feed, monkeypatch):
+    """An article leaves the queue by having its timestamp moved, and that is
+    the work's own doing -- so an article whose work throws is still due, and
+    the next chunk hands it straight back. Bounded by a batch that cost one
+    retry; bounded by a deadline it would cost the entire pass."""
+    items = [
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.5 * i)
+        for i in range(4)
+    ]
+    boom = items[1]
+    real_link = graph_module.link_item
+    attempts = []
+
+    def exploding(cur, user_hash, feed_hash, url_hash):
+        attempts.append(url_hash)
+        if url_hash == boom.url_hash:
+            raise RuntimeError("this article cannot be placed")
+        return real_link(cur, user_hash, feed_hash, url_hash)
+
+    monkeypatch.setattr(graph_module, "link_item", exploding)
+
+    neighbor_graph_job()
+
+    assert attempts.count(boom.url_hash) == 1  # tried once, not until the clock ran out
+    assert _linked_count(existing_feed) == 3  # and the rest were still placed
+
+
+def test_a_pass_with_nothing_to_do_leaves_no_trace(existing_feed):
+    """One of these every few minutes, forever, would bury the passes that did
+    work."""
+    _add_item(existing_feed, "https://example.com/a", angle=0.0)
+    neighbor_graph_job()
+
+    with get_db_con() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM task_runs WHERE kind = 'neighbor_graph'")
+        before = cur.fetchone()["n"]
+    neighbor_graph_job()
+    with get_db_con() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM task_runs WHERE kind = 'neighbor_graph'")
+        assert cur.fetchone()["n"] == before
 
 
 def test_an_article_leaving_a_feed_takes_its_edges_with_it(existing_feed):
@@ -463,11 +545,16 @@ def test_link_item_places_one_article_on_its_own(existing_feed):
 # What the drawing is made of. The layout itself is arithmetic and is checked
 # without a browser in tests/js/graph_layout_test.js; what is left for here is
 # the query behind it.
+#
+# The angles are deliberately wide apart. Articles closer than
+# DUPLICATE_SIMILARITY_THRESHOLD are the same story, and the view collapses
+# those exactly as the article list does -- which is its own test, below, and
+# would otherwise quietly turn every one of these into a single node.
 
 
 def test_the_view_returns_the_articles_and_the_links_between_them(existing_feed):
     items = [
-        _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.5 * i)
         for i in range(4)
     ]
     _settle(existing_feed)
@@ -486,7 +573,7 @@ def test_the_two_stored_directions_are_drawn_as_one_line(existing_feed):
     Two lines on top of each other is just a thicker line, so the view folds
     them."""
     a = _add_item(existing_feed, "https://example.com/a", angle=0.0)
-    b = _add_item(existing_feed, "https://example.com/b", angle=0.05)
+    b = _add_item(existing_feed, "https://example.com/b", angle=0.5)
     _settle(existing_feed)
 
     # both directions really are stored
@@ -504,7 +591,7 @@ def test_an_edge_with_one_end_outside_the_window_is_not_drawn(existing_feed):
         _add_item(
             existing_feed,
             f"https://example.com/{i}",
-            angle=0.05 * i,
+            angle=0.5 * i,
             published=datetime(2024, 1, i + 1, tzinfo=timezone.utc),
         )
     _settle(existing_feed)
@@ -518,14 +605,25 @@ def test_an_edge_with_one_end_outside_the_window_is_not_drawn(existing_feed):
         assert edge["target"] in drawn
 
 
+def test_no_limit_draws_the_whole_feed(existing_feed):
+    """A window is the default because a picture of ten thousand articles is a
+    hairball, not because the whole thing is off limits."""
+    for i in range(12):
+        _add_item(existing_feed, f"https://example.com/{i}", angle=0.5 * i)
+
+    nodes, _edges = existing_feed.graph(limit=None)
+
+    assert len(nodes) == 12
+
+
 def test_the_window_keeps_the_end_of_the_feed_it_was_asked_for(existing_feed):
     best = _add_item(
         existing_feed, "https://example.com/best", angle=0.0, predicted=0.9
     )
-    _add_item(existing_feed, "https://example.com/worst", angle=0.1, predicted=-0.9)
-    _add_item(existing_feed, "https://example.com/middling", angle=0.2, predicted=0.0)
+    _add_item(existing_feed, "https://example.com/worst", angle=1.0, predicted=-0.9)
+    _add_item(existing_feed, "https://example.com/middling", angle=2.0, predicted=0.0)
 
-    nodes, _edges = existing_feed.graph(limit=1, rank="predicted")
+    nodes, _edges = existing_feed.graph(limit=1, sort="predicted")
 
     assert [node["url_hash"] for node in nodes] == [best.url_hash]
 
@@ -561,11 +659,85 @@ def test_the_view_carries_what_the_drawing_needs(existing_feed):
     assert nodes[0]["title"] == "Title"
 
 
+# ---------- the same filters as the list ----------
+#
+# The graph is a picture of the feed you were just looking at, so the two have
+# to agree about what is hidden. They share one implementation; these check
+# that the sharing actually reaches the graph.
+
+
+def test_the_graph_collapses_duplicates_like_the_list_does(existing_feed):
+    _add_item(existing_feed, "https://outlet-a.com/story", angle=0.0)
+    _add_item(existing_feed, "https://outlet-b.com/story", angle=0.01)
+    _add_item(existing_feed, "https://example.com/unrelated", angle=2.0)
+    _settle(existing_feed)
+
+    collapsed, _edges = existing_feed.graph()
+    every_copy, _edges = existing_feed.graph(collapse_duplicates=False)
+
+    assert len(collapsed) == 2  # the story once, plus the unrelated article
+    assert len(every_copy) == 3
+
+
+def test_the_graph_honours_the_date_filter(existing_feed):
+    _add_item(
+        existing_feed,
+        "https://example.com/ancient",
+        angle=0.0,
+        published=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    recent = _add_item(
+        existing_feed,
+        "https://example.com/today",
+        angle=1.0,
+        published=datetime.now(timezone.utc),
+    )
+
+    nodes, _edges = existing_feed.graph(max_age="week")
+
+    assert [node["url_hash"] for node in nodes] == [recent.url_hash]
+
+
+def test_the_graph_honours_the_source_filter(existing_feed):
+    wanted = Source(
+        user_hash=existing_feed.user_hash,
+        feed_hash=existing_feed.name_hash,
+        name="Wanted",
+        url="http://wanted.example.com/rss",
+    )
+    wanted.create()
+    mine = _add_item(existing_feed, "https://example.com/wanted", angle=0.0)
+    wanted.add_items(mine)
+    _add_item(existing_feed, "https://example.com/other", angle=1.0)
+
+    nodes, _edges = existing_feed.graph(source_hashes=[wanted.name_hash])
+
+    assert [node["url_hash"] for node in nodes] == [mine.url_hash]
+
+
+def test_the_graph_can_hide_what_you_have_voted_on(existing_feed):
+    voted = _add_item(existing_feed, "https://example.com/voted", angle=0.0)
+    unvoted = _add_item(existing_feed, "https://example.com/unvoted", angle=1.0)
+    ItemState(
+        user_hash=existing_feed.user_hash,
+        feed_hash=existing_feed.name_hash,
+        item_url_hash=voted.url_hash,
+        score=1.0,
+    ).create()
+
+    nodes, _edges = existing_feed.graph(include_read=False)
+
+    assert [node["url_hash"] for node in nodes] == [unvoted.url_hash]
+
+
+# ---------- over the API ----------
+
+
 def test_the_graph_endpoint_answers_with_nodes_and_edges(
     client, existing_user, existing_feed, token
 ):
     _add_item(existing_feed, "https://example.com/a", angle=0.0)
-    _add_item(existing_feed, "https://example.com/b", angle=0.05)
+    _add_item(existing_feed, "https://example.com/b", angle=0.5)
     _settle(existing_feed)
 
     args = build_api_request_args(
@@ -582,15 +754,41 @@ def test_the_graph_endpoint_answers_with_nodes_and_edges(
     assert body["edges"][0]["similarity"] > 0
 
 
-def test_the_graph_endpoint_rejects_a_rank_it_does_not_have(
+def test_the_graph_endpoint_takes_the_filters_the_list_takes(
+    client, existing_user, existing_feed, token
+):
+    _add_item(
+        existing_feed,
+        "https://example.com/ancient",
+        angle=0.0,
+        published=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    _add_item(
+        existing_feed,
+        "https://example.com/today",
+        angle=1.0,
+        published=datetime.now(timezone.utc),
+    )
+
+    args = build_api_request_args(
+        path="/feed/graph",
+        params={"feed_name_hash": existing_feed.name_hash, "max_age": "week"},
+        token=token,
+    )
+    body = client.get(**args).json()
+
+    assert len(body["nodes"]) == 1
+
+
+def test_the_graph_endpoint_rejects_a_sort_it_does_not_have(
     client, existing_user, existing_feed, token
 ):
     args = build_api_request_args(
         path="/feed/graph",
-        params={"feed_name_hash": existing_feed.name_hash, "rank": "vibes"},
+        params={"feed_name_hash": existing_feed.name_hash, "sort": "vibes"},
         token=token,
     )
-    assert client.get(**args).status_code == 400
+    assert client.get(**args).status_code == 422
 
 
 def test_the_graph_endpoint_cannot_be_pointed_at_another_account(

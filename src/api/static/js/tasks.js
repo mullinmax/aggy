@@ -105,8 +105,10 @@ const TASK_TRIGGERS = [
     label: 'Link similar articles',
     help: 'Work through the articles waiting to be linked to the ones most '
       + 'like them, and re-group the ones that reach you as the same story. '
-      + 'These links are also what the recommender reads your neighbouring '
-      + 'votes from, and what the reader shows beside an article.',
+      + 'Runs until the queue is empty or its time is up, so an instance with '
+      + 'a backlog catches up rather than creeping. These links are also what '
+      + 'the recommender reads your neighbouring votes from, and what the '
+      + 'reader shows beside an article.',
   },
   {
     task: 'rescrape_sources',

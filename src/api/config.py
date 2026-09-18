@@ -87,6 +87,7 @@ KNOWN_CONFIG_VALUES = [
     # each feed, which the embedding duplicate signal, the recommender and the
     # reader's related-articles rail are all read out of.
     "NEIGHBOR_GRAPH_INTERVAL_MINUTES",
+    "NEIGHBOR_GRAPH_TIME_BUDGET_SECONDS",
     "NEIGHBOR_GRAPH_BATCH_SIZE",
     "NEIGHBOR_LINKS",
     "NEIGHBOR_SEARCH_WIDTH",
@@ -228,10 +229,22 @@ DEFAULT_CONFIG = {
     # same bias the canonical-URL signal has.
     "DUPLICATE_SIMILARITY_THRESHOLD": 0.93,
     # The similarity pass: place articles in the neighbour graph, then group
-    # the duplicates that finds. A batch at a time on this interval, so an
-    # install with a large backlog builds its graph over several passes rather
-    # than one long one. The batch covers both halves.
+    # the duplicates that finds.
     "NEIGHBOR_GRAPH_INTERVAL_MINUTES": 10,
+    # How long one pass may run. A pass works until its queue is empty or this
+    # runs out -- it is *not* capped at a number of articles. A fixed cap meant
+    # an install with a backlog placed exactly that many and then sat idle for
+    # the rest of the interval, so a corpus of fifty thousand would have taken
+    # a month to catch up; given the interval to work in, it simply keeps going.
+    #
+    # Held clear of the next firing (at most 90% of the interval, whatever this
+    # says) so two passes never overlap. Progress lives on the rows, so ending
+    # on the deadline loses nothing: the next pass resumes where this one
+    # stopped.
+    "NEIGHBOR_GRAPH_TIME_BUDGET_SECONDS": 480,
+    # How many rows of the queue to read at a time. A read-ahead size, not a
+    # limit on the work: it only keeps a huge backlog from being pulled into
+    # memory all at once.
     "NEIGHBOR_GRAPH_BATCH_SIZE": 300,
     # How many nearest articles each one records. Five is enough to walk on and
     # enough to show beside an article; the cost of more is paid on every

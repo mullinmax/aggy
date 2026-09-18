@@ -25,14 +25,38 @@ ITEM_SORTS = {
 # these sorts skip the round-robin source interleaving the browse sorts use.
 MONOTONIC_SORTS = {"predicted", "predicted_asc", "controversial", "confident"}
 
-# Which articles the graph view draws, when a feed holds more than it can
-# usefully show at once. Both keep the *most interesting* end of the feed
-# rather than a random slice: the newest is what you are here to look at, and
-# the best-predicted is where the recommender thinks the good clusters are.
-GRAPH_RANKS = {
-    "newest": "COALESCE(i.date_published, c.added_at) DESC, i.url_hash",
-    "predicted": "c.predicted_score DESC NULLS LAST, i.url_hash",
-}
+# How a duplicate group is collapsed, shared by the article list and the graph
+# view so both hide exactly the same copies.
+#
+# Partitioning on COALESCE(group_hash, url_hash) makes every ungrouped item a
+# group of one, so its rank is 1 and the collapse filter is a single condition.
+# Partitioning on group_hash alone would instead put every ungrouped item in one
+# NULL partition and hide all but one.
+#
+# Which member wins is decided over the rows the query actually returns, so
+# hiding the top-scoring copy with a source or date filter promotes the next one
+# rather than leaving the group unrepresented.
+DUP_PARTITION = "COALESCE(d.group_hash, i.url_hash)"
+DUP_ORDER = (
+    "c.predicted_score DESC NULLS LAST, "
+    "c.predicted_confidence DESC NULLS LAST, "
+    "i.date_published ASC NULLS LAST, i.url_hash"
+)
+
+# How big the group is, counted across the whole feed rather than over the
+# filtered rows. Whether an article arrived twice is a fact about the feed, not
+# about the filters in force, so the badge's count keeps agreeing with the list
+# that /feed/item_duplicates expands it into -- and "only duplicates" means the
+# same thing whatever else is filtered.
+DUP_GROUP_SIZE = (
+    "CASE WHEN d.group_hash IS NULL THEN 1 ELSE ("
+    " SELECT COUNT(*) FROM feed_items fc"
+    " JOIN item_duplicates fd ON fd.user_hash = fc.user_hash"
+    "  AND fd.item_url_hash = fc.item_url_hash"
+    " WHERE fc.user_hash = c.user_hash AND fc.feed_hash = c.feed_hash"
+    "  AND fd.group_hash = d.group_hash) END"
+)
+
 
 # date-filter name -> postgres interval. "all" (or None) means no cutoff.
 # The cutoff runs against the item's publish date, falling back to when the
@@ -213,6 +237,55 @@ class Feed(ItemCollection):
             )
             return cur.fetchall()
 
+    def _item_filters(
+        self,
+        include_read: bool = True,
+        source_hashes: Optional[List[str]] = None,
+        post_types: Optional[List[str]] = None,
+        max_age: Optional[str] = None,
+    ) -> tuple:
+        """The WHERE fragments the filter panel produces, and their parameters.
+
+        Shared by the article list and the graph view. The graph is a picture of
+        the same feed you were just looking at, so "filtered" has to mean the
+        same thing in both -- and the only way to be sure of that is one
+        definition.
+        """
+        sql = ""
+        params: tuple = ()
+
+        if not include_read:
+            # "hide read" hides items voted on in any feed (shared votes)
+            sql += " AND uv.score IS NULL"
+        if source_hashes is not None:
+            sql += (
+                " AND EXISTS (SELECT 1 FROM source_items sf"
+                " WHERE sf.user_hash = c.user_hash AND sf.feed_hash = c.feed_hash"
+                " AND sf.item_url_hash = c.item_url_hash"
+                " AND sf.source_hash = ANY(%s))"
+            )
+            params = params + (list(source_hashes),)
+        # Post-type filter: keep items matching any ticked type. An empty list
+        # would match nothing, which is what an all-boxes-cleared filter panel
+        # should show, so it is honoured rather than treated as "no filter".
+        if post_types is not None:
+            predicates = [
+                clause
+                for clause in (post_type_sql(post_type) for post_type in post_types)
+                if clause is not None
+            ]
+            sql += f" AND ({' OR '.join(predicates)})" if predicates else " AND FALSE"
+
+        # Items with no publish date fall back to when the feed picked them up,
+        # so a date filter never silently drops undated items that only just
+        # arrived.
+        window = ITEM_AGE_WINDOWS.get(max_age) if max_age else None
+        if window is not None:
+            sql += " AND COALESCE(i.date_published, c.added_at) >= NOW() - %s::interval"
+            params = params + (window,)
+
+        return sql, params
+
     def query_items_with_sources(
         self,
         skip=None,
@@ -280,26 +353,9 @@ class Feed(ItemCollection):
         # Which member wins is decided over the rows this view actually shows,
         # so that hiding the top-scoring copy with a source or date filter
         # promotes the next one rather than leaving the group unrepresented.
-        dup_partition = "COALESCE(d.group_hash, i.url_hash)"
-        dup_order = (
-            "c.predicted_score DESC NULLS LAST, "
-            "c.predicted_confidence DESC NULLS LAST, "
-            "i.date_published ASC NULLS LAST, i.url_hash"
-        )
-
-        # How big the group is, counted across the whole feed rather than over
-        # the filtered rows. Whether an article arrived twice is a fact about
-        # the feed, not about the filters in force, so the badge's count keeps
-        # agreeing with the list that /feed/item_duplicates expands it into --
-        # and "only duplicates" means the same thing whatever else is filtered.
-        dup_group_size = (
-            "CASE WHEN d.group_hash IS NULL THEN 1 ELSE ("
-            " SELECT COUNT(*) FROM feed_items fc"
-            " JOIN item_duplicates fd ON fd.user_hash = fc.user_hash"
-            "  AND fd.item_url_hash = fc.item_url_hash"
-            " WHERE fc.user_hash = c.user_hash AND fc.feed_hash = c.feed_hash"
-            "  AND fd.group_hash = d.group_hash) END"
-        )
+        dup_partition = DUP_PARTITION
+        dup_order = DUP_ORDER
+        dup_group_size = DUP_GROUP_SIZE
 
         # Votes are shared across feeds: user_score comes from the user's latest
         # vote on the item in any feed (user_item_votes), so a vote cast in one
@@ -337,35 +393,14 @@ class Feed(ItemCollection):
         )
         params: tuple = (self.user_hash, self.name_hash)
 
-        if not include_read:
-            # "hide read" hides items voted on in any feed (shared votes)
-            sql += " AND uv.score IS NULL"
-        if source_hashes is not None:
-            sql += (
-                " AND EXISTS (SELECT 1 FROM source_items sf"
-                " WHERE sf.user_hash = c.user_hash AND sf.feed_hash = c.feed_hash"
-                " AND sf.item_url_hash = c.item_url_hash"
-                " AND sf.source_hash = ANY(%s))"
-            )
-            params = params + (list(source_hashes),)
-        # Post-type filter: keep items matching any ticked type. An empty list
-        # would match nothing, which is what an all-boxes-cleared filter panel
-        # should show, so it is honoured rather than treated as "no filter".
-        if post_types is not None:
-            predicates = [
-                clause
-                for clause in (post_type_sql(post_type) for post_type in post_types)
-                if clause is not None
-            ]
-            sql += f" AND ({' OR '.join(predicates)})" if predicates else " AND FALSE"
-
-        # Items with no publish date fall back to when the feed picked them
-        # up, so a date filter never silently drops undated items that only
-        # just arrived.
-        window = ITEM_AGE_WINDOWS.get(max_age) if max_age else None
-        if window is not None:
-            sql += " AND COALESCE(i.date_published, c.added_at) >= NOW() - %s::interval"
-            params = params + (window,)
+        filter_sql, filter_params = self._item_filters(
+            include_read=include_read,
+            source_hashes=source_hashes,
+            post_types=post_types,
+            max_age=max_age,
+        )
+        sql += filter_sql
+        params = params + filter_params
 
         # The duplicate filter has to run *before* source_rank is computed,
         # which is why that window moved out to its own layer: ranking over
@@ -558,52 +593,100 @@ class Feed(ItemCollection):
             results.append((ItemStrict.from_row(row), meta))
         return results
 
-    def graph(self, limit: int = 300, rank: str = "newest") -> tuple:
+    def graph(
+        self,
+        limit: Optional[int] = 300,
+        sort: str = "newest",
+        include_read: bool = True,
+        source_hashes: Optional[List[str]] = None,
+        post_types: Optional[List[str]] = None,
+        max_age: Optional[str] = None,
+        collapse_duplicates: Optional[bool] = None,
+        only_duplicates: bool = False,
+    ) -> tuple:
         """The neighbour graph over this feed, as (nodes, edges).
 
-        A window rather than the whole feed: the graph is a picture, and a
-        picture of ten thousand articles is a hairball that takes a second to
-        lay out and tells you nothing. ``rank`` decides which end of the feed
-        the window keeps.
+        Every filter the article list takes, this takes too, and through the
+        same code (``_item_filters`` and the DUP_* expressions): the graph is a
+        picture of the feed you were just looking at, so "filtered" has to mean
+        the same thing in both. ``sort`` picks which end of the feed a limited
+        window keeps, using the same orders the list offers.
 
-        Edges are the stored links with *both* ends inside that window. An edge
+        ``limit=None`` draws the whole filtered feed. That is the honest option
+        for a feed of a few thousand and an expensive one for a feed of a
+        hundred thousand, which is why it is a choice rather than the default.
+
+        Edges are the stored links with *both* ends inside the window. An edge
         to an article the window left out is not drawn half way off the canvas;
-        it is simply not drawn, so what you see is a true subgraph rather than
-        a graph with dangling ends.
+        it is simply not drawn, so what you see is a true subgraph.
 
         The graph stores each link in both directions (see V25). Here they are
         folded into one undirected edge per pair, keyed on the hash pair in a
         fixed order, because two lines drawn on top of each other is just a
         thicker line.
         """
-        order = GRAPH_RANKS.get(rank, GRAPH_RANKS["newest"])
+        order = ITEM_SORTS.get(sort, ITEM_SORTS["newest"])
+        if collapse_duplicates is None:
+            collapse_duplicates = config.get_bool("DUPLICATE_COLLAPSE_DEFAULT")
+
+        # Only the columns the drawing needs. `i.*` would pull every article's
+        # body and both embedding vectors, which for a whole feed is most of a
+        # megabyte per hundred articles to place some dots.
+        sql = (
+            "SELECT i.url_hash, i.url, i.title, i.date_published, "
+            "c.predicted_score, c.predicted_confidence, "
+            "uv.score AS user_score, st.is_read AS is_read, "
+            "d.group_hash AS duplicate_group, "
+            "src.name AS source_name, src.color AS source_color, "
+            f"ROW_NUMBER() OVER (PARTITION BY {DUP_PARTITION} "
+            f"ORDER BY {DUP_ORDER}) AS dup_rank, "
+            f"{DUP_GROUP_SIZE} AS dup_group_size "
+            "FROM feed_items c "
+            "JOIN items i ON i.url_hash = c.item_url_hash "
+            "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+            " AND st.feed_hash = c.feed_hash"
+            " AND st.item_url_hash = c.item_url_hash "
+            "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
+            " AND uv.item_url_hash = c.item_url_hash "
+            "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+            " AND d.item_url_hash = c.item_url_hash"
+            " AND d.group_hash IS NOT NULL "
+            "LEFT JOIN LATERAL ("
+            " SELECT s.name, s.color FROM source_items si"
+            " JOIN sources s ON s.user_hash = si.user_hash"
+            "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+            " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+            "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s"
+        )
+        params: tuple = (self.user_hash, self.name_hash)
+
+        filter_sql, filter_params = self._item_filters(
+            include_read=include_read,
+            source_hashes=source_hashes,
+            post_types=post_types,
+            max_age=max_age,
+        )
+        sql += filter_sql
+        params = params + filter_params
+
+        # The duplicate conditions read the window columns, so they belong in a
+        # layer above the query that computes them -- the same shape the article
+        # list uses.
+        conditions = []
+        if collapse_duplicates:
+            conditions.append("b.dup_rank = 1")
+        if only_duplicates:
+            conditions.append("b.dup_group_size > 1")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        outer_order = order.replace("c.", "").replace("i.", "")
+        sql = f"SELECT b.* FROM ({sql}) b{where} ORDER BY {outer_order}"
+        if limit is not None:
+            sql += " LIMIT %s"
+            params = params + (limit,)
+
         with self.db_con() as cur:
-            cur.execute(
-                "SELECT i.url_hash, i.url, i.title, i.date_published, "
-                "c.predicted_score, c.predicted_confidence, "
-                "uv.score AS user_score, st.is_read AS is_read, "
-                "d.group_hash AS duplicate_group, "
-                "src.name AS source_name, src.color AS source_color "
-                "FROM feed_items c "
-                "JOIN items i ON i.url_hash = c.item_url_hash "
-                "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
-                " AND st.feed_hash = c.feed_hash"
-                " AND st.item_url_hash = c.item_url_hash "
-                "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
-                " AND uv.item_url_hash = c.item_url_hash "
-                "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
-                " AND d.item_url_hash = c.item_url_hash"
-                " AND d.group_hash IS NOT NULL "
-                "LEFT JOIN LATERAL ("
-                " SELECT s.name, s.color FROM source_items si"
-                " JOIN sources s ON s.user_hash = si.user_hash"
-                "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
-                " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
-                "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
-                "WHERE c.user_hash = %s AND c.feed_hash = %s "
-                f"ORDER BY {order} LIMIT %s",
-                (self.user_hash, self.name_hash, limit),
-            )
+            cur.execute(sql, params)
             nodes = cur.fetchall()
             drawn = [node["url_hash"] for node in nodes]
 
@@ -622,6 +705,9 @@ class Feed(ItemCollection):
             )
             edges = cur.fetchall()
 
+        for node in nodes:
+            node.pop("dup_rank", None)
+            node.pop("dup_group_size", None)
         return nodes, edges
 
     def stats(self) -> dict:

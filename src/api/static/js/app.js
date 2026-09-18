@@ -82,7 +82,7 @@ function bindControls() {
     if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/graph`);
   };
   $('rerankBtn').onclick = handleRerank;
-  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
+  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; onFiltersChanged(); };
   postTypeCheckboxes().forEach((box) => {
     box.onchange = () => {
       const picked = postTypeCheckboxes()
@@ -91,12 +91,12 @@ function bindControls() {
       // every type ticked is the same view as none ticked; keep the state as
       // "no filter" so the request stays clean
       feedFilters.postTypes = picked.length === POST_TYPES.length ? null : picked;
-      reloadItems();
+      onFiltersChanged();
     };
   });
-  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
-  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
-  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; reloadItems(); };
+  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; onFiltersChanged(); };
+  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; onFiltersChanged(); };
+  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; onFiltersChanged(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
@@ -340,6 +340,7 @@ async function handleRenameFeed(e) {
 // ---------- feed view ----------
 async function showFeed(hash) {
   setView('feed');
+  adoptFilterPanel('feedFilterHost');
   currentList = null; // leaving any list-detail context
   itemSkip = 0;
   render($('itemList'), spinner());
@@ -476,6 +477,26 @@ function reloadItems() {
   loadFeedItems();
 }
 
+// The filter panel is one set of controls over one piece of state, shown on
+// whichever of the two screens is open. Which one has to reload is therefore
+// decided here rather than by each handler.
+function onFiltersChanged() {
+  if (!$('viewGraph').classList.contains('hidden')) {
+    loadFeedGraph();
+    return;
+  }
+  reloadItems();
+}
+
+// Move the shared panel to the screen that is being shown. One element rather
+// than two copies: a graph that filtered by its own controls would quietly
+// drift out of step with the list it is a picture of.
+function adoptFilterPanel(hostId) {
+  const panel = $('filterPanel');
+  const host = $(hostId);
+  if (panel && host && panel.parentElement !== host) host.appendChild(panel);
+}
+
 // Whether anything but the sort is currently hiding articles.
 function isFiltered() {
   return feedFilters.postTypes !== null
@@ -490,7 +511,7 @@ function clearFilters() {
   feedFilters = { ...defaultFilters(), sort, includeRead };
   syncFilterControls();
   renderFilterSources();
-  reloadItems();
+  onFiltersChanged();
 }
 
 async function toggleFilterPanel() {

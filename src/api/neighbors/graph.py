@@ -24,6 +24,7 @@ so a caller can place an article and act on the result atomically.
 """
 
 import logging
+import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -384,6 +385,9 @@ def similarity_between(cur, left_hash: str, right_hash: str) -> Optional[float]:
 # The article columns ride along because the second half of the pass -- asking
 # whether the walk just landed this article on top of a copy of itself -- needs
 # them, and they are a primary-key join away.
+#
+# The LIMIT is how much to read at once, not how much to do: the pass keeps
+# asking for another chunk until the queue is empty or its time is up.
 _PENDING_SQL = """
 SELECT c.user_hash, c.feed_hash, c.item_url_hash AS url_hash,
        i.url, i.canonical_url_hash,
@@ -398,6 +402,25 @@ LIMIT %s
 """
 
 
+def _time_budget() -> float:
+    """How long a pass may run for, in seconds.
+
+    Bounded by the schedule rather than by a row count. An install with a large
+    backlog has thousands of articles to place, and a fixed batch meant it
+    placed exactly that many and then sat idle for the rest of the interval --
+    at 300 every ten minutes, a corpus of fifty thousand takes a month. Given
+    the whole interval instead, it simply keeps going until it catches up.
+
+    Kept clear of the next firing so two passes never overlap: the scheduler's
+    ``max_instances=1`` would skip the overlapping run rather than stack it,
+    but a pass that is always being skipped is a pass whose progress is a
+    surprise. Ending on its own before the next one is due is the honest shape.
+    """
+    interval = config.get_float("NEIGHBOR_GRAPH_INTERVAL_MINUTES") * 60
+    budget = config.get_float("NEIGHBOR_GRAPH_TIME_BUDGET_SECONDS")
+    return max(0.0, min(budget, interval * 0.9))
+
+
 def neighbor_graph_job() -> None:
     """Place the articles that are due, and group the duplicates that finds.
 
@@ -408,20 +431,23 @@ def neighbor_graph_job() -> None:
     and the gap between "this arrived" and "this was collapsed" was a whole
     extra interval wide.
 
+    A pass runs until its queues are empty or its time budget is spent,
+    whichever comes first -- it is not capped at a number of articles. Work is
+    read a chunk at a time so a huge backlog is never held in memory at once,
+    and each article is its own transaction with its progress kept on its own
+    row, so stopping on the deadline loses nothing and the next pass picks up
+    exactly where this one stopped.
+
     Three queues, worked in order of value:
 
     1. Articles nobody has placed yet. On an existing install that is the whole
-       corpus, which is what backfills the graph -- a batch per pass rather
-       than one long transaction.
+       corpus, which is what backfills the graph.
     2. Articles due a re-walk: their neighbourhood changed, or their link list
        came up short. Only after the never-placed ones, and only past the
        cooldown.
-    3. Whatever budget is left goes to articles due a second look for
-       duplicates alone (``dedup.detect.recheck_rows``) -- the ones a full
-       group turned away, which nothing else revisits.
-
-    Each article is its own transaction, so one unusable row costs that article
-    and not the batch.
+    3. Whatever time is left goes to articles due a second look for duplicates
+       alone (``dedup.detect.recheck_rows``) -- the ones a full group turned
+       away, which nothing else revisits.
     """
     # Imported here rather than at the top: duplicate detection reads the graph
     # this module builds, so it depends on us and we cannot depend on it in
@@ -429,58 +455,112 @@ def neighbor_graph_job() -> None:
     # an article and then hands it on.
     from dedup.detect import examine_for_duplicates, recheck_rows
 
-    batch_size = config.get_int("NEIGHBOR_GRAPH_BATCH_SIZE")
+    chunk_size = config.get_int("NEIGHBOR_GRAPH_BATCH_SIZE")
     relink_days = config.get_int("NEIGHBOR_RELINK_DAYS")
+    deadline = time.monotonic() + _time_budget()
 
-    with get_db_con() as cur:
-        cur.execute(_PENDING_SQL, (relink_days, batch_size))
-        rows = cur.fetchall()
+    def pending(limit):
+        with get_db_con() as cur:
+            cur.execute(_PENDING_SQL, (relink_days, limit))
+            return cur.fetchall()
 
-    # Articles due a second look, with what is left of the batch once the ones
-    # waiting to be placed have had theirs.
-    rechecks = recheck_rows(batch_size - len(rows))
+    # Peeked before anything is recorded, so a pass with nothing to do leaves
+    # no trace at all -- one every few minutes, forever, would bury the passes
+    # that did work.
+    rows = pending(chunk_size)
+    rechecks = [] if rows else recheck_rows(chunk_size)
     if not rows and not rechecks:
         return
 
-    # Recorded only once there is something to do: a timeline of empty passes
-    # every few minutes would bury the ones that did work. System-wide, with no
-    # user_hash -- the queue spans every account.
     linked = 0
     edges = 0
     grouped = 0
+    rechecked = 0
     # An article in several of one account's feeds is placed once per feed, but
     # duplicate groups are per account, so examining it once covers them all.
     examined: set = set()
+    # Every row this pass has taken off the queue, successfully or not.
+    #
+    # A row leaves the queue by having its timestamp moved, which is something
+    # the work itself does -- so a row whose work *failed* is still due, and
+    # the next chunk hands it straight back. Before this pass had a deadline
+    # that cost one batch; now it would cost the entire budget, spent retrying
+    # one broken article several thousand times. Attempted once per pass, and
+    # the next pass is welcome to try again.
+    attempted: set = set()
+    started = time.monotonic()
 
+    def key_of(row):
+        # Placing is per (account, feed, article) -- an article in two feeds is
+        # two pieces of work, and keying on the article alone would leave its
+        # second feed unplaced. A re-examination row carries no feed, which
+        # makes its key distinct from either of them, which is right: it is a
+        # third kind of work on the same article.
+        return (row["user_hash"], row.get("feed_hash"), row["url_hash"])
+
+    def fresh(rows):
+        keep = [row for row in rows if key_of(row) not in attempted]
+        attempted.update(key_of(row) for row in keep)
+        return keep
+
+    # Opened around the whole pass rather than written at the end of it: this
+    # now runs for minutes at a time on an install that is catching up, and a
+    # tasks page that showed nothing until it finished would be showing the
+    # opposite of what is happening.
     with task_run(KIND_NEIGHBOR_GRAPH) as run:
-        for row in rows:
-            try:
-                with get_db_con() as cur:
-                    found = link_item(
-                        cur, row["user_hash"], row["feed_hash"], row["url_hash"]
+        rows = fresh(rows)
+        while rows and time.monotonic() < deadline:
+            for row in rows:
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    with get_db_con() as cur:
+                        found = link_item(
+                            cur, row["user_hash"], row["feed_hash"], row["url_hash"]
+                        )
+                    linked += 1
+                    edges += len(found)
+                except Exception as e:
+                    logging.exception(
+                        f"Linking {row['url_hash']} into the neighbour graph "
+                        f"failed: {e}"
                     )
-                linked += 1
-                edges += len(found)
-            except Exception as e:
-                logging.exception(
-                    f"Linking {row['url_hash']} into the neighbour graph failed: {e}"
-                )
-                continue
-            grouped += _examine(examine_for_duplicates, row, examined)
+                    continue
+                grouped += _examine(examine_for_duplicates, row, examined)
+            rows = fresh(pending(chunk_size)) if time.monotonic() < deadline else []
 
-        for row in rechecks:
-            grouped += _examine(examine_for_duplicates, row, examined)
+        # Only once the placing is done: a busy install should always spend its
+        # time on articles it has never seen before revisiting old answers.
+        if not rechecks and time.monotonic() < deadline:
+            rechecks = recheck_rows(chunk_size)
+        rechecks = fresh(rechecks)
+        while rechecks and time.monotonic() < deadline:
+            for row in rechecks:
+                if time.monotonic() >= deadline:
+                    break
+                rechecked += 1
+                grouped += _examine(examine_for_duplicates, row, examined)
+            rechecks = (
+                fresh(recheck_rows(chunk_size)) if time.monotonic() < deadline else []
+            )
 
+        elapsed = time.monotonic() - started
+        # Whether it ran out of work or ran out of time is exactly what an
+        # operator watching a backfill wants to know, so it is said rather than
+        # left to be inferred from the numbers.
         run.detail = (
             f"{linked} placed ({edges} neighbour(s) found), "
-            f"{len(examined)} examined ({len(rechecks)} re-examined), "
-            f"{grouped} grouped"
+            f"{len(examined)} examined ({rechecked} re-examined), "
+            f"{grouped} grouped, {elapsed:.0f}s"
+            + (
+                " (time budget reached)"
+                if time.monotonic() >= deadline
+                else " (queue empty)"
+            )
         )
+        detail = run.detail
 
-    logging.info(
-        f"Similarity: {linked} of {len(rows)} article(s) placed, "
-        f"{len(examined)} examined, {grouped} added to a duplicate group"
-    )
+    logging.info(f"Similarity: {detail}")
 
 
 def _examine(examine, row: dict, seen: set) -> int:

@@ -116,8 +116,8 @@ class AggySDK {
   }
 
   /** The feed's articles and the similarity links between them */
-  async feedGraph({ feed_name_hash, limit, rank }) {
-    return this._request("GET", "/feed/graph", { query: { feed_name_hash, limit, rank } });
+  async feedGraph({ feed_name_hash, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates }) {
+    return this._request("GET", "/feed/graph", { query: { feed_name_hash, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates } });
   }
 
   /** The items a duplicate badge stands for */

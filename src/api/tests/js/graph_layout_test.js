@@ -20,7 +20,7 @@ const source = fs.readFileSync(
 // nothing else in the file runs at load time.
 const loaded = { exports: {} };
 new Function('module', source)(loaded);
-const { graphBuildTree, graphTick } = loaded.exports;
+const { graphBuildTree, graphTick, rankScale, strongestLinks } = loaded.exports;
 
 let failures = 0;
 
@@ -131,9 +131,94 @@ check(
   pinnedNodes[0].x === 1234 && pinnedNodes[0].y === -567,
   'an article dragged into place stays where it was put');
 
+// ---------- spreading a graph out ----------
+
+// The complaint that produced this section: with every link pulling equally
+// hard, a feed came out as one ball. Ranking the similarities against each
+// other and scaling both the rest length and the stiffness by that rank is
+// what separates a strong pair from a loose association.
+
+function ranked(edges) {
+  const scale = rankScale(edges.map((edge) => edge.similarity));
+  for (const edge of edges) {
+    const rank = scale(edge.similarity);
+    edge.length = 26 + 220 * (1 - rank);
+    edge.strength = 0.2 + 0.8 * rank;
+  }
+  return edges;
+}
+
+// The over-connected case: everything linked to everything, which is roughly
+// what five links each plus their mirrors looks like in a small feed.
+const dense = { nodes: [], edges: [] };
+for (let i = 0; i < 24; i += 1) {
+  const angle = (i / 24) * Math.PI * 2;
+  dense.nodes.push({ x: Math.cos(angle) * 80, y: Math.sin(angle) * 80, vx: 0, vy: 0, pinned: false });
+}
+for (let i = 0; i < dense.nodes.length; i += 1) {
+  for (let j = i + 1; j < dense.nodes.length; j += 1) {
+    // two tight groups, everything else a loose association
+    const together = (i < 12) === (j < 12);
+    dense.edges.push({
+      a: dense.nodes[i],
+      b: dense.nodes[j],
+      similarity: together ? 0.97 : 0.72,
+    });
+  }
+}
+ranked(dense.edges);
+
+let denseAlpha = 1;
+while (denseAlpha > 0.02) denseAlpha = graphTick(dense.nodes, dense.edges, denseAlpha);
+
+const distanceOf = (edge) => Math.hypot(edge.a.x - edge.b.x, edge.a.y - edge.b.y);
+const meanOf = (list) => list.reduce((sum, edge) => sum + distanceOf(edge), 0) / list.length;
+const tight = meanOf(dense.edges.filter((edge) => edge.similarity > 0.9));
+const loose = meanOf(dense.edges.filter((edge) => edge.similarity <= 0.9));
+check(
+  loose > tight * 1.5,
+  `strong links end up much shorter than weak ones (${tight.toFixed(0)} vs ${loose.toFixed(0)})`);
+
+// ---------- ranking a narrow band ----------
+
+// A feed's predictions can all sit between -0.1 and +0.25, and its similarities
+// between 0.80 and 0.95. Mapped onto the range the numbers *could* take, every
+// dot is the same size and every link the same length -- which is what made
+// the first version of this view unreadable.
+const narrow = [0.80, 0.83, 0.86, 0.90, 0.95];
+const scale = rankScale(narrow);
+check(scale(0.80) === 0 && scale(0.95) === 1, 'a narrow band still uses the whole scale');
+check(
+  scale(0.86) > 0 && scale(0.86) < 1,
+  'and the values in between land in between');
+
+const flat = rankScale([0.5, 0.5, 0.5]);
+check(flat(0.5) === 0.5, 'values that are all the same sit in the middle, not at an end');
+check(rankScale([])(1) === 0.5, 'an empty window does not divide by zero');
+
+// ---------- thinning the drawn links ----------
+
+const nodeA = { id: 'a' };
+const nodeB = { id: 'b' };
+const nodeC = { id: 'c' };
+const strong = { a: nodeA, b: nodeB, similarity: 0.99 };
+const middling = { a: nodeB, b: nodeC, similarity: 0.85 };
+const weak = { a: nodeA, b: nodeC, similarity: 0.40 };
+const kept = strongestLinks([strong, middling, weak], 1);
+
+// Each article keeps its own best link, so nothing is cut adrift -- b's best
+// is the same edge as a's, and c's best is the middling one.
+check(kept.has(strong), "each article's strongest link is always drawn");
+check(kept.has(middling), 'an article whose best link is nobody else\'s best still keeps it');
+check(!kept.has(weak), 'a link that is nobody\'s best is dropped');
+check(
+  strongestLinks([strong, middling, weak], 5).size === 3,
+  'asking for every link draws every link');
+
 // ---------- what it costs ----------
 
 const big = clustered(1000, 12, 3);
+ranked(big.edges);
 const started = Date.now();
 let bigAlpha = 1;
 let ticks = 0;

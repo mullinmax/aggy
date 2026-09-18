@@ -22,8 +22,8 @@
 // How far apart the springs try to hold a pair, in world units. A more similar
 // pair is pulled tighter, so the distance on screen carries the same meaning as
 // the number: near means alike.
-const GRAPH_LINK_MIN = 18;
-const GRAPH_LINK_SPREAD = 90;
+const GRAPH_LINK_MIN = 26;
+const GRAPH_LINK_SPREAD = 220;
 
 // Barnes-Hut opening angle. Below this ratio of cell size to distance, a whole
 // cell of articles is treated as one lump rather than visited node by node —
@@ -153,10 +153,13 @@ function graphRepel(cell, node, strength) {
 // One step of the simulation. Returns the alpha it leaves behind, so the caller
 // can tell a settled layout from a moving one.
 function graphTick(nodes, edges, alpha) {
-  const strength = 260;
-  const spring = 0.06;
+  // Repulsion beats gravity by enough that clusters push apart rather than
+  // settling into one disc. Gravity is only here to stop parts of the graph
+  // that share no links drifting off screen forever.
+  const strength = 420;
+  const spring = 0.08;
   const damping = 0.82;
-  const gravity = 0.012;
+  const gravity = 0.006;
 
   const tree = graphBuildTree(nodes);
   for (const node of nodes) {
@@ -170,7 +173,11 @@ function graphTick(nodes, edges, alpha) {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const d = Math.hypot(dx, dy) || 0.01;
-    const pull = ((d - edge.length) / d) * spring * alpha;
+    // Stiffness follows the similarity, not just the rest length. With every
+    // link pulling equally hard, a loose association drags two articles as
+    // firmly together as a near-identical pair does, and the whole feed balls
+    // up — which is exactly what it did before this line.
+    const pull = ((d - edge.length) / d) * spring * (edge.strength ?? 1) * alpha;
     if (!a.pinned) { a.vx += dx * pull; a.vy += dy * pull; }
     if (!b.pinned) { b.vx -= dx * pull; b.vy -= dy * pull; }
   }
@@ -191,11 +198,6 @@ function graphTick(nodes, edges, alpha) {
   return alpha * 0.985;
 }
 
-// Expose the pieces for the node-based unit test; harmless in a browser.
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { graphBuildTree, graphSummarize, graphTick, graphCell };
-}
-
 // ---------- view state ----------
 
 const graphState = {
@@ -203,8 +205,15 @@ const graphState = {
   nodes: [],
   edges: [],
   byHash: new Map(),
-  // neighbours of each node, for the highlight and the detail card
+  // every stored link, and the subset actually drawn once "links each" has
+  // thinned them. The card lists what the graph really holds; the picture
+  // shows what was asked for.
+  allEdges: [],
   adjacency: new Map(),
+  // who is joined to whom by a *drawn* edge, for the hover highlight
+  linked: new Map(),
+  // the source whose legend row is under the cursor
+  highlightSource: null,
   alpha: 0,
   frame: null,
   // world -> screen: multiply by k, then add tx/ty
@@ -219,17 +228,42 @@ const graphState = {
   total: 0,
 };
 
-const GRAPH_MIN_RADIUS = 3.5;
-const GRAPH_RADIUS_RANGE = 7;
+const GRAPH_MIN_RADIUS = 3;
+const GRAPH_RADIUS_RANGE = 13;
+
+// Rank, not raw value.
+//
+// A model's predictions cluster: a whole feed can land between -0.1 and +0.25,
+// and mapping that onto the [-1, 1] the score *could* take spends a twentieth
+// of the range, so every dot comes out the same size. Ranking each value
+// against the others in the window instead guarantees the picture uses the
+// whole scale, and what you read off it — "this one is among the best here" —
+// is what you actually wanted to know.
+//
+// The cost is that the sizes are relative to what is on screen, which the
+// legend says out loud rather than leaving you to infer.
+function rankScale(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length < 2 || sorted[0] === sorted[sorted.length - 1]) {
+    return () => 0.5;
+  }
+  return (value) => {
+    // how many values this one is at least as big as
+    let low = 0;
+    let high = sorted.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (sorted[mid] < value) low = mid + 1; else high = mid;
+    }
+    return low / (sorted.length - 1);
+  };
+}
 
 // Size is the predicted score, so the articles the model likes are the ones
 // that catch your eye. An article it has not scored yet draws at its smallest
 // rather than at the middle: "no opinion" should not look like "mediocre".
 function graphRadius(node) {
-  const score = node.item.item_predicted_score;
-  if (score == null) return GRAPH_MIN_RADIUS;
-  const normalised = Math.max(0, Math.min(1, (score + 1) / 2));
-  return GRAPH_MIN_RADIUS + GRAPH_RADIUS_RANGE * normalised;
+  return GRAPH_MIN_RADIUS + GRAPH_RADIUS_RANGE * (node.sizeRank ?? 0);
 }
 
 async function showFeedGraph(feedHash) {
@@ -252,6 +286,11 @@ async function showFeedGraph(feedHash) {
     h('a', { href: `#/feed/${feedHash}` }, currentFeed.feed_name));
 
   if (!graphState.bound) bindGraphControls();
+  // The same panel the article list uses, moved here: one set of controls over
+  // one piece of state, so the picture and the list never disagree about what
+  // is being hidden.
+  adoptFilterPanel('graphFilterHost');
+  syncFilterControls();
   graphState.feed = feedHash;
   await loadFeedGraph();
 }
@@ -261,8 +300,15 @@ function bindGraphControls() {
   const canvas = $('graphCanvas');
 
   $('graphRefreshBtn').onclick = () => loadFeedGraph();
-  $('graphRank').onchange = () => loadFeedGraph();
   $('graphLimit').onchange = () => loadFeedGraph();
+  $('graphFilterBtn').onclick = toggleFilterPanel;
+  // Thinning the drawn links needs no new data, only a different subset of
+  // what is already here -- so it re-layouts rather than re-fetching.
+  $('graphLinks').onchange = () => {
+    applyLinkDensity();
+    renderGraphFooter();
+    startGraphLayout();
+  };
   $('graphZoomIn').onclick = () => zoomGraphBy(1.3);
   $('graphZoomOut').onclick = () => zoomGraphBy(1 / 1.3);
   $('graphReset').onclick = () => { fitGraph(); drawGraph(); };
@@ -297,10 +343,18 @@ async function loadFeedGraph() {
   $('graphFooter').textContent = '';
 
   try {
+    const chosen = $('graphLimit').value;
     const data = await sdk.feedGraph({
       feed_name_hash: graphState.feed,
-      limit: Number($('graphLimit').value),
-      rank: $('graphRank').value,
+      // "All" sends no limit at all, which the endpoint reads as the whole
+      // filtered feed
+      limit: chosen === 'all' ? null : Number(chosen),
+      sort: feedFilters.sort,
+      include_read: feedFilters.includeRead,
+      sources: feedFilters.sources === null ? null : feedFilters.sources.join(','),
+      post_types: feedFilters.postTypes === null ? null : feedFilters.postTypes.join(','),
+      max_age: feedFilters.maxAge,
+      only_duplicates: feedFilters.onlyDuplicates,
     });
     buildGraphModel(data);
   } catch (err) {
@@ -341,28 +395,51 @@ function buildGraphModel(data) {
       vx: 0,
       vy: 0,
       pinned: false,
+      sizeRank: 0,
       color: sourceColor(item.item_source_name, item.item_source_color),
     };
   });
+
+  // Rank the predictions against each other, so the sizes use the whole scale
+  // whatever narrow band this feed's model happens to output. Unscored
+  // articles are left out of the ranking and stay at the minimum.
+  const scored = graphState.nodes.filter((n) => n.item.item_predicted_score != null);
+  const sizeOf = rankScale(scored.map((n) => n.item.item_predicted_score));
+  for (const node of scored) {
+    node.sizeRank = sizeOf(node.item.item_predicted_score);
+  }
 
   graphState.byHash = new Map(
     graphState.nodes.map((node) => [node.item.item_hash, node]));
   graphState.adjacency = new Map();
 
-  graphState.edges = [];
-  for (const edge of data.edges) {
-    const a = graphState.byHash.get(edge.source);
-    const b = graphState.byHash.get(edge.target);
-    if (!a || !b || a === b) continue;
-    graphState.edges.push({
-      a,
-      b,
+  // The same ranking problem again, on the links. Cosine similarities between
+  // articles from one feed sit in a narrow band near the top of the range, so
+  // the raw number spreads almost nothing — ranked against each other, the
+  // strong links in *this* feed pull tight and the weak ones let go.
+  const pairs = data.edges
+    .map((edge) => ({
+      a: graphState.byHash.get(edge.source),
+      b: graphState.byHash.get(edge.target),
       similarity: edge.similarity,
-      // the more alike, the shorter the spring
-      length: GRAPH_LINK_MIN
-        + GRAPH_LINK_SPREAD * Math.max(0, Math.min(1, 1 - edge.similarity)),
-    });
-    for (const [from, to] of [[a, b], [b, a]]) {
+    }))
+    .filter((edge) => edge.a && edge.b && edge.a !== edge.b);
+  const closeness = rankScale(pairs.map((edge) => edge.similarity));
+
+  graphState.allEdges = pairs.map((edge) => {
+    const rank = closeness(edge.similarity);
+    return {
+      ...edge,
+      rank,
+      // near means alike: the closest links hold their pair tightest and
+      // shortest, the loosest barely hold them at all
+      length: GRAPH_LINK_MIN + GRAPH_LINK_SPREAD * (1 - rank),
+      strength: 0.2 + 0.8 * rank,
+    };
+  });
+
+  for (const edge of graphState.allEdges) {
+    for (const [from, to] of [[edge.a, edge.b], [edge.b, edge.a]]) {
       if (!graphState.adjacency.has(from)) graphState.adjacency.set(from, []);
       graphState.adjacency.get(from).push({ node: to, similarity: edge.similarity });
     }
@@ -370,12 +447,63 @@ function buildGraphModel(data) {
   for (const list of graphState.adjacency.values()) {
     list.sort((x, y) => y.similarity - x.similarity);
   }
+
   graphState.total = data.total_items;
+  applyLinkDensity();
+}
+
+// Thin the drawn links to each article's strongest few.
+//
+// Every article keeps NEIGHBOR_LINKS of them, which is what makes the walk
+// work, but drawing all of them draws a feed as a ball: with five links out of
+// each node and their mirrors coming back, the average article is joined to
+// about ten others and there is no structure left to see. Keeping an edge when
+// it is among *either* end's strongest few is the usual way out — it thins the
+// picture without cutting the graph into pieces, because every article keeps at
+// least its own best link.
+function strongestLinks(edges, perNode) {
+  const best = new Map();
+  for (const edge of edges) {
+    for (const node of [edge.a, edge.b]) {
+      if (!best.has(node)) best.set(node, []);
+      best.get(node).push(edge);
+    }
+  }
+  const keep = new Set();
+  for (const [, list] of best) {
+    list.sort((x, y) => y.similarity - x.similarity);
+    for (const edge of list.slice(0, perNode)) keep.add(edge);
+  }
+  return keep;
+}
+
+function applyLinkDensity() {
+  const keep = strongestLinks(graphState.allEdges, Number($('graphLinks').value));
+
+  graphState.edges = graphState.allEdges.filter((edge) => keep.has(edge));
+  graphState.linked = new Map();
+  for (const edge of graphState.edges) {
+    for (const [from, to] of [[edge.a, edge.b], [edge.b, edge.a]]) {
+      if (!graphState.linked.has(from)) graphState.linked.set(from, new Set());
+      graphState.linked.get(from).add(to);
+    }
+  }
+}
+
+// Expose the pure pieces for the node-based unit test; harmless in a browser,
+// which has no `module`.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    graphBuildTree, graphSummarize, graphTick, graphCell, rankScale, strongestLinks,
+  };
 }
 
 // ---------- layout loop ----------
 
 function startGraphLayout(alpha = 1) {
+  // never two loops at once: a second would step the simulation twice per
+  // frame and outlive whichever of them is cancelled
+  stopGraphLayout();
   graphState.alpha = alpha;
   const step = () => {
     graphState.frame = null;
@@ -479,10 +607,24 @@ function drawGraph() {
   ctx.clearRect(0, 0, w, h);
 
   const focus = graphState.selected || graphState.hovered;
-  const near = focus
-    ? new Set((graphState.adjacency.get(focus) || []).map((n) => n.node))
-    : null;
-  if (focus) near.add(focus);
+  // What stays bright. Following the *drawn* links rather than every stored
+  // one keeps the highlight honest: it lights up what you can actually see a
+  // line to.
+  let near = null;
+  // Only a focused *article* narrows the lines too -- following one article's
+  // neighbourhood is a question about its links. Picking out a source is a
+  // question about where its articles sit, and blanking the graph around them
+  // takes away the very thing you are trying to see them in.
+  let edgeFocus = false;
+  if (focus) {
+    near = new Set(graphState.linked.get(focus) || []);
+    near.add(focus);
+    edgeFocus = true;
+  } else if (graphState.highlightSource) {
+    near = new Set(graphState.nodes.filter(
+      (node) => (node.item.item_source_name || 'Unknown source')
+        === graphState.highlightSource));
+  }
 
   // Edges first, in three bands by similarity: a near-identical pair should
   // read as a heavier line than a loose association, and stroking each one
@@ -500,13 +642,15 @@ function drawGraph() {
     for (const edge of graphState.edges) {
       if (edge.similarity < bands[band].min) continue;
       if (next && edge.similarity >= next.min) continue;
-      if (focus && !(near.has(edge.a) && near.has(edge.b))) continue;
+      if (edgeFocus && !(near.has(edge.a) && near.has(edge.b))) continue;
       ctx.moveTo(edge.a.x * view.k + view.tx, edge.a.y * view.k + view.ty);
       ctx.lineTo(edge.b.x * view.k + view.tx, edge.b.y * view.k + view.ty);
       drew = true;
     }
     if (!drew) continue;
-    ctx.globalAlpha = focus ? Math.min(1, bands[band].alpha * 2.6) : bands[band].alpha;
+    ctx.globalAlpha = edgeFocus
+      ? Math.min(1, bands[band].alpha * 2.6)
+      : bands[band].alpha;
     ctx.lineWidth = bands[band].width;
     ctx.strokeStyle = theme.ink;
     ctx.stroke();
@@ -524,7 +668,7 @@ function drawGraph() {
       ctx.beginPath();
       let drew = false;
       for (const node of group) {
-        const isDim = focus ? !near.has(node) : false;
+        const isDim = near ? !near.has(node) : false;
         if (isDim !== dimmed) continue;
         const r = graphRadius(node) * Math.max(0.55, Math.min(1.6, view.k));
         ctx.moveTo(node.x * view.k + view.tx + r, node.y * view.k + view.ty);
@@ -544,7 +688,7 @@ function drawGraph() {
   // source colour underneath for the same pixels.
   ctx.globalAlpha = 1;
   for (const node of graphState.nodes) {
-    if (focus && !near.has(node)) continue;
+    if (near && !near.has(node)) continue;
     const voted = node.item.item_user_score;
     const r = graphRadius(node) * Math.max(0.55, Math.min(1.6, view.k));
     const cx = node.x * view.k + view.tx;
@@ -820,36 +964,95 @@ function renderGraphLegend() {
   const top = [...counts.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 8);
   const hidden = counts.size - top.length;
 
+  // A row you can point at. Hovering a source lights up its articles and dims
+  // the rest, which is the only practical way to pick one source out of a
+  // dozen colours that necessarily look alike at this size.
+  const sourceRow = ([name, { count, color }]) =>
+    h('button', {
+      type: 'button',
+      class: 'flex items-center gap-1.5 min-w-0 w-full text-left rounded px-1 '
+        + '-mx-1 hover:bg-base-200',
+      onmouseenter: () => { graphState.highlightSource = name; drawGraph(); },
+      onmouseleave: () => { graphState.highlightSource = null; drawGraph(); },
+      onfocus: () => { graphState.highlightSource = name; drawGraph(); },
+      onblur: () => { graphState.highlightSource = null; drawGraph(); },
+    },
+      h('span', {
+        class: 'inline-block w-2 h-2 rounded-full shrink-0',
+        style: `background:${color}`,
+      }),
+      h('span', { class: 'text-[11px] truncate' }, name),
+      h('span', { class: 'text-[10px] text-base-content/40 ml-auto shrink-0' },
+        String(count)));
+
+  // A swatch showing what a ring means, drawn the same way the canvas draws it.
+  const ring = (color, label) =>
+    h('div', { class: 'flex items-center gap-1.5' },
+      h('span', {
+        class: 'inline-block w-2.5 h-2.5 rounded-full shrink-0 bg-base-content/30',
+        style: `box-shadow: 0 0 0 1.5px ${color}`,
+      }),
+      h('span', { class: 'text-[10px] text-base-content/60' }, label));
+
+  // ...and three dots at the sizes the canvas actually uses, so "bigger is
+  // better predicted" is something you can check rather than take on trust.
+  const sizeSwatch = (fraction) =>
+    h('span', {
+      class: 'inline-block rounded-full bg-base-content/40 shrink-0',
+      style: `width:${(GRAPH_MIN_RADIUS + GRAPH_RADIUS_RANGE * fraction) * 1.1}px;`
+        + `height:${(GRAPH_MIN_RADIUS + GRAPH_RADIUS_RANGE * fraction) * 1.1}px`,
+    });
+
   render($('graphLegend'),
-    h('div', { class: 'rounded-box bg-base-100/85 border border-base-300 px-2.5 py-2' },
+    h('div', {
+      class: 'rounded-box bg-base-100/90 border border-base-300 px-2.5 py-2 '
+        + 'pointer-events-auto max-h-[70%] overflow-y-auto',
+    },
       h('p', { class: 'text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mb-1' },
         'Sources'),
       h('div', { class: 'flex flex-col gap-0.5' },
-        top.map(([name, { count, color }]) =>
-          h('div', { class: 'flex items-center gap-1.5 min-w-0' },
-            h('span', {
-              class: 'inline-block w-2 h-2 rounded-full shrink-0',
-              style: `background:${color}`,
-            }),
-            h('span', { class: 'text-[11px] truncate' }, name),
-            h('span', { class: 'text-[10px] text-base-content/40 ml-auto shrink-0' },
-              String(count)))),
+        top.map(sourceRow),
         hidden > 0
-          ? h('p', { class: 'text-[10px] text-base-content/40 mt-0.5' },
+          ? h('p', { class: 'text-[10px] text-base-content/40 mt-0.5 px-1' },
               `+${hidden} more`)
           : null),
-      h('p', { class: 'text-[10px] text-base-content/40 mt-1.5 leading-tight' },
-        'Bigger dot = better predicted. Ring = how you voted.')));
+
+      h('div', { class: 'border-t border-base-300 mt-2 pt-1.5 flex flex-col gap-1' },
+        h('p', { class: 'text-[10px] font-semibold uppercase tracking-wide text-base-content/50' },
+          'Size'),
+        h('div', { class: 'flex items-end gap-1.5' },
+          h('div', { class: 'flex items-end gap-1' },
+            sizeSwatch(0), sizeSwatch(0.5), sizeSwatch(1)),
+          h('span', { class: 'text-[10px] text-base-content/60 leading-tight' },
+            'worst → best predicted')),
+        // Said plainly, because it is the one thing about this scale that
+        // could mislead: the sizes are ranks within what is on screen, not
+        // absolute scores.
+        h('p', { class: 'text-[10px] text-base-content/40 leading-tight' },
+          'ranked against the articles shown'),
+
+        h('p', { class: 'text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mt-1' },
+          'Ring'),
+        ring('#22c55e', 'you upvoted'),
+        ring('#eab308', 'you marked neutral'),
+        ring('#ef4444', 'you downvoted'),
+        h('p', { class: 'text-[10px] text-base-content/40 leading-tight' },
+          'no ring: you have not voted'))));
 }
 
 function renderGraphFooter() {
   const shown = graphState.nodes.length;
-  const linked = graphState.edges.length;
+  const drawn = graphState.edges.length;
+  const stored = graphState.allEdges.length;
   const unplaced = graphState.nodes.filter((n) => !graphState.adjacency.has(n)).length;
 
   const parts = [
     `${shown} article${shown === 1 ? '' : 's'}`,
-    `${linked} link${linked === 1 ? '' : 's'}`,
+    // Both numbers, when they differ: a thinned picture should never look like
+    // a feed with fewer links than it has.
+    drawn === stored
+      ? `${drawn} link${drawn === 1 ? '' : 's'}`
+      : `${drawn} of ${stored} links drawn`,
   ];
   if (graphState.total > shown) parts.push(`of ${graphState.total} in this feed`);
   // Said plainly rather than left looking like missing data: a feed still
