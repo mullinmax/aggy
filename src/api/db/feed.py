@@ -593,6 +593,61 @@ class Feed(ItemCollection):
             results.append((ItemStrict.from_row(row), meta))
         return results
 
+    def item(self, item_url_hash: str):
+        """One article of this feed, in full, or None.
+
+        The graph view's node payload leaves the article's body out -- it is
+        drawing dots, and a thousand sanitised HTML bodies is most of the
+        payload for none of the picture. Opening one from the graph therefore
+        fetches it, and this is that fetch: the same shape the article list
+        returns, for exactly one article.
+
+        Scoped to this feed as well as this account, so it can only ever return
+        something the caller already holds.
+        """
+        from .item import ItemStrict
+
+        with self.db_con() as cur:
+            cur.execute(
+                "SELECT i.*, "
+                "c.predicted_score, c.predicted_confidence, "
+                "uv.score AS user_score, st.is_read AS is_read, "
+                "EXISTS (SELECT 1 FROM list_items li"
+                " WHERE li.user_hash = c.user_hash"
+                "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
+                "src.name AS source_name, src.color AS source_color "
+                "FROM feed_items c "
+                "JOIN items i ON i.url_hash = c.item_url_hash "
+                "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+                " AND st.feed_hash = c.feed_hash"
+                " AND st.item_url_hash = c.item_url_hash "
+                "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
+                " AND uv.item_url_hash = c.item_url_hash "
+                "LEFT JOIN LATERAL ("
+                " SELECT s.name, s.color FROM source_items si"
+                " JOIN sources s ON s.user_hash = si.user_hash"
+                "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+                " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+                "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
+                "WHERE c.user_hash = %s AND c.feed_hash = %s "
+                "AND c.item_url_hash = %s",
+                (self.user_hash, self.name_hash, item_url_hash),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return None, None
+        meta = {
+            "source_name": row.pop("source_name", None),
+            "source_color": row.pop("source_color", None),
+            "user_score": row.pop("user_score", None),
+            "is_read": row.pop("is_read", None),
+            "in_list": row.pop("in_list", None),
+            "predicted_score": row.pop("predicted_score", None),
+            "predicted_confidence": row.pop("predicted_confidence", None),
+        }
+        return ItemStrict.from_row(row), meta
+
     def graph(
         self,
         limit: Optional[int] = 300,
@@ -634,6 +689,7 @@ class Feed(ItemCollection):
         # megabyte per hundred articles to place some dots.
         sql = (
             "SELECT i.url_hash, i.url, i.title, i.date_published, "
+            "i.image_url, i.media, "
             "c.predicted_score, c.predicted_confidence, "
             # the sort runs in the layer above, where the duplicate columns
             # live, so every column ITEM_SORTS can name has to survive to it

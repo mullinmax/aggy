@@ -181,7 +181,9 @@
       <div>
         <h1 class="text-2xl font-bold">Similarity Graph</h1>
         <p class="text-sm text-base-content/60 mt-1" id="graphSubtitle">
-          Every line is a link between two articles Aggy found to be alike
+          Every line is a link between two articles Aggy found to be alike, and
+          where an article sits comes only from those links — the filters choose
+          which articles are drawn, never where
         </p>
       </div>
       <div class="flex flex-wrap items-end gap-2">
@@ -295,7 +297,7 @@
       <div class="card-body p-4 gap-3">
         <div class="flex flex-wrap gap-4">
           <div class="form-control">
-            <label class="label py-1" for="filterSort"><span class="label-text text-xs">Sort by</span></label>
+            <label class="label py-1" for="filterSort"><span class="label-text text-xs" id="filterSortLabel">Sort by</span></label>
             <select class="select select-bordered select-sm" id="filterSort">
               <option value="predicted">Predicted best</option>
               <option value="predicted_asc">Predicted worst</option>

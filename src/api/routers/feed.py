@@ -464,6 +464,30 @@ def get_related_items(
 
 
 @feed_router.get(
+    "/item",
+    summary="One article of this feed, in full",
+    response_model=ItemResponse,
+)
+def get_feed_item(
+    feed_name_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> ItemResponse:
+    """One article, with its body, media and vote state.
+
+    The graph view is what wants this. Its nodes carry only what a dot and its
+    detail card need, so opening one for real -- with its pictures, its player
+    and its text -- means asking for the article itself. Exactly one, rather
+    than paging the feed to find it.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    item, meta = feed.item(item_url_hash)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found in this feed")
+    return ItemResponse.from_db_model(item, **meta)
+
+
+@feed_router.get(
     "/graph",
     summary="The feed's articles and the similarity links between them",
     response_model=FeedGraphResponse,
@@ -558,6 +582,8 @@ def get_feed_graph(
                 item_date_published=node["date_published"],
                 item_source_name=node["source_name"],
                 item_source_color=node["source_color"],
+                item_image_url=node["image_url"],
+                item_media=node["media"],
                 item_predicted_score=node["predicted_score"],
                 item_predicted_confidence=node["predicted_confidence"],
                 item_user_score=node["user_score"],

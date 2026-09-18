@@ -20,7 +20,9 @@ const source = fs.readFileSync(
 // nothing else in the file runs at load time.
 const loaded = { exports: {} };
 new Function('module', source)(loaded);
-const { graphBuildTree, graphTick, rankScale, strongestLinks } = loaded.exports;
+const {
+  graphBuildTree, graphTick, rankScale, strongestLinks, graphSeedAngle,
+} = loaded.exports;
 
 let failures = 0;
 
@@ -214,6 +216,29 @@ check(!kept.has(weak), 'a link that is nobody\'s best is dropped');
 check(
   strongestLinks([strong, middling, weak], 5).size === 3,
   'asking for every link draws every link');
+
+// ---------- the sort chooses which, never where ----------
+
+// The sort is a filter: it decides which articles are drawn, and nothing else.
+// A force layout is path-dependent, so seeding from each row's position in the
+// response would make the same thousand articles settle differently under
+// "newest" than under "best predicted" -- an arrangement that looked like it
+// meant something about the sort, when position only ever comes from the links.
+const hashes = ['aaa', 'bbb', 'ccc', 'ddd', 'eee'];
+const seeded = hashes.map(graphSeedAngle);
+check(
+  seeded.every((angle) => angle >= 0 && angle < 1),
+  'a seed angle is a fraction of a turn');
+check(
+  hashes.map(graphSeedAngle).every((angle, i) => angle === seeded[i]),
+  'the same article always starts in the same place');
+check(
+  new Set(seeded).size === hashes.length,
+  'different articles start in different places');
+check(
+  JSON.stringify([...hashes].reverse().map(graphSeedAngle))
+    === JSON.stringify([...seeded].reverse()),
+  'and where one starts does not depend on the order the rows arrived in');
 
 // ---------- what it costs ----------
 

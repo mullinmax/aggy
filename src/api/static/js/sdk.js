@@ -120,6 +120,11 @@ class AggySDK {
     return this._request("GET", "/feed/graph", { query: { feed_name_hash, limit, sort, include_read, sources, post_types, max_age, collapse_duplicates, only_duplicates } });
   }
 
+  /** One article of this feed, in full */
+  async feedItem({ feed_name_hash, item_url_hash }) {
+    return this._request("GET", "/feed/item", { query: { feed_name_hash, item_url_hash } });
+  }
+
   /** The items a duplicate badge stands for */
   async feedItemDuplicates({ feed_name_hash, group_hash }) {
     return this._request("GET", "/feed/item_duplicates", { query: { feed_name_hash, group_hash } });

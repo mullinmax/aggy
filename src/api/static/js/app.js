@@ -495,6 +495,15 @@ function adoptFilterPanel(hostId) {
   const panel = $('filterPanel');
   const host = $(hostId);
   if (panel && host && panel.parentElement !== host) host.appendChild(panel);
+
+  // The same control, honestly labelled for the screen it is on. In the list
+  // it orders the articles; in the graph nothing is in an order, so all it
+  // does is choose which ones get drawn — and a box marked "Sort by" over a
+  // picture invites you to read the arrangement as the sort, which it never is.
+  const label = $('filterSortLabel');
+  if (label) {
+    label.textContent = hostId === 'graphFilterHost' ? 'Show first' : 'Sort by';
+  }
 }
 
 // Whether anything but the sort is currently hiding articles.

@@ -380,14 +380,28 @@ async function loadFeedGraph() {
   startGraphLayout();
 }
 
+// Where an article starts, before the forces move it.
+//
+// Derived from its own hash rather than from its position in the response, so
+// that the sort decides *which* articles are drawn and nothing else. A force
+// layout is path-dependent: seeded in the order the rows arrived, the same
+// thousand articles would settle into a different picture under "newest" than
+// under "best predicted", and the arrangement would look like it meant
+// something about the sort. It does not. Position comes from the links.
+function graphSeedAngle(hash) {
+  let value = 0;
+  for (const ch of String(hash)) value = (value * 31 + ch.codePointAt(0)) >>> 0;
+  return (value % 100000) / 100000;
+}
+
 function buildGraphModel(data) {
   // A ring to start from rather than pure noise: the simulation untangles a
   // ring far faster than it untangles a random cloud, because no two nodes
   // begin on top of each other.
   const count = data.nodes.length;
   const radius = Math.max(60, count * 3.2);
-  graphState.nodes = data.nodes.map((item, index) => {
-    const angle = (index / Math.max(1, count)) * Math.PI * 2;
+  graphState.nodes = data.nodes.map((item) => {
+    const angle = graphSeedAngle(item.item_hash) * Math.PI * 2;
     return {
       item,
       x: Math.cos(angle) * radius,
@@ -495,6 +509,7 @@ function applyLinkDensity() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     graphBuildTree, graphSummarize, graphTick, graphCell, rankScale, strongestLinks,
+    graphSeedAngle,
   };
 }
 
@@ -870,6 +885,78 @@ function onGraphWheel(event) {
 
 // ---------- the detail card and legend ----------
 
+// The picture a node's article carries, if it has one.
+//
+// A still with a play badge rather than a working player: a video in a 288px
+// card beside the graph is not where anyone wants to watch one, and the badge
+// says plainly that opening it will give you something that plays. Opening is
+// what `openGraphItem` does, and the reader it hands off to does pictures,
+// galleries and players properly already.
+function graphPreview(node) {
+  const item = node.item;
+  const media = item.item_media || [];
+  // the same set db/feed.py calls a video post
+  const playable = youtubeId(item.item_url)
+    || media.some((entry) => ['video', 'gif', 'stream', 'embed'].includes(entry.type));
+  // Stills to try, best first, in the same order the reader's own player uses
+  // (see streamPlayer): the article's picture, then a media entry's poster,
+  // then an entry that *is* a picture. A YouTube link carries none of those
+  // and has a thumbnail at a known address, which is where the reader gets
+  // its own from too.
+  const ytId = youtubeId(item.item_url);
+  const still = item.item_image_url
+    || media.map((entry) => entry.poster).find(Boolean)
+    || media.filter((entry) => ['image', 'gif'].includes(entry.type))
+      .map((entry) => entry.url).find(Boolean)
+    || (ytId ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg` : null);
+
+  if (!still && !playable) return null;
+
+  const frame = h('div', {
+    class: 'relative rounded overflow-hidden bg-base-300 cursor-pointer',
+    title: 'Open this article',
+    onclick: () => openGraphItem(node),
+  });
+  if (still) {
+    frame.append(h('img', {
+      src: still,
+      alt: '',
+      loading: 'lazy',
+      class: 'w-full h-28 object-cover',
+      // a picture whose host has since dropped it should leave the card tidy
+      onerror: (e) => e.target.replaceWith(
+        h('div', { class: 'w-full h-28 bg-base-300' })),
+    }));
+  } else {
+    frame.append(h('div', { class: 'w-full h-28 bg-base-300' }));
+  }
+  if (playable) {
+    frame.append(h('div', {
+      class: 'absolute inset-0 flex items-center justify-center pointer-events-none',
+    },
+      h('span', {
+        class: 'w-9 h-9 rounded-full bg-base-100/85 flex items-center justify-center '
+          + 'text-base-content text-sm leading-none pl-0.5',
+      }, '\u25B6')));
+  }
+  return frame;
+}
+
+// Open the article properly. The node payload has no body -- the graph draws
+// dots and does not ship a thousand articles' text to do it -- so the reader
+// is given the real article, fetched for this one.
+async function openGraphItem(node) {
+  try {
+    const full = await sdk.feedItem({
+      feed_name_hash: graphState.feed,
+      item_url_hash: node.item.item_hash,
+    });
+    openReader(full);
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+}
+
 function selectGraphNode(node) {
   graphState.selected = node;
   const host = $('graphDetail');
@@ -889,14 +976,20 @@ function selectGraphNode(node) {
     h('div', { class: 'card bg-base-100 shadow-lg border border-base-300' },
       h('div', { class: 'card-body p-3 gap-2' },
         h('div', { class: 'flex items-start gap-2' },
-          h('p', { class: 'text-sm font-semibold leading-snug line-clamp-3 flex-1' },
-            item.item_title || item.item_url),
+          h('button', {
+            type: 'button',
+            class: 'text-sm font-semibold leading-snug line-clamp-3 flex-1 text-left '
+              + 'link link-hover',
+            title: 'Open this article',
+            onclick: () => openGraphItem(node),
+          }, item.item_title || item.item_url),
           h('button', {
             type: 'button',
             class: 'btn btn-ghost btn-xs btn-circle',
             title: 'Close',
             onclick: () => selectGraphNode(null),
           }, '✕')),
+        graphPreview(node),
         h('div', { class: 'flex flex-wrap items-center gap-2 text-[11px] text-base-content/60' },
           sourceBadge(item.item_source_name, item.item_source_color),
           item.item_date_published ? h('span', {}, timeAgo(item.item_date_published)) : null,
@@ -939,12 +1032,19 @@ function selectGraphNode(node) {
                   selectGraphNode(node);
                 },
               }, option.label))),
-          h('a', {
-            href: item.item_url,
-            target: '_blank',
-            rel: 'noopener noreferrer',
-            class: 'btn btn-ghost btn-xs',
-          }, 'Open')))));
+          h('div', { class: 'flex items-center gap-1' },
+            h('button', {
+              type: 'button',
+              class: 'btn btn-ghost btn-xs',
+              onclick: () => openGraphItem(node),
+            }, 'Read'),
+            h('a', {
+              href: item.item_url,
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              class: 'btn btn-ghost btn-xs',
+              title: 'Open the original on its own site',
+            }, '\u2197'))))));
   drawGraph();
 }
 

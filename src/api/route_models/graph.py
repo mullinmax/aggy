@@ -1,14 +1,17 @@
 """The feed's similarity graph, as the graph view draws it.
 
 Deliberately not ``ItemResponse``: a node is a dot on a canvas, and shipping
-every article's sanitised HTML body to draw three hundred dots would be most of
-the payload for none of the picture. What is here is what the drawing and its
-detail card need -- enough to size a node, colour it, label it on hover, and
-link out of it.
+every article's sanitised HTML body to draw a thousand dots would be most of the
+payload for none of the picture. What is here is what the drawing and its detail
+card need -- enough to size a node, colour it, label it, show a thumbnail of it,
+and open it.
+
+The article's body is the one thing left out, which is why opening one from the
+graph fetches it: see ``GET /feed/item``.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import HttpUrl
 
@@ -23,6 +26,12 @@ class GraphNodeResponse(BaseRouteModel):
     # Colour comes from the source, the same one its badge uses in the feed.
     item_source_name: Optional[str] = None
     item_source_color: Optional[str] = None
+    # Enough to put a picture on the detail card. The card shows a still and a
+    # play badge rather than a working player -- a video in a 288px card beside
+    # the graph is not where anyone wants to watch one, and opening it gives
+    # the reader, which plays it properly.
+    item_image_url: Optional[str] = None
+    item_media: Optional[List[Dict[str, Optional[str]]]] = None
     # Size comes from the prediction. Null for an article the model has not
     # scored yet, which the view draws at its smallest rather than guessing.
     item_predicted_score: Optional[float] = None

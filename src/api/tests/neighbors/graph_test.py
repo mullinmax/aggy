@@ -661,6 +661,66 @@ def test_an_unlinked_article_is_still_a_node(existing_feed):
     assert edges == []
 
 
+def test_a_node_carries_enough_to_show_a_picture(existing_feed):
+    """The card beside the graph shows the article's still and a play badge, so
+    the picture and the media list have to reach it -- everything except the
+    body, which is what /feed/item is for."""
+    item = _add_item(existing_feed, "https://example.com/a", angle=0.0)
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE items SET image_url = %s, media = %s WHERE url_hash = %s",
+            (
+                "https://example.com/still.jpg",
+                json.dumps([{"type": "video", "url": "https://example.com/v.mp4"}]),
+                item.url_hash,
+            ),
+        )
+
+    nodes, _edges = existing_feed.graph()
+
+    assert nodes[0]["image_url"] == "https://example.com/still.jpg"
+    assert nodes[0]["media"][0]["type"] == "video"
+
+
+def test_one_article_can_be_fetched_in_full(
+    client, existing_user, existing_feed, token
+):
+    """Opening an article from the graph needs its body, which the node payload
+    deliberately leaves out."""
+    item = _add_item(existing_feed, "https://example.com/readable", angle=0.0)
+
+    args = build_api_request_args(
+        path="/feed/item",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": item.url_hash,
+        },
+        token=token,
+    )
+    body = client.get(**args).json()
+
+    assert body["item_hash"] == item.url_hash
+    assert body["item_content"]  # the thing the node payload does not carry
+    assert body["item_title"] == "Title"
+
+
+def test_fetching_an_article_is_scoped_to_the_feed_that_holds_it(
+    client, existing_user, existing_feed, token
+):
+    _stranger, their_feed = _second_account("item-stranger")
+    theirs = _add_item(their_feed, "https://example.com/theirs", angle=0.0)
+
+    args = build_api_request_args(
+        path="/feed/item",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": theirs.url_hash,
+        },
+        token=token,
+    )
+    assert client.get(**args).status_code == 404
+
+
 def test_the_view_carries_what_the_drawing_needs(existing_feed):
     """Colour comes from the source, size from the prediction, and a ring from
     a real vote -- so all three have to actually arrive."""
