@@ -635,6 +635,9 @@ class Feed(ItemCollection):
         sql = (
             "SELECT i.url_hash, i.url, i.title, i.date_published, "
             "c.predicted_score, c.predicted_confidence, "
+            # the sort runs in the layer above, where the duplicate columns
+            # live, so every column ITEM_SORTS can name has to survive to it
+            "c.score, c.added_at, "
             "uv.score AS user_score, st.is_read AS is_read, "
             "d.group_hash AS duplicate_group, "
             "src.name AS source_name, src.color AS source_color, "
@@ -705,9 +708,10 @@ class Feed(ItemCollection):
             )
             edges = cur.fetchall()
 
+        # sort and duplicate bookkeeping, not article fields
         for node in nodes:
-            node.pop("dup_rank", None)
-            node.pop("dup_group_size", None)
+            for column in ("dup_rank", "dup_group_size", "score", "added_at"):
+                node.pop(column, None)
         return nodes, edges
 
     def stats(self) -> dict:

@@ -233,6 +233,25 @@ def _settle(feed, passes=6):
         neighbor_graph_job()
 
 
+def _freshen_cooldown(feed):
+    """Put every article back inside its cooldown, as one just walked would be.
+
+    The opposite of ``_clear_cooldown``, and needed after ``_settle`` because
+    settling ages every link by a year to force the re-walks. A pass runs until
+    its queue is empty, so an article woken while that ageing is still in place
+    would be re-walked by the same pass that woke it -- which is right in
+    production, where it is a day or two away from being due, and useless in a
+    test that wants to see what the waking did.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE feed_items SET neighbors_linked_at = NOW() "
+            "WHERE user_hash = %s AND feed_hash = %s "
+            "AND neighbors_linked_at IS NOT NULL",
+            (feed.user_hash, feed.name_hash),
+        )
+
+
 def test_every_article_ends_up_with_a_full_list(existing_feed):
     """The promise the queue makes. An article placed into a thin graph comes
     up short -- the first one in a feed has nothing to link to at all -- so it
@@ -286,6 +305,9 @@ def test_a_new_arrival_still_wakes_the_neighbours_it_changed(existing_feed):
         _add_item(existing_feed, f"https://example.com/{i}", angle=0.05 * i)
     _settle(existing_feed)
     assert _still_queued(existing_feed) == []
+    # as they would be in a settled feed: recently walked, so a wake means
+    # "due in a day or two" rather than "due right now"
+    _freshen_cooldown(existing_feed)
 
     arrival = _add_item(existing_feed, "https://example.com/new", angle=0.0)
     neighbor_graph_job()
