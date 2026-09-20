@@ -1022,15 +1022,7 @@ function duplicateBadge(item) {
         });
         // the shown copy is in the response so it can be marked rather than
         // guessed at; the others are what this badge is about
-        render(panel, h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
-          data.members.map((m) => h('li', { class: 'flex items-center gap-2 min-w-0' },
-            h('span', { class: 'shrink-0 text-base-content/30' }, m.item_is_shown ? '●' : '○'),
-            sourceBadge(m.item_source_name),
-            h('a', {
-              href: m.item_url, target: '_blank', rel: 'noopener noreferrer',
-              class: 'link link-hover truncate min-w-0',
-              onclick: (ev) => ev.stopPropagation(),
-            }, m.item_title || m.item_url)))));
+        render(panel, duplicateMemberLinks(data.members, { showShownMarker: true }));
         loaded = true;
       } catch (err) {
         render(panel, h('p', { class: 'text-xs text-error' }, err.message));
@@ -1047,6 +1039,18 @@ function duplicateBadge(item) {
 // second article before the first request lands would otherwise paint the
 // wrong rail beside it.
 let readerRelatedToken = 0;
+
+function duplicateMemberLinks(members, { showShownMarker = false } = {}) {
+  return h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
+    members.map((m) => h('li', { class: 'flex items-center gap-2 min-w-0' },
+      showShownMarker && h('span', { class: 'shrink-0 text-base-content/30' }, m.item_is_shown ? '●' : '○'),
+      sourceBadge(m.item_source_name),
+      h('a', {
+        href: m.item_url, target: '_blank', rel: 'noopener noreferrer',
+        class: 'link link-hover truncate min-w-0',
+        onclick: (ev) => ev.stopPropagation(),
+      }, m.item_title || m.item_url))));
+}
 
 // One entry in the reader's related rail: a thumbnail, the title, and how
 // alike the two articles are. Tapping it opens that article in the same
@@ -1075,6 +1079,35 @@ function relatedCard(related) {
         h('span', { class: 'text-[10px] text-base-content/40 shrink-0' }, `${pct}% alike`))));
 }
 
+function duplicateReaderCard(duplicate) {
+  return h('button', {
+    type: 'button',
+    class: 'w-full text-left flex items-start gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors',
+    onclick: async () => {
+      const full = await sdk.feedItem({
+        feed_name_hash: currentFeed.feed_name_hash,
+        item_url_hash: duplicate.item_hash,
+      });
+      openReader(full);
+    },
+  },
+  h('div', { class: 'min-w-0 flex-1' },
+    h('p', { class: 'text-xs font-medium line-clamp-2' }, duplicate.item_title || duplicate.item_url),
+    h('div', { class: 'flex items-center gap-1.5 mt-1 min-w-0' },
+      sourceBadge(duplicate.item_source_name),
+      h('span', { class: 'text-[10px] text-base-content/40 shrink-0' }, 'Same story'))),
+  openLinkButton(duplicate.item_url));
+}
+
+function duplicateReaderSection(members) {
+  const count = members.length;
+  if (!count) return null;
+  return h('details', { class: 'rounded-lg border border-base-300 bg-base-100 overflow-hidden' },
+    h('summary', { class: 'cursor-pointer px-3 py-2 text-xs font-semibold text-base-content/60 uppercase tracking-wide' },
+      `${count} other source${count === 1 ? '' : 's'} carrying this story`),
+    h('div', { class: 'flex flex-col gap-1 p-1 border-t border-base-300' }, members.map(duplicateReaderCard)));
+}
+
 // Fill the reader's side rail with what else in this feed is about the same
 // thing. Quietly empty when there is nothing: an article ingested minutes ago
 // has not been linked into the similarity graph yet, and an empty heading over
@@ -1087,23 +1120,40 @@ async function loadRelated(item) {
   if (!currentFeed || currentList) return;
 
   const token = ++readerRelatedToken;
-  try {
-    const data = await sdk.feedRelatedItems({
+  const relatedReq = sdk.feedRelatedItems({
+    feed_name_hash: currentFeed.feed_name_hash,
+    item_url_hash: item.item_hash,
+    limit: 5,
+  });
+  const duplicateReq = item.item_duplicate_count && item.item_duplicate_group
+    ? sdk.feedItemDuplicates({
       feed_name_hash: currentFeed.feed_name_hash,
-      item_url_hash: item.item_hash,
-      limit: 5,
-    });
+      group_hash: item.item_duplicate_group,
+    })
+    : Promise.resolve({ members: [] });
+  try {
+    const [relatedResult, duplicateResult] = await Promise.allSettled([relatedReq, duplicateReq]);
     if (token !== readerRelatedToken) return;
-    if (!data.related || !data.related.length) return;
-    render(host,
-      h('div', { class: 'lg:sticky lg:top-0' },
-        h('h3', { class: 'text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2 lg:mb-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-base-300' },
-          'Related in this feed'),
-        h('div', { class: 'flex flex-col gap-1' }, data.related.map(relatedCard))));
+    const related = relatedResult.status === 'fulfilled' ? (relatedResult.value.related || []) : [];
+    const duplicates = duplicateResult.status === 'fulfilled'
+      ? (duplicateResult.value.members || []).filter((member) => !member.item_is_shown)
+      : [];
+    if (!related.length && !duplicates.length) return;
+    const blocks = [];
+    const duplicateSection = duplicateReaderSection(duplicates);
+    if (duplicateSection) blocks.push(duplicateSection);
+    if (related.length) {
+      blocks.push(
+        h('div', {},
+          h('h3', { class: 'text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2 lg:mb-3 pt-3 border-t border-base-300' },
+            'Related in this feed'),
+          h('div', { class: 'flex flex-col gap-1' }, related.map(relatedCard))));
+    }
+    render(host, h('div', { class: 'lg:sticky lg:top-0 flex flex-col gap-3' }, blocks));
   } catch {
-    // The rail is a bonus beside the article, never the point of opening it;
-    // a failure here leaves the reader alone rather than throwing a toast over
-    // something the reader did not ask for.
+    // Promise.allSettled above means this is only for something stranger than a
+    // request failure. The rail is a bonus beside the article, never the point
+    // of opening it.
     if (token === readerRelatedToken) render(host);
   }
 }

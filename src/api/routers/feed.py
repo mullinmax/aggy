@@ -457,6 +457,8 @@ def get_related_items(
                 in_list=meta["in_list"],
                 predicted_score=meta["predicted_score"],
                 predicted_confidence=meta["predicted_confidence"],
+                duplicate_count=meta["duplicate_count"],
+                duplicate_group=meta["duplicate_group"],
             )
             for item, meta in feed.related_items(item_url_hash, limit)
         ],

@@ -1211,6 +1211,30 @@ def test_related_items_leave_out_other_copies_of_the_same_story(
     assert other.url_hash in hashes
 
 
+def test_related_items_still_say_when_a_related_article_has_duplicates(
+    client, existing_user, existing_feed, token
+):
+    a = _embed(_add_item(existing_feed, "https://example.com/a"), 0.0)
+    near = _embed(_add_item(existing_feed, "https://example.com/b?utm_source=a"), 0.4)
+    _embed(_add_item(existing_feed, "https://example.com/b?utm_source=b"), 0.401)
+
+    neighbor_graph_job()
+
+    args = build_api_request_args(
+        path="/feed/related_items",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": a.url_hash,
+        },
+        token=token,
+    )
+    related = client.get(**args).json()["related"]
+
+    assert related[0]["item_hash"] == near.url_hash
+    assert related[0]["item_duplicate_count"] == 1
+    assert related[0]["item_duplicate_group"] is not None
+
+
 def test_related_items_are_empty_rather_than_an_error_before_linking(
     client, existing_user, existing_feed, token
 ):

@@ -534,11 +534,16 @@ class Feed(ItemCollection):
                 "EXISTS (SELECT 1 FROM list_items li"
                 " WHERE li.user_hash = c.user_hash"
                 "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
+                "d.group_hash AS duplicate_group, "
+                f"{DUP_GROUP_SIZE} AS dup_group_size, "
                 "src.name AS source_name, src.color AS source_color "
                 "FROM best b "
                 "JOIN items i ON i.url_hash = b.other "
                 "JOIN feed_items c ON c.item_url_hash = b.other"
                 " AND c.user_hash = %s AND c.feed_hash = %s "
+                "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+                " AND d.item_url_hash = c.item_url_hash"
+                " AND d.group_hash IS NOT NULL "
                 "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
                 " AND st.feed_hash = c.feed_hash"
                 " AND st.item_url_hash = c.item_url_hash "
@@ -589,6 +594,8 @@ class Feed(ItemCollection):
                 "in_list": row.pop("in_list", None),
                 "predicted_score": row.pop("predicted_score", None),
                 "predicted_confidence": row.pop("predicted_confidence", None),
+                "duplicate_group": row.pop("duplicate_group", None),
+                "duplicate_count": (row.pop("dup_group_size", 1) or 1) - 1,
             }
             results.append((ItemStrict.from_row(row), meta))
         return results
@@ -615,9 +622,14 @@ class Feed(ItemCollection):
                 "EXISTS (SELECT 1 FROM list_items li"
                 " WHERE li.user_hash = c.user_hash"
                 "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
+                "d.group_hash AS duplicate_group, "
+                f"{DUP_GROUP_SIZE} AS dup_group_size, "
                 "src.name AS source_name, src.color AS source_color "
                 "FROM feed_items c "
                 "JOIN items i ON i.url_hash = c.item_url_hash "
+                "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+                " AND d.item_url_hash = c.item_url_hash"
+                " AND d.group_hash IS NOT NULL "
                 "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
                 " AND st.feed_hash = c.feed_hash"
                 " AND st.item_url_hash = c.item_url_hash "
@@ -645,6 +657,8 @@ class Feed(ItemCollection):
             "in_list": row.pop("in_list", None),
             "predicted_score": row.pop("predicted_score", None),
             "predicted_confidence": row.pop("predicted_confidence", None),
+            "duplicate_group": row.pop("duplicate_group", None),
+            "duplicate_count": (row.pop("dup_group_size", 1) or 1) - 1,
         }
         return ItemStrict.from_row(row), meta
 

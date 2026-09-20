@@ -704,6 +704,30 @@ def test_one_article_can_be_fetched_in_full(
     assert body["item_title"] == "Title"
 
 
+def test_fetching_an_article_includes_its_hidden_duplicate_count(
+    client, existing_user, existing_feed, token
+):
+    _add_item(existing_feed, "https://example.com/story?utm_source=a", predicted=0.1)
+    shown = _add_item(
+        existing_feed, "https://example.com/story?utm_source=b", predicted=0.9
+    )
+    neighbor_graph_job()
+
+    args = build_api_request_args(
+        path="/feed/item",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": shown.url_hash,
+        },
+        token=token,
+    )
+    body = client.get(**args).json()
+
+    assert body["item_hash"] == shown.url_hash
+    assert body["item_duplicate_count"] == 1
+    assert body["item_duplicate_group"] is not None
+
+
 def test_fetching_an_article_is_scoped_to_the_feed_that_holds_it(
     client, existing_user, existing_feed, token
 ):
