@@ -57,6 +57,11 @@ class ArticleStatsSummaryResponse(ArticleCountsResponse):
     duplicated_articles: int
     redundant_articles: int
     largest_duplicate_group: int
+    with_1_similar_link: int
+    with_2_similar_links: int
+    with_3_similar_links: int
+    with_4_similar_links: int
+    with_5_similar_links: int
 
 
 class ArticleTimelinePointResponse(BaseRouteModel):

@@ -34,6 +34,11 @@ def test_article_stats_empty(client, existing_user, token):
     assert body["domains"] == []
     assert body["summary"]["total_articles"] == 0
     assert body["summary"]["domain_count"] == 0
+    assert body["summary"]["with_1_similar_link"] == 0
+    assert body["summary"]["with_2_similar_links"] == 0
+    assert body["summary"]["with_3_similar_links"] == 0
+    assert body["summary"]["with_4_similar_links"] == 0
+    assert body["summary"]["with_5_similar_links"] == 0
     assert len(body["timeline"]) == 31
 
 

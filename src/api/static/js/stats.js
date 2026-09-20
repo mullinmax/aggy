@@ -141,6 +141,14 @@ const DUPLICATE_METRIC = {
   help: 'Article is one of several copies of the same content in your feeds',
 };
 
+const SIMILAR_LINK_BUCKETS = [
+  { key: 'with_1_similar_link', label: '1 similar link' },
+  { key: 'with_2_similar_links', label: '2 similar links' },
+  { key: 'with_3_similar_links', label: '3 similar links' },
+  { key: 'with_4_similar_links', label: '4 similar links' },
+  { key: 'with_5_similar_links', label: '5 similar links' },
+];
+
 // The per-site table carries the coverage columns and the duplicate one.
 const DOMAIN_METRICS = [...COVERAGE_METRICS, DUPLICATE_METRIC];
 
@@ -293,22 +301,23 @@ function duplicateCard(summary) {
   const total = summary.total_articles;
   const groups = summary.duplicate_groups || 0;
 
-  if (!groups) {
-    return sectionCard('Duplicates',
-      'The same story arriving from more than one source, under a different URL from each.',
-      h('p', { class: 'text-sm text-base-content/50' },
-        'No duplicates found among your articles yet.'),
-      pendingNote());
-  }
-
   const figure = (label, value, desc) =>
     h('div', {},
       h('div', { class: 'text-xs text-base-content/60' }, label),
       h('div', { class: 'text-xl tabular-nums' }, value),
       desc ? h('div', { class: 'text-xs text-base-content/50' }, desc) : null);
 
+  const share = (label, count) =>
+    h('div', { class: 'rounded border border-base-300 px-3 py-2' },
+      h('div', { class: 'text-[11px] text-base-content/60' }, label),
+      h('div', { class: 'text-sm font-medium tabular-nums' }, fmtPct(count, total)));
+
   return sectionCard('Duplicates',
     'The same story arriving from more than one source, under a different URL from each.',
+    !groups
+      ? h('p', { class: 'text-sm text-base-content/50' },
+          'No duplicates found among your articles yet.')
+      : null,
     h('div', { class: 'grid grid-cols-2 sm:grid-cols-4 gap-4' },
       figure('Duplicated stories', fmtInt(groups),
         'stories you have more than one copy of'),
@@ -318,6 +327,9 @@ function duplicateCard(summary) {
         'extra copies the feed collapses away'),
       figure('Largest group', fmtInt(summary.largest_duplicate_group || 0),
         'copies of one story')),
+    h('div', { class: 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2' },
+      share('With duplicates', summary.in_duplicate_group || 0),
+      ...SIMILAR_LINK_BUCKETS.map((bucket) => share(bucket.label, summary[bucket.key] || 0))),
     pendingNote());
 }
 

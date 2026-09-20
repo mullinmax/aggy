@@ -316,7 +316,17 @@ SELECT
     COUNT(*) AS duplicate_groups,
     COALESCE(SUM(copies), 0) AS duplicated_articles,
     COALESCE(SUM(copies - 1), 0) AS redundant_articles,
-    COALESCE(MAX(copies), 0) AS largest_duplicate_group
+    COALESCE(MAX(copies), 0) AS largest_duplicate_group,
+    COALESCE(SUM(copies) FILTER (WHERE copies = 2), 0)
+        AS with_1_similar_link,
+    COALESCE(SUM(copies) FILTER (WHERE copies = 3), 0)
+        AS with_2_similar_links,
+    COALESCE(SUM(copies) FILTER (WHERE copies = 4), 0)
+        AS with_3_similar_links,
+    COALESCE(SUM(copies) FILTER (WHERE copies = 5), 0)
+        AS with_4_similar_links,
+    COALESCE(SUM(copies) FILTER (WHERE copies = 6), 0)
+        AS with_5_similar_links
 FROM (
     SELECT d.group_hash, COUNT(DISTINCT c.item_url_hash) AS copies
     FROM feed_items c
@@ -344,6 +354,11 @@ def duplicate_group_stats(user_hash: str) -> dict:
         "duplicated_articles": row["duplicated_articles"],
         "redundant_articles": row["redundant_articles"],
         "largest_duplicate_group": row["largest_duplicate_group"],
+        "with_1_similar_link": row["with_1_similar_link"],
+        "with_2_similar_links": row["with_2_similar_links"],
+        "with_3_similar_links": row["with_3_similar_links"],
+        "with_4_similar_links": row["with_4_similar_links"],
+        "with_5_similar_links": row["with_5_similar_links"],
     }
 
 

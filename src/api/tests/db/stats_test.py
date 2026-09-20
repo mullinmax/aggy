@@ -269,6 +269,33 @@ def test_duplicate_counts_report_groups_and_redundancy(existing_user, existing_f
     # ...minus the one the feed keeps showing for each
     assert summary["redundant_articles"] == 3
     assert summary["largest_duplicate_group"] == 3
+    assert summary["with_1_similar_link"] == 2
+    assert summary["with_2_similar_links"] == 3
+    assert summary["with_3_similar_links"] == 0
+    assert summary["with_4_similar_links"] == 0
+    assert summary["with_5_similar_links"] == 0
+
+
+def test_duplicate_counts_bucket_articles_by_similar_link_count(
+    existing_user, existing_feed
+):
+    from dedup.detect import duplicate_detection_job
+
+    for similar_links in range(1, 6):
+        for copy in range(similar_links + 1):
+            add_item(
+                existing_feed,
+                f"https://example.com/group-{similar_links}?utm_source=s{copy}",
+            )
+
+    duplicate_detection_job()
+    summary = article_stats(existing_user.name_hash)["summary"]
+
+    assert summary["with_1_similar_link"] == 2
+    assert summary["with_2_similar_links"] == 3
+    assert summary["with_3_similar_links"] == 4
+    assert summary["with_4_similar_links"] == 5
+    assert summary["with_5_similar_links"] == 6
 
 
 def test_duplicate_counts_appear_per_domain(existing_user, existing_feed):
