@@ -1039,6 +1039,7 @@ function duplicateBadge(item) {
 // second article before the first request lands would otherwise paint the
 // wrong rail beside it.
 let readerRelatedToken = 0;
+let readerDuplicateOpenToken = 0;
 
 function duplicateMemberLinks(members, { showShownMarker = false } = {}) {
   return h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
@@ -1084,11 +1085,17 @@ function duplicateReaderCard(duplicate) {
     type: 'button',
     class: 'w-full text-left flex items-start gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors',
     onclick: async () => {
-      const full = await sdk.feedItem({
-        feed_name_hash: currentFeed.feed_name_hash,
-        item_url_hash: duplicate.item_hash,
-      });
-      openReader(full);
+      const token = ++readerDuplicateOpenToken;
+      try {
+        const full = await sdk.feedItem({
+          feed_name_hash: currentFeed.feed_name_hash,
+          item_url_hash: duplicate.item_hash,
+        });
+        if (token !== readerDuplicateOpenToken) return;
+        openReader(full);
+      } catch (err) {
+        if (token === readerDuplicateOpenToken) toast(err.message, 'alert-error');
+      }
     },
   },
   h('div', { class: 'min-w-0 flex-1' },
@@ -2206,6 +2213,7 @@ function stripRedditBoilerplate(root, removeImage) {
 }
 
 function openReader(item) {
+  readerDuplicateOpenToken += 1;
   $('readerTitle').textContent = item.item_title || 'Untitled';
   const parsed = parseItemContent(item);
 

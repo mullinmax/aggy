@@ -585,6 +585,7 @@ class Feed(ItemCollection):
 
         results = []
         for row in rows:
+            duplicate_group = row.pop("duplicate_group", None)
             meta = {
                 "similarity": row.pop("similarity", None),
                 "source_name": row.pop("source_name", None),
@@ -594,8 +595,10 @@ class Feed(ItemCollection):
                 "in_list": row.pop("in_list", None),
                 "predicted_score": row.pop("predicted_score", None),
                 "predicted_confidence": row.pop("predicted_confidence", None),
-                "duplicate_group": row.pop("duplicate_group", None),
-                "duplicate_count": (row.pop("dup_group_size", 1) or 1) - 1,
+                "duplicate_group": duplicate_group,
+                "duplicate_count": ((row.pop("dup_group_size", 1) or 1) - 1)
+                if duplicate_group
+                else 0,
             }
             results.append((ItemStrict.from_row(row), meta))
         return results
@@ -649,6 +652,7 @@ class Feed(ItemCollection):
 
         if not row:
             return None, None
+        duplicate_group = row.pop("duplicate_group", None)
         meta = {
             "source_name": row.pop("source_name", None),
             "source_color": row.pop("source_color", None),
@@ -657,8 +661,10 @@ class Feed(ItemCollection):
             "in_list": row.pop("in_list", None),
             "predicted_score": row.pop("predicted_score", None),
             "predicted_confidence": row.pop("predicted_confidence", None),
-            "duplicate_group": row.pop("duplicate_group", None),
-            "duplicate_count": (row.pop("dup_group_size", 1) or 1) - 1,
+            "duplicate_group": duplicate_group,
+            "duplicate_count": ((row.pop("dup_group_size", 1) or 1) - 1)
+            if duplicate_group
+            else 0,
         }
         return ItemStrict.from_row(row), meta
 
