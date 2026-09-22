@@ -366,6 +366,18 @@ def get_item_explanation(
     )
 
 
+# What the reader is told when an explanation cannot be produced. Written here
+# rather than taken from the exception that stopped it: an exception's own text
+# is the one string on this path nobody vets, and an explanation is not worth
+# leaking internals over. The reason still reaches the log.
+#
+# Before the stream opens this is nearly always a feed with too few votes to
+# fit a model on, which is worth saying plainly. Once it is open the only thing
+# left that can stop it is having no model to choose, which is not about votes.
+_CANNOT_EXPLAIN = "Not enough votes yet to explain this recommendation."
+_EXPLANATION_STOPPED = "No model is ranking this feed yet."
+
+
 def _preview(p) -> FieldPreviewResponse:
     """One article's own data for a field, as the explanation shows it. Shared
     by the whole-body route and the streaming one, which send the same thing."""
@@ -421,15 +433,18 @@ def get_item_explanation_stream(
     # Drawn from the generator here, before the response starts, so "not enough
     # votes yet" is still a 409 the client can read as a status rather than an
     # error line inside a 200.
+    #
+    # What the client is told is written here rather than taken from the
+    # exception. An exception's own text is for the log: it is the one string
+    # on this path nobody vets, and an explanation is not worth leaking
+    # internals over.
     try:
         first = next(events)
     except ExplanationUnavailable as unavailable:
-        raise HTTPException(status_code=409, detail=str(unavailable)) from None
+        logging.info(f"Cannot explain {item_url_hash}: {unavailable}")
+        raise HTTPException(status_code=409, detail=_CANNOT_EXPLAIN) from None
     except StopIteration:
-        raise HTTPException(
-            status_code=409,
-            detail="Not enough votes yet to explain this recommendation.",
-        ) from None
+        raise HTTPException(status_code=409, detail=_CANNOT_EXPLAIN) from None
 
     def encode(event) -> dict:
         if isinstance(event, ExplanationStarted):
@@ -469,8 +484,12 @@ def get_item_explanation_stream(
                 yield json.dumps(encode(event)) + "\n"
         except ExplanationUnavailable as unavailable:
             # Choosing the model is left until after the previews, so this can
-            # land mid-stream. It is a reason, not a fault: say it as one.
-            yield json.dumps({"type": "error", "detail": str(unavailable)}) + "\n"
+            # land mid-stream. It is a reason rather than a fault, but it is
+            # still the exception's own words, so it goes to the log and the
+            # reader gets the vetted line above.
+            logging.info(f"Cannot explain {item_url_hash}: {unavailable}")
+            stopped = {"type": "error", "detail": _EXPLANATION_STOPPED}
+            yield json.dumps(stopped) + "\n"
             return
         except Exception as e:
             # The response is already a 200 by now, so a failure has to be said
