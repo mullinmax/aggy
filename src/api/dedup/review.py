@@ -73,27 +73,14 @@ ORDER BY n.similarity DESC
 LIMIT %s
 """
 
-# Everything the page needs to show one article: enough to recognise it
-# without opening it.
-_ARTICLE_SQL = """
-SELECT i.url_hash, i.url, i.title, i.author, i.image_url, i.excerpt,
-       COALESCE(i.date_published, i.created_at) AS published, (
-  SELECT s.name FROM source_items si
-  JOIN sources s ON s.user_hash = si.user_hash
-   AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash
-  WHERE si.user_hash = %s AND si.feed_hash = %s
-   AND si.item_url_hash = i.url_hash LIMIT 1) AS source_name
-FROM items i
-WHERE i.url_hash = ANY(%s)
-"""
-
 
 def review_pairs(user_hash: str, feed_hash: str, limit: int = 20) -> List[dict]:
     """The next pairs to ask about, most uncertain first.
 
-    Each returned pair carries both articles in full, which side detection
-    treats as the anchor, what it decided and how sure it was -- the page shows
-    a verdict to agree or disagree with, not a blind comparison.
+    Each pair names its two articles, which side detection treats as the
+    anchor, and how alike it found them. The articles themselves are fetched
+    by the caller: the page draws them as the feed's own cards, so what it
+    needs is what the article list returns, not a reduced shape of its own.
     """
     threshold = config.get_float("DUPLICATE_SIMILARITY_THRESHOLD")
     floor = min(config.get_float("DUPLICATE_CANDIDATE_FLOOR"), threshold)
@@ -138,25 +125,8 @@ def review_pairs(user_hash: str, feed_hash: str, limit: int = 20) -> List[dict]:
 
         judged = labels_for(cur, user_hash, candidates.keys())
         pending = [pair for key, pair in candidates.items() if key not in judged]
-        # Closest to the decision point first: a pair the constant is sure
-        # about teaches a model little whichever way it is answered.
-        pending.sort(key=lambda pair: abs(pair["similarity"] - threshold))
-        pending = pending[:limit]
-        if not pending:
-            return []
 
-        wanted = {pair["candidate_hash"] for pair in pending}
-        wanted |= {pair["anchor_hash"] for pair in pending}
-        cur.execute(_ARTICLE_SQL, (user_hash, feed_hash, list(wanted)))
-        articles = {row["url_hash"]: row for row in cur.fetchall()}
-
-    out = []
-    for pair in pending:
-        candidate = articles.get(pair["candidate_hash"])
-        anchor = articles.get(pair["anchor_hash"])
-        # An article can leave the feed between the two queries, and half a
-        # pair is not a question anyone can answer.
-        if candidate is None or anchor is None:
-            continue
-        out.append({**pair, "candidate": candidate, "anchor": anchor})
-    return out
+    # Closest to the decision point first: a pair the constant is sure about
+    # teaches a model little whichever way it is answered.
+    pending.sort(key=lambda pair: abs(pair["similarity"] - threshold))
+    return pending[:limit]

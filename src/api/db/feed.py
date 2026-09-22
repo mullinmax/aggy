@@ -603,55 +603,45 @@ class Feed(ItemCollection):
             results.append((ItemStrict.from_row(row), meta))
         return results
 
-    def item(self, item_url_hash: str):
-        """One article of this feed, in full, or None.
+    # One article as the article list returns it: body, media, vote state and
+    # all. Selected by hash rather than by page, so the callers that want a
+    # specific article (the graph opening a node, the duplicate queue showing a
+    # pair) get exactly the shape the feed's own cards render from, and get it
+    # without paging the feed to find it.
+    _FULL_ITEM_SQL = (
+        "SELECT i.*, "
+        "c.predicted_score, c.predicted_confidence, "
+        "uv.score AS user_score, st.is_read AS is_read, "
+        "EXISTS (SELECT 1 FROM list_items li"
+        " WHERE li.user_hash = c.user_hash"
+        "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
+        "d.group_hash AS duplicate_group, "
+        f"{DUP_GROUP_SIZE} AS dup_group_size, "
+        "src.name AS source_name, src.color AS source_color "
+        "FROM feed_items c "
+        "JOIN items i ON i.url_hash = c.item_url_hash "
+        "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
+        " AND d.item_url_hash = c.item_url_hash"
+        " AND d.group_hash IS NOT NULL "
+        "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
+        " AND st.feed_hash = c.feed_hash"
+        " AND st.item_url_hash = c.item_url_hash "
+        "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
+        " AND uv.item_url_hash = c.item_url_hash "
+        "LEFT JOIN LATERAL ("
+        " SELECT s.name, s.color FROM source_items si"
+        " JOIN sources s ON s.user_hash = si.user_hash"
+        "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
+        " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
+        "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
+        "WHERE c.user_hash = %s AND c.feed_hash = %s "
+    )
 
-        The graph view's node payload leaves the article's body out -- it is
-        drawing dots, and a thousand sanitised HTML bodies is most of the
-        payload for none of the picture. Opening one from the graph therefore
-        fetches it, and this is that fetch: the same shape the article list
-        returns, for exactly one article.
-
-        Scoped to this feed as well as this account, so it can only ever return
-        something the caller already holds.
-        """
+    @staticmethod
+    def _split_item_row(row):
+        """One row from ``_FULL_ITEM_SQL`` as (article, per-feed metadata)."""
         from .item import ItemStrict
 
-        with self.db_con() as cur:
-            cur.execute(
-                "SELECT i.*, "
-                "c.predicted_score, c.predicted_confidence, "
-                "uv.score AS user_score, st.is_read AS is_read, "
-                "EXISTS (SELECT 1 FROM list_items li"
-                " WHERE li.user_hash = c.user_hash"
-                "  AND li.item_url_hash = c.item_url_hash) AS in_list, "
-                "d.group_hash AS duplicate_group, "
-                f"{DUP_GROUP_SIZE} AS dup_group_size, "
-                "src.name AS source_name, src.color AS source_color "
-                "FROM feed_items c "
-                "JOIN items i ON i.url_hash = c.item_url_hash "
-                "LEFT JOIN item_duplicates d ON d.user_hash = c.user_hash"
-                " AND d.item_url_hash = c.item_url_hash"
-                " AND d.group_hash IS NOT NULL "
-                "LEFT JOIN item_states st ON st.user_hash = c.user_hash"
-                " AND st.feed_hash = c.feed_hash"
-                " AND st.item_url_hash = c.item_url_hash "
-                "LEFT JOIN user_item_votes uv ON uv.user_hash = c.user_hash"
-                " AND uv.item_url_hash = c.item_url_hash "
-                "LEFT JOIN LATERAL ("
-                " SELECT s.name, s.color FROM source_items si"
-                " JOIN sources s ON s.user_hash = si.user_hash"
-                "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
-                " WHERE si.user_hash = c.user_hash AND si.feed_hash = c.feed_hash"
-                "  AND si.item_url_hash = c.item_url_hash LIMIT 1) src ON TRUE "
-                "WHERE c.user_hash = %s AND c.feed_hash = %s "
-                "AND c.item_url_hash = %s",
-                (self.user_hash, self.name_hash, item_url_hash),
-            )
-            row = cur.fetchone()
-
-        if not row:
-            return None, None
         duplicate_group = row.pop("duplicate_group", None)
         meta = {
             "source_name": row.pop("source_name", None),
@@ -667,6 +657,47 @@ class Feed(ItemCollection):
             else 0,
         }
         return ItemStrict.from_row(row), meta
+
+    def item(self, item_url_hash: str):
+        """One article of this feed, in full, or (None, None).
+
+        The graph view's node payload leaves the article's body out -- it is
+        drawing dots, and a thousand sanitised HTML bodies is most of the
+        payload for none of the picture. Opening one from the graph therefore
+        fetches it, and this is that fetch.
+
+        Scoped to this feed as well as this account, so it can only ever return
+        something the caller already holds.
+        """
+        with self.db_con() as cur:
+            cur.execute(
+                self._FULL_ITEM_SQL + "AND c.item_url_hash = %s",
+                (self.user_hash, self.name_hash, item_url_hash),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return None, None
+        return self._split_item_row(row)
+
+    def items_by_hash(self, item_url_hashes) -> dict:
+        """Several articles of this feed in full, keyed by hash.
+
+        The duplicate queue shows two articles as the feed's own cards draw
+        them, and it holds a few pairs ahead so answering one does not mean
+        waiting for the next. That is a dozen articles wanted at once, and a
+        query each is a dozen round trips for one screen.
+        """
+        wanted = [h for h in dict.fromkeys(item_url_hashes) if h]
+        if not wanted:
+            return {}
+        with self.db_con() as cur:
+            cur.execute(
+                self._FULL_ITEM_SQL + "AND c.item_url_hash = ANY(%s)",
+                (self.user_hash, self.name_hash, wanted),
+            )
+            rows = cur.fetchall()
+        return {row["url_hash"]: self._split_item_row(row) for row in rows}
 
     def graph(
         self,

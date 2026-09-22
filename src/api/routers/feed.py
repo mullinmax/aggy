@@ -28,7 +28,6 @@ from route_models.duplicate_review import (
     DuplicateModelResponse,
     DuplicateReviewResponse,
     DuplicateVerdictResponse,
-    ReviewArticleResponse,
     ReviewPairResponse,
 )
 from route_models.ranking import (
@@ -544,19 +543,6 @@ def _model_status(user_hash: str) -> DuplicateModelResponse:
     )
 
 
-def _review_article(row: dict) -> ReviewArticleResponse:
-    return ReviewArticleResponse(
-        item_hash=row["url_hash"],
-        item_url=row["url"],
-        item_title=row.get("title"),
-        item_excerpt=row.get("excerpt"),
-        item_author=row.get("author"),
-        item_source_name=row.get("source_name"),
-        item_image_url=row.get("image_url"),
-        item_date_published=row.get("published"),
-    )
-
-
 @feed_router.get(
     "/duplicate_review",
     summary="Pairs of articles worth judging, most uncertain first",
@@ -569,19 +555,35 @@ def get_duplicate_review(
 ) -> DuplicateReviewResponse:
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
     pairs = review_pairs(user.name_hash, feed.name_hash, limit=limit)
-    return DuplicateReviewResponse(
-        pairs=[
+
+    # Both sides of every pair in one query. The page draws the feed's own
+    # cards, so it wants whole articles -- and it holds a few pairs ahead so
+    # answering one does not mean waiting for the next, which is a dozen
+    # articles for one screen and a dozen round trips if asked for singly.
+    articles = feed.items_by_hash(
+        [pair["candidate_hash"] for pair in pairs]
+        + [pair["anchor_hash"] for pair in pairs]
+    )
+
+    out = []
+    for pair in pairs:
+        candidate = articles.get(pair["candidate_hash"])
+        anchor = articles.get(pair["anchor_hash"])
+        # An article can leave the feed between choosing the pairs and reading
+        # them, and half a pair is not a question anyone can answer.
+        if candidate is None or anchor is None:
+            continue
+        out.append(
             ReviewPairResponse(
-                anchor=_review_article(pair["anchor"]),
-                candidate=_review_article(pair["candidate"]),
+                anchor=ItemResponse.from_db_model(anchor[0], **anchor[1]),
+                candidate=ItemResponse.from_db_model(candidate[0], **candidate[1]),
                 grouped=pair["grouped"],
                 signal=pair["signal"],
                 similarity=pair["similarity"],
             )
-            for pair in pairs
-        ],
-        model=_model_status(user.name_hash),
-    )
+        )
+
+    return DuplicateReviewResponse(pairs=out, model=_model_status(user.name_hash))
 
 
 @feed_router.post(

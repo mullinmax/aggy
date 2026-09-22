@@ -1,32 +1,26 @@
 """The duplicate review queue, as the review page works through it."""
 
-from datetime import datetime
 from typing import List, Optional
 
-from pydantic import HttpUrl
-
 from .base import BaseRouteModel
-
-
-class ReviewArticleResponse(BaseRouteModel):
-    """One side of a pair: enough to recognise an article without opening it."""
-
-    item_hash: str
-    item_url: HttpUrl
-    item_title: Optional[str] = None
-    item_excerpt: Optional[str] = None
-    item_author: Optional[str] = None
-    item_source_name: Optional[str] = None
-    item_image_url: Optional[str] = None
-    item_date_published: Optional[datetime] = None
+from .item import ItemResponse
 
 
 class ReviewPairResponse(BaseRouteModel):
+    """Two articles to judge, as the feed's own cards draw them.
+
+    Full ``ItemResponse`` on both sides rather than a summary, because the
+    question is whether these are the same story and half the answer is in the
+    picture and the body. A reduced shape carrying only ``image_url`` showed
+    nothing at all for an article whose picture lives in its content or in a
+    media attachment, which is most of them from some sources.
+    """
+
     # Which side detection treats as the anchor. For a collapsed pair that is
     # the group's representative, and the candidate is the member that would
     # leave if you reject it.
-    anchor: ReviewArticleResponse
-    candidate: ReviewArticleResponse
+    anchor: ItemResponse
+    candidate: ItemResponse
     # True when the feed is already collapsing these two, so the page can ask
     # the right question: "was this right?" rather than "are these the same?"
     grouped: bool

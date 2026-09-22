@@ -240,9 +240,7 @@ def test_the_queue_offers_both_collapsed_pairs_and_near_misses(
     assert kinds == {True, False}, [
         (p["grouped"], round(p["similarity"], 3)) for p in pairs
     ]
-    hashes = {p["candidate"]["url_hash"] for p in pairs} | {
-        p["anchor"]["url_hash"] for p in pairs
-    }
+    hashes = {p["candidate_hash"] for p in pairs} | {p["anchor_hash"] for p in pairs}
     assert collapsed_a.url_hash in hashes
     assert near_a.url_hash in hashes
 
@@ -278,7 +276,7 @@ def test_a_pair_you_have_judged_is_not_offered_again(existing_user, existing_fee
     after = review.review_pairs(existing_user.name_hash, existing_feed.name_hash)
 
     assert not any(
-        pair_key(pair["candidate"]["url_hash"], pair["anchor"]["url_hash"])
+        pair_key(pair["candidate_hash"], pair["anchor_hash"])
         == pair_key(a.url_hash, b.url_hash)
         for pair in after
     )
@@ -299,9 +297,9 @@ def test_a_collapsed_pair_is_always_offered_against_its_representative(
     for pair in pairs:
         if not pair["grouped"]:
             continue
-        group = _group_of(existing_user, pair["candidate"]["url_hash"])["group_hash"]
-        assert pair["anchor"]["url_hash"] == group
-        assert pair["candidate"]["url_hash"] != group
+        group = _group_of(existing_user, pair["candidate_hash"])["group_hash"]
+        assert pair["anchor_hash"] == group
+        assert pair["candidate_hash"] != group
 
 
 # ---------- the model ----------
@@ -555,10 +553,59 @@ def test_the_review_endpoint_serves_pairs_and_the_model_status(
     pair = body["pairs"][0]
     assert pair["anchor"]["item_hash"] and pair["candidate"]["item_hash"]
     assert pair["anchor"]["item_hash"] != pair["candidate"]["item_hash"]
+    # the page draws the feed's own cards, so both sides carry a whole article
+    assert pair["anchor"]["item_content"] is not None
+    assert "item_media" in pair["anchor"]
     # the page has to be able to explain itself before a model exists
     assert body["model"]["trained"] is False
     assert body["model"]["needed"] > 0
     assert body["model"]["confirmed"] == 0
+
+
+def test_a_pair_carries_the_pictures_that_are_not_in_image_url(
+    client, existing_feed, token
+):
+    """The bug this shape was changed for.
+
+    An article's picture is not always in ``image_url``: from some sources it
+    arrives as a media attachment, from others it is only in the body. A
+    summary carrying ``image_url`` alone showed nothing at all for those, so
+    half the pairs came up with a picture and half without -- on the one screen
+    whose entire job is comparing two articles by eye.
+    """
+    a = _add(existing_feed, "https://a.com/story", angle=0.0)
+    b = _add(existing_feed, "https://b.com/rewrite", angle=0.005)
+    with get_db_con() as cur:
+        for item in (a, b):
+            cur.execute(
+                "UPDATE items SET image_url = NULL, media = %s WHERE url_hash = %s",
+                (
+                    json.dumps(
+                        [
+                            {
+                                "type": "video",
+                                "url": "https://c.dn/v.mp4",
+                                "poster": "https://c.dn/v.jpg",
+                            }
+                        ]
+                    ),
+                    item.url_hash,
+                ),
+            )
+    neighbor_graph_job()
+
+    args = build_api_request_args(
+        path="/feed/duplicate_review",
+        params={"feed_name_hash": existing_feed.name_hash},
+        token=token,
+    )
+    body = client.get(**args).json()
+
+    assert body["pairs"]
+    for side in ("anchor", "candidate"):
+        media = body["pairs"][0][side]["item_media"]
+        assert media, f"{side} lost its media"
+        assert media[0]["poster"] == "https://c.dn/v.jpg"
 
 
 def test_the_verdict_endpoint_splits_and_reports(

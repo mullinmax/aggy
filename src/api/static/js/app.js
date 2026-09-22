@@ -86,7 +86,7 @@ function bindControls() {
     if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/duplicates`);
   };
   $('duplicatesRefreshBtn').onclick = () => {
-    if (currentFeed) loadDuplicateReview();
+    if (currentFeed) startDuplicateReview();
   };
   $('rerankBtn').onclick = handleRerank;
   $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; onFiltersChanged(); };
@@ -1900,7 +1900,15 @@ function refreshVoteRows(item) {
 // below, then the action row. In `listMode` the recommendation-engine bits
 // (the "why recommended" button, the predicted-match badge, and the vote
 // buttons) are dropped — a list is a plain saved collection.
-function itemCard(item, { listMode = false } = {}) {
+// `review` is the duplicate queue's reading of a card: the same article, drawn
+// the same way, with nothing on it that acts. The queue asks one question and
+// has two buttons of its own for it, so a vote row, a list button and an
+// explain button beside them are three more ways to answer the wrong one. It
+// also stops clamping the title and the excerpt and shows the text alongside
+// the picture rather than instead of it -- deciding whether two articles are
+// the same story is exactly the case where the two lines a feed card spares
+// you are the two lines you need.
+function itemCard(item, { listMode = false, review = false } = {}) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
   const ytId = youtubeId(item.item_url);
   const media = !ytId && (item.item_media || []).length ? item.item_media : null;
@@ -1928,16 +1936,27 @@ function itemCard(item, { listMode = false } = {}) {
       }, `${predicted > 0 ? '+' : ''}${(predicted * 100).toFixed(0)}% match`)
     : null;
 
+  const actions = review
+    ? null
+    : h('div', { class: 'flex items-center gap-1 ml-auto' },
+        listButton(item),
+        listMode ? null : voteRow(item));
+
   return h('div', {
     class: 'card bg-base-200 border border-base-300 hover:border-primary/50 transition-colors cursor-pointer overflow-hidden',
     onclick: () => openReader(item),
   },
     h('div', { class: 'px-4 pt-3 pb-2' },
       h('div', { class: 'flex items-start gap-2' },
-        h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0 line-clamp-2' }, item.item_title || 'Untitled'),
-        listMode ? null : explainButton(item),
+        h('h3', {
+          class: `font-semibold leading-snug flex-1 min-w-0 ${review ? '' : 'line-clamp-2'}`,
+        }, item.item_title || 'Untitled'),
+        listMode || review ? null : explainButton(item),
         openLinkButton(item.item_url)),
-      !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
+      (review || !mediaBlock) && excerpt
+        && h('p', {
+          class: `text-xs text-base-content/50 mt-1 ${review ? '' : 'line-clamp-2'}`,
+        }, excerpt)),
     mediaBlock,
     h('div', { class: 'flex items-center gap-1 px-2 py-1.5' },
       h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-base-content/50 min-w-0 pl-2' },
@@ -1946,9 +1965,7 @@ function itemCard(item, { listMode = false } = {}) {
         published && h('span', { class: 'whitespace-nowrap' }, published),
         listMode ? null : predictedBadge,
         listMode ? null : duplicateBadge(item)),
-      h('div', { class: 'flex items-center gap-1 ml-auto' },
-        listButton(item),
-        listMode ? null : voteRow(item))));
+      actions));
 }
 
 // ---------- why recommended ----------
@@ -2148,154 +2165,153 @@ async function openExplanationModal(item) {
 // Detection collapses two articles when one number clears a fixed cutoff.
 // This is where you tell it when that was wrong, and where enough of those
 // answers turn into a model that decides better than the cutoff did.
+//
+// One pair at a time, rather than a page of them. Judging whether two articles
+// are the same story means actually reading both, and a list invites skimming
+// the headlines and clicking down the column. It also makes "what am I looking
+// at" unambiguous: there is one question on screen and two buttons under it.
 
-// Bumped whenever the queue is reloaded or left, so a verdict that comes back
-// after you have moved on cannot repaint a queue it is no longer part of.
-let duplicatesToken = 0;
+const duplicatesState = {
+  // Pairs fetched and not yet answered. The queue is kept a few deep so
+  // answering one shows the next immediately rather than after a round trip.
+  queue: [],
+  model: null,
+  // Bumped on every reload and on leaving the view, so a response that arrives
+  // late cannot paint over a queue it is no longer part of.
+  token: 0,
+  loading: false,
+  done: false,
+  // How many you have answered in this sitting, for the "N judged" line. The
+  // model's own totals are the authority on how many exist.
+  answered: 0,
+  // Pairs answered in this sitting. The server filters out what you have
+  // judged, but a refill already in flight when you answer was asked before
+  // the verdict existed, so its reply can still carry that pair -- and the
+  // queue it lands in no longer holds it to be deduplicated against.
+  judged: new Set(),
+};
 
-// What the model line says, and it spends most of its life saying "not yet".
-// That state has to explain itself: a bare "0 of 12" reads as broken rather
-// than as the beginning of something.
-function duplicateModelPanel(model) {
-  const judged = model.confirmed + model.rejected;
-  const pct = model.accuracy == null ? null : Math.round(model.accuracy * 100);
+// How many pairs to hold. Three is enough that the next one is always ready
+// and the one after that is being decoded, without asking the server for a
+// screenful of articles nobody may ever look at.
+const DUPLICATES_AHEAD = 3;
+const DUPLICATES_FETCH = 8;
 
-  const counts = h('div', { class: 'flex items-center gap-3 text-xs' },
-    h('span', { class: 'text-success font-semibold' }, `${model.confirmed} same`),
-    h('span', { class: 'text-error font-semibold' }, `${model.rejected} different`));
-
-  if (!model.trained) {
-    const remaining = Math.max(0, model.needed - judged);
-    return h('div', { class: 'alert bg-base-200 border border-base-300 text-sm' },
-      h('div', { class: 'flex flex-col gap-1' },
-        h('p', { class: 'font-semibold' },
-          remaining
-            ? `${remaining} more to go before Aggy can learn from these`
-            : 'Waiting on an answer of each kind'),
-        h('p', { class: 'text-xs text-base-content/60' },
-          remaining
-            ? 'Until then the fixed cutoff decides, exactly as it does today. '
-              + 'Your answers already count though: a pair you reject is never '
-              + 'collapsed again, and one you confirm collapses now.'
-            : 'A model needs to have seen both answers. Everything judged so '
-              + 'far points the same way, so there is no line to draw yet.'),
-        counts));
+// Pull the next pair's pictures into the browser cache while you are still
+// reading this one. Without it the card appears instantly and then visibly
+// fills in, which reads as slower than waiting would have.
+function prefetchPairMedia(pair) {
+  if (!pair) return;
+  for (const article of [pair.candidate, pair.anchor]) {
+    const urls = [article.item_image_url, ...(article.item_media || []).map((m) => m.poster || m.url)];
+    for (const url of urls) {
+      if (!url) continue;
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = url;
+    }
   }
+}
 
-  return h('div', { class: 'alert bg-base-200 border border-base-300 text-sm' },
-    h('div', { class: 'flex flex-col gap-2 w-full min-w-0' },
-      h('div', { class: 'flex flex-wrap items-center gap-3' },
-        h('p', { class: 'font-semibold' }, 'Aggy is using your answers'),
-        counts,
-        pct != null
-          ? h('span', { class: 'badge badge-sm badge-ghost' }, `${pct}% on held-out pairs`)
-          : null),
-      // Which signals actually separated the answers. A positive weight pushes
-      // towards "same story", a negative one away from it.
-      model.coefficients.length
-        ? h('div', { class: 'flex flex-wrap gap-1.5' },
-            model.coefficients.slice(0, 4).map(([name, weight]) =>
-              h('span', {
-                class: `badge badge-sm ${weight >= 0 ? 'badge-success' : 'badge-error'} badge-outline`,
-                title: `weight ${weight.toFixed(2)}`,
-              }, `${weight >= 0 ? '↑' : '↓'} ${name}`)))
+// Progress towards a model, with a mark at the point it starts deciding.
+//
+// The bar deliberately runs past that mark rather than ending at it: answers
+// given afterwards still improve the model, and a bar that fills up and stops
+// says the opposite.
+function duplicateProgress(model, answered) {
+  const judged = model.confirmed + model.rejected;
+  const span = Math.max(model.needed * 2, judged + 2);
+  const pct = (value) => `${Math.min(100, (value / span) * 100)}%`;
+
+  const bar = h('div', { class: 'relative h-3 rounded-full bg-base-300 overflow-hidden' },
+    h('div', {
+      class: `h-full ${model.trained ? 'bg-success' : 'bg-primary'} transition-all duration-500`,
+      style: `width:${pct(judged)}`,
+    }));
+  // The mark sits on top of the track rather than inside the fill, so it stays
+  // visible once the fill has passed it.
+  const mark = h('div', {
+    class: 'absolute top-0 bottom-0 w-0.5 bg-base-content/40',
+    style: `left:${pct(model.needed)}`,
+  });
+  bar.append(mark);
+
+  const caption = model.trained
+    ? `Aggy is learning from your ${judged} answers`
+    : `${judged} of ${model.needed} before Aggy starts learning from them`;
+
+  return h('div', { class: 'flex flex-col gap-1.5' },
+    bar,
+    h('div', { class: 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs' },
+      h('span', { class: 'text-base-content/60' }, caption),
+      h('span', { class: 'text-success font-semibold' }, `${model.confirmed} same`),
+      h('span', { class: 'text-error font-semibold' }, `${model.rejected} different`),
+      answered
+        ? h('span', { class: 'text-base-content/40 ml-auto' }, `${answered} this session`)
         : null));
 }
 
-// One side of a pair. Deliberately not the feed's card: this is a comparison,
-// so the two sit level and show the same fields in the same order, and the
-// picture is small enough that the headline stays the thing you read first.
-function reviewArticle(article, { anchor = false } = {}) {
-  const thumb = article.item_image_url
-    ? h('img', {
-        src: article.item_image_url, alt: '', loading: 'lazy',
-        class: 'w-full h-28 object-cover rounded bg-base-300',
-        onerror: (e) => e.target.remove(),
-      })
-    : null;
-  return h('div', { class: 'flex-1 min-w-0 flex flex-col gap-2' },
-    thumb,
-    h('div', { class: 'flex items-center gap-1.5 flex-wrap' },
-      sourceBadge(article.item_source_name),
-      article.item_date_published
-        ? h('span', { class: 'text-[10px] text-base-content/40' }, timeAgo(article.item_date_published))
+// What the model line says. It spends most of its life saying "not yet", and
+// that state has to explain itself: a bare count reads as broken rather than
+// as the beginning of something.
+function duplicateModelPanel(model, answered) {
+  const judged = model.confirmed + model.rejected;
+  const pct = model.accuracy == null ? null : Math.round(model.accuracy * 100);
+
+  let note;
+  if (model.trained) {
+    note = h('div', { class: 'flex flex-wrap items-center gap-2' },
+      h('span', { class: 'text-xs text-base-content/60' },
+        'Your answers now decide, not the fixed cutoff.'),
+      pct != null
+        ? h('span', { class: 'badge badge-sm badge-ghost' }, `${pct}% on held-out pairs`)
         : null,
-      anchor ? h('span', { class: 'badge badge-xs badge-ghost' }, 'kept') : null),
-    h('a', {
-      href: article.item_url, target: '_blank', rel: 'noopener noreferrer',
-      class: 'text-sm font-semibold leading-snug link link-hover line-clamp-3',
-    }, article.item_title || article.item_url),
-    article.item_excerpt
-      ? h('p', { class: 'text-xs text-base-content/50 line-clamp-3' }, article.item_excerpt)
-      : null);
-}
-
-// The question above each pair. It differs by kind, because "was this right?"
-// and "should this have happened?" are different questions and answering the
-// wrong one wastes the judgement.
-function reviewQuestion(pair) {
-  const pct = Math.round(pair.similarity * 100);
-  if (pair.grouped) {
-    const how = pair.signal === 'canonical_url'
-      ? 'same link'
-      : pair.signal === 'confirmed'
-        ? 'you confirmed this'
-        : `${pct}% alike`;
-    return h('div', { class: 'flex items-center gap-2 flex-wrap' },
-      h('span', { class: 'badge badge-sm badge-warning badge-outline' }, 'collapsed now'),
-      h('span', { class: 'text-xs text-base-content/50' },
-        `Aggy is hiding the left one behind the right (${how})`));
+      // Which signals actually separated the answers: a positive weight pushes
+      // towards "same story", a negative one away from it.
+      ...model.coefficients.slice(0, 3).map(([name, weight]) =>
+        h('span', {
+          class: `badge badge-sm ${weight >= 0 ? 'badge-success' : 'badge-error'} badge-outline`,
+          title: `weight ${weight.toFixed(2)}`,
+        }, `${weight >= 0 ? '↑' : '↓'} ${name}`)));
+  } else if (judged >= model.needed) {
+    note = h('p', { class: 'text-xs text-base-content/60' },
+      'A model needs to have seen both answers. Everything judged so far points '
+      + 'the same way, so there is no line to draw yet.');
+  } else {
+    note = h('p', { class: 'text-xs text-base-content/60' },
+      'Until then the fixed cutoff decides, exactly as it does today. Your '
+      + 'answers already count though: a pair you reject is never collapsed '
+      + 'again, and one you confirm collapses now.');
   }
-  return h('div', { class: 'flex items-center gap-2 flex-wrap' },
-    h('span', { class: 'badge badge-sm badge-ghost' }, 'both shown'),
-    h('span', { class: 'text-xs text-base-content/50' },
-      `${pct}% alike — just under the cutoff, so Aggy left both in your feed`));
+
+  return h('div', { class: 'rounded-box border border-base-300 bg-base-200 p-4 flex flex-col gap-3' },
+    duplicateProgress(model, answered),
+    note);
 }
 
-// One pair, with the two buttons. The card removes itself on an answer rather
-// than reloading the queue: a list that reshuffles under you after every click
-// is miserable to work through, and the ordering is only a suggestion anyway.
-function reviewPairCard(pair, onAnswered) {
-  const card = h('div', { class: 'card bg-base-200 border border-base-300 overflow-hidden' });
+// The pair on screen: two feed cards side by side, and the two buttons.
+function duplicatePairView(pair, onAnswer) {
+  const stage = h('div', { class: 'flex flex-col gap-4' });
 
-  const answer = async (isDuplicate, button) => {
-    const token = duplicatesToken;
-    card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-    button.classList.add('loading');
-    try {
-      const result = await sdk.feedDuplicateVerdict({
-        feed_name_hash: currentFeed.feed_name_hash,
-        candidate_hash: pair.candidate.item_hash,
-        anchor_hash: pair.anchor.item_hash,
-        is_duplicate: isDuplicate,
-      });
-      if (token !== duplicatesToken) return;
-      collapseCard(card);
-      onAnswered(result);
-    } catch (err) {
-      toast(err.message, 'alert-error');
-      card.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-      button.classList.remove('loading');
-    }
-  };
-
-  const sameBtn = h('button', {
-    type: 'button', class: 'btn btn-sm btn-success gap-1.5',
-    onclick: (e) => answer(true, e.currentTarget),
-  }, '✓', h('span', {}, 'Same story'));
+  const buttons = h('div', { class: 'flex justify-center gap-3' });
   const differentBtn = h('button', {
-    type: 'button', class: 'btn btn-sm btn-error btn-outline gap-1.5',
-    onclick: (e) => answer(false, e.currentTarget),
-  }, '✕', h('span', {}, 'Different'));
+    type: 'button', class: 'btn btn-error btn-outline gap-2 min-w-40',
+    onclick: (e) => onAnswer(false, e.currentTarget),
+  }, h('span', { class: 'text-lg leading-none' }, '✕'), 'Different');
+  const sameBtn = h('button', {
+    type: 'button', class: 'btn btn-success gap-2 min-w-40',
+    onclick: (e) => onAnswer(true, e.currentTarget),
+  }, h('span', { class: 'text-lg leading-none' }, '✓'), 'Same story');
+  render(buttons, differentBtn, sameBtn);
 
-  render(card,
-    h('div', { class: 'px-4 pt-3' }, reviewQuestion(pair)),
-    h('div', { class: 'flex gap-4 p-4' },
-      reviewArticle(pair.candidate),
-      h('div', { class: 'w-px bg-base-300 shrink-0' }),
-      reviewArticle(pair.anchor, { anchor: true })),
-    h('div', { class: 'flex justify-end gap-2 px-4 pb-4' }, differentBtn, sameBtn));
-  return card;
+  render(stage,
+    // Stacked on a phone, side by side from `md` up. The cards carry their own
+    // media and body, so on a narrow screen two columns would be two slivers.
+    h('div', { class: 'grid grid-cols-1 md:grid-cols-2 gap-4 items-start' },
+      itemCard(pair.candidate, { review: true }),
+      itemCard(pair.anchor, { review: true })),
+    buttons);
+  return stage;
 }
 
 async function showFeedDuplicates(feedHash) {
@@ -2316,62 +2332,125 @@ async function showFeedDuplicates(feedHash) {
 
   render($('duplicatesBreadcrumb'),
     h('a', { href: `#/feed/${feedHash}` }, currentFeed.feed_name));
-  loadDuplicateReview();
+  startDuplicateReview();
 }
 
-async function loadDuplicateReview() {
-  const token = ++duplicatesToken;
-  render($('duplicatesBody'), spinner());
+function startDuplicateReview() {
+  duplicatesState.token += 1;
+  duplicatesState.queue = [];
+  duplicatesState.model = null;
+  duplicatesState.done = false;
+  duplicatesState.answered = 0;
+  duplicatesState.judged = new Set();
+  // A request still in flight for the old token will not clear this itself,
+  // and leaving it set would have the next refill wait on a promise whose
+  // result is thrown away.
+  duplicatesState.loading = false;
   render($('duplicatesModel'));
+  render($('duplicatesBody'), spinner());
+  refillDuplicateQueue().then(showNextDuplicatePair);
+}
 
-  let data;
-  try {
-    data = await sdk.feedDuplicateReview({
-      feed_name_hash: currentFeed.feed_name_hash,
-      limit: 20,
-    });
-  } catch (err) {
-    if (token !== duplicatesToken) return;
-    render($('duplicatesBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
-    return;
+// Top the queue up, skipping pairs already in hand so a refill mid-session
+// does not offer the same pair twice.
+//
+// Returns the in-flight request when there is one rather than doing nothing,
+// so a caller that needs a pair *now* can wait on the refill already running
+// instead of concluding there are none.
+function refillDuplicateQueue() {
+  if (duplicatesState.done) return Promise.resolve();
+  if (duplicatesState.loading) return duplicatesState.loading;
+  const token = duplicatesState.token;
+
+  duplicatesState.loading = (async () => {
+    try {
+      const data = await sdk.feedDuplicateReview({
+        feed_name_hash: currentFeed.feed_name_hash,
+        limit: DUPLICATES_FETCH,
+      });
+      if (token !== duplicatesState.token) return;
+      duplicatesState.model = data.model;
+      const held = new Set(duplicatesState.queue.map(pairKeyOf));
+      duplicatesState.queue.push(...data.pairs.filter((pair) => {
+        const key = pairKeyOf(pair);
+        return !held.has(key) && !duplicatesState.judged.has(key);
+      }));
+      // Done means the server had nothing at all, not that nothing it sent was
+      // new: a refill while three pairs are still in hand gets those three
+      // back, and treating that as "run out" would end the session early.
+      if (!data.pairs.length) duplicatesState.done = true;
+    } catch (err) {
+      if (token === duplicatesState.token) toast(err.message, 'alert-error');
+    } finally {
+      if (token === duplicatesState.token) duplicatesState.loading = false;
+    }
+  })();
+  return duplicatesState.loading;
+}
+
+function pairKeyOf(pair) {
+  return [pair.candidate.item_hash, pair.anchor.item_hash].sort().join(':');
+}
+
+async function showNextDuplicatePair() {
+  const token = duplicatesState.token;
+  if (duplicatesState.model) {
+    render($('duplicatesModel'),
+      duplicateModelPanel(duplicatesState.model, duplicatesState.answered));
   }
-  if (token !== duplicatesToken) return;
 
-  render($('duplicatesModel'), duplicateModelPanel(data.model));
+  // Answering the last pair in hand while the next batch is still on its way
+  // is not the same as having run out, so wait for the refill rather than
+  // telling you there is nothing left.
+  if (!duplicatesState.queue.length && !duplicatesState.done) {
+    render($('duplicatesBody'), spinner());
+    await refillDuplicateQueue();
+    if (token !== duplicatesState.token) return;
+  }
 
-  if (!data.pairs.length) {
+  const pair = duplicatesState.queue[0];
+  if (!pair) {
     render($('duplicatesBody'), emptyState(
       '🧐',
-      'Nothing to judge right now',
+      duplicatesState.answered ? 'That is everything for now' : 'Nothing to judge right now',
       'Every pair Aggy is unsure about has been answered. More will turn up as '
       + 'articles arrive and the similarity pass links them.'));
     return;
   }
 
-  // The count left is the honest one: pairs already answered are gone from the
-  // queue, so it only ever goes down as you work.
-  const remaining = h('p', { class: 'text-xs text-base-content/50 mb-3' },
-    `${data.pairs.length} pair${data.pairs.length === 1 ? '' : 's'} to judge`);
-  const list = h('div', { class: 'flex flex-col gap-3' });
+  // The one after this, warmed while you read.
+  prefetchPairMedia(duplicatesState.queue[1]);
+  if (duplicatesState.queue.length <= DUPLICATES_AHEAD) refillDuplicateQueue();
 
-  let left = data.pairs.length;
-  const onAnswered = (result) => {
-    left -= 1;
-    remaining.textContent = left
-      ? `${left} pair${left === 1 ? '' : 's'} to judge`
-      : 'All caught up — reload for more';
-    // The model line moves as you answer, which is the whole feedback loop:
-    // the counts climb, then one day it says it is using them.
-    render($('duplicatesModel'), duplicateModelPanel(result.model));
-    if (result.outcome === 'split') {
-      toast('Put back in your feed', 'alert-success');
-    } else if (result.outcome === 'grouped') {
-      toast('Collapsed into one', 'alert-success');
+  const onAnswer = async (isDuplicate, button) => {
+    const token = duplicatesState.token;
+    view.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    button.classList.add('loading');
+    try {
+      const result = await sdk.feedDuplicateVerdict({
+        feed_name_hash: currentFeed.feed_name_hash,
+        candidate_hash: pair.candidate.item_hash,
+        anchor_hash: pair.anchor.item_hash,
+        is_duplicate: isDuplicate,
+      });
+      if (token !== duplicatesState.token) return;
+      duplicatesState.judged.add(pairKeyOf(pair));
+      duplicatesState.queue.shift();
+      duplicatesState.model = result.model;
+      duplicatesState.answered += 1;
+      if (result.outcome === 'split') toast('Put back in your feed', 'alert-success');
+      else if (result.outcome === 'grouped') toast('Collapsed into one', 'alert-success');
+      showNextDuplicatePair();
+    } catch (err) {
+      if (token !== duplicatesState.token) return;
+      toast(err.message, 'alert-error');
+      view.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      button.classList.remove('loading');
     }
   };
 
-  render(list, data.pairs.map((pair) => reviewPairCard(pair, onAnswered)));
-  render($('duplicatesBody'), remaining, list);
+  const view = duplicatePairView(pair, onAnswer);
+  render($('duplicatesBody'), view);
 }
 
 // Animate a voted card shrinking away, then drop it from the DOM.
