@@ -1,7 +1,9 @@
+import json
 import logging
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from typing import List, Optional, Union
 
@@ -40,7 +42,14 @@ from ranking.engine import (
     start_training,
     training_summary,
 )
-from ranking.explain import explain_item
+from ranking.explain import (
+    ExplanationBaseline,
+    ExplanationStarted,
+    ExplanationUnavailable,
+    FieldScored,
+    explain_item,
+    explain_item_stream,
+)
 
 feed_router = APIRouter()
 
@@ -340,19 +349,6 @@ def get_item_explanation(
             status_code=409,
             detail="Not enough votes yet to explain this recommendation.",
         )
-    def _preview(p) -> FieldPreviewResponse:
-        return FieldPreviewResponse(
-            text=p.text,
-            image_url=p.image_url,
-            source=p.source,
-            author=p.author,
-            date_published=p.date_published,
-            has_image=p.has_image,
-            has_media=p.has_media,
-            image_embedded=p.image_embedded,
-            voted_neighbors=p.voted_neighbors,
-        )
-
     return ItemExplanationResponse(
         model_name=explanation.model_name,
         baseline_score=explanation.baseline_score,
@@ -367,6 +363,131 @@ def get_item_explanation(
             )
             for f in explanation.fields
         ],
+    )
+
+
+def _preview(p) -> FieldPreviewResponse:
+    """One article's own data for a field, as the explanation shows it. Shared
+    by the whole-body route and the streaming one, which send the same thing."""
+    return FieldPreviewResponse(
+        text=p.text,
+        image_url=p.image_url,
+        source=p.source,
+        author=p.author,
+        date_published=p.date_published,
+        has_image=p.has_image,
+        has_media=p.has_media,
+        image_embedded=p.image_embedded,
+        voted_neighbors=p.voted_neighbors,
+    )
+
+
+# The explanation as it is computed, one JSON object per line.
+#
+# Fitting the model is the slow part and it is the *last* thing the reader
+# needs: what the model was shown is known before it is fitted, and each
+# field's contribution lands one at a time after it. Holding all of that back
+# to answer once means several seconds of a spinner over a modal that could
+# have been full of the article's own text from the start.
+#
+# NDJSON rather than server-sent events because this needs the Authorization
+# header, which EventSource cannot set. Left out of the OpenAPI schema on
+# purpose: the generated SDK parses a whole body as one JSON document, which is
+# exactly what this is not -- the reader in app.js consumes it line by line.
+#
+# Line types:
+#   {"type": "started",  "fields": [...], "preview": {...}}
+#   {"type": "baseline", "model_name": str, "baseline_score": float}
+#   {"type": "field",    "field": str, "marks": [{field, sign, level}, ...]}
+#   {"type": "done"}
+#   {"type": "error",    "detail": str}
+#
+# A `field` line carries the marks for every field measured so far, not just
+# its own: marks are ranked against each other, so an earlier field's level can
+# move as later ones land (see ranking.explain.FieldScored).
+@feed_router.get(
+    "/item_explanation_stream",
+    summary="Stream an item's explanation as it is computed",
+    include_in_schema=False,
+)
+def get_item_explanation_stream(
+    feed_name_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+):
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    events = explain_item_stream(feed, item_url_hash)
+
+    # Drawn from the generator here, before the response starts, so "not enough
+    # votes yet" is still a 409 the client can read as a status rather than an
+    # error line inside a 200.
+    try:
+        first = next(events)
+    except ExplanationUnavailable as unavailable:
+        raise HTTPException(status_code=409, detail=str(unavailable)) from None
+    except StopIteration:
+        raise HTTPException(
+            status_code=409,
+            detail="Not enough votes yet to explain this recommendation.",
+        ) from None
+
+    def encode(event) -> dict:
+        if isinstance(event, ExplanationStarted):
+            return {
+                "type": "started",
+                "fields": [
+                    {
+                        "field": outline.field,
+                        "label": outline.label,
+                        "description": outline.description,
+                    }
+                    for outline in event.fields
+                ],
+                "preview": _preview(event.preview).model_dump(mode="json"),
+            }
+        if isinstance(event, ExplanationBaseline):
+            return {
+                "type": "baseline",
+                "model_name": event.model_name,
+                "baseline_score": event.baseline_score,
+            }
+        if isinstance(event, FieldScored):
+            return {
+                "type": "field",
+                "field": event.field,
+                "marks": [
+                    {"field": m.field, "sign": m.sign, "level": m.level}
+                    for m in event.marks
+                ],
+            }
+        raise TypeError(f"unknown explanation event {type(event)!r}")
+
+    def lines():
+        yield json.dumps(encode(first)) + "\n"
+        try:
+            for event in events:
+                yield json.dumps(encode(event)) + "\n"
+        except ExplanationUnavailable as unavailable:
+            # Choosing the model is left until after the previews, so this can
+            # land mid-stream. It is a reason, not a fault: say it as one.
+            yield json.dumps({"type": "error", "detail": str(unavailable)}) + "\n"
+            return
+        except Exception as e:
+            # The response is already a 200 by now, so a failure has to be said
+            # in the body. The reader shows it in place of the marks and keeps
+            # the previews it already has.
+            logging.exception(f"Explaining {item_url_hash} failed: {e}")
+            failed = {"type": "error", "detail": "Could not finish this explanation."}
+            yield json.dumps(failed) + "\n"
+            return
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        # nginx and friends will happily sit on a streamed body until it ends,
+        # which would undo the whole point of sending it in pieces.
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 

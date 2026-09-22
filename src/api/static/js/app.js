@@ -134,6 +134,10 @@ function bindControls() {
     updateGifPlayback();
   });
 
+  // Closing the explanation drops the stream behind it. The fields land one at
+  // a time over several seconds, and there is nothing left to paint them into.
+  $('explainModal').addEventListener('close', stopExplaining);
+
   // infinite scroll: when the load-more button scrolls near the viewport,
   // click it automatically
   new IntersectionObserver((entries) => {
@@ -2003,10 +2007,17 @@ function fieldDetail(f) {
 }
 
 // A tappable field row: the label + marks, expanding to show fieldDetail().
+//
+// The marks arrive after the row does. The row is built from what the model is
+// shown, which is known immediately, while a mark waits on the model being
+// fitted and that field being ablated. So the marks live in their own element
+// the caller holds on to and writes into as each measurement lands.
 function fieldRow(f) {
   const detail = fieldDetail(f);
   detail.classList.add('hidden');
   const chevron = h('span', { class: 'text-base-content/30 text-xs w-3' }, '▸');
+  const marks = h('span', { class: 'text-lg leading-none tracking-widest' },
+    h('span', { class: 'loading loading-dots loading-xs opacity-30' }));
   const header = h('button', {
     type: 'button', class: 'w-full flex items-center justify-between py-1.5 text-left',
     onclick: () => {
@@ -2015,28 +2026,110 @@ function fieldRow(f) {
     },
   },
     h('span', { class: 'flex items-center gap-2' }, chevron, h('span', { class: 'text-sm' }, f.label)),
-    h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level)));
-  return h('div', { class: 'border-b border-base-300 last:border-b-0' }, header, detail);
+    marks);
+  const row = h('div', { class: 'border-b border-base-300 last:border-b-0' }, header, detail);
+  return { row, marks };
 }
 
-function renderExplanation(data) {
-  const pct = Math.round(data.baseline_score * 100);
-  render($('explainBody'),
-    h('div', { class: 'flex flex-col' }, data.fields.map(fieldRow)),
-    h('p', { class: 'text-xs text-base-content/50 mt-4' },
-      `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: ${MODEL_LABELS[data.model_name] || data.model_name}`));
+// Read an NDJSON stream a line at a time, calling back with each parsed
+// object. The generated SDK parses a whole body as one JSON document, which is
+// exactly what this is not, so the request is made by hand -- and with fetch
+// rather than EventSource, which cannot send the Authorization header.
+async function streamNdjson(path, query, onEvent, signal) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v != null) params.append(k, String(v));
+  }
+  const headers = {};
+  if (sdk.token) headers['Authorization'] = `Bearer ${sdk.token}`;
+  const resp = await fetch(`${sdk.baseUrl}${path}?${params}`, { headers, signal });
+  if (!resp.ok) {
+    if (resp.status === 401) sdk.token = null;
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || `Request failed (${resp.status})`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // A chunk can split a line anywhere, so everything up to the last newline
+    // is whole and whatever follows it waits for the next chunk.
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line));
+    }
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer));
+}
+
+// Only one explanation is ever on screen, and the modal can be closed or
+// pointed at another article long before the model has finished with this one.
+let explainRun = null;
+
+function stopExplaining() {
+  if (explainRun) explainRun.abort();
+  explainRun = null;
 }
 
 async function openExplanationModal(item) {
+  stopExplaining();
+  const controller = new AbortController();
+  explainRun = controller;
   showModal('explainModal');
   render($('explainBody'), spinner());
+
+  // The footer says which model this is and what it predicted, neither of
+  // which is known until it has been fitted.
+  const footer = h('p', { class: 'text-xs text-base-content/50 mt-4' },
+    'Scoring each piece…');
+  const markHosts = new Map();
+
   try {
-    renderExplanation(await sdk.feedItemExplanation({
+    await streamNdjson('/feed/item_explanation_stream', {
       feed_name_hash: currentFeed.feed_name_hash,
       item_url_hash: item.item_hash,
-    }));
+    }, (event) => {
+      if (event.type === 'started') {
+        // Everything the model is shown, on screen before it has been fitted.
+        markHosts.clear();
+        const rows = event.fields.map((f) => {
+          const { row, marks } = fieldRow({ ...f, preview: event.preview });
+          markHosts.set(f.field, marks);
+          return row;
+        });
+        render($('explainBody'), h('div', { class: 'flex flex-col' }, rows), footer);
+      } else if (event.type === 'baseline') {
+        const pct = Math.round(event.baseline_score * 100);
+        footer.textContent = `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: `
+          + `${MODEL_LABELS[event.model_name] || event.model_name}`;
+      } else if (event.type === 'field') {
+        // Every mark measured so far, not just this field's: a mark is a rank
+        // among the fields, so a new measurement can move an earlier one.
+        for (const mark of event.marks) {
+          const host = markHosts.get(mark.field);
+          if (host) render(host, contributionMarks(mark.sign, mark.level));
+        }
+      } else if (event.type === 'error') {
+        footer.textContent = event.detail;
+      }
+    }, controller.signal);
+    // A field the stream never reached would otherwise spin forever.
+    for (const host of markHosts.values()) {
+      if (host.querySelector('.loading')) render(host, contributionMarks(0, 0));
+    }
   } catch (err) {
-    render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+    if (controller.signal.aborted) return;
+    // Nothing is drawn yet when the request itself fails; once the fields are
+    // up, the previews are still worth keeping and only the footer carries
+    // the bad news.
+    if (markHosts.size) footer.textContent = err.message;
+    else render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+  } finally {
+    if (explainRun === controller) explainRun = null;
   }
 }
 

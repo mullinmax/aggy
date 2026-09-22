@@ -153,6 +153,26 @@ def _load_neighbors(cur, feed: Feed, url_hashes: List[str]) -> dict:
     return neighbors
 
 
+def load_item_features(feed: Feed, url_hash: str) -> Optional[ItemFeatures]:
+    """One article's features, without reading the feed it sits in.
+
+    Explaining a single recommendation needs the votes (to fit the model) and
+    the one article being explained -- not the thousands of others, each
+    carrying a full embedding vector. Asking for the whole feed to reach one
+    row is most of what looking at an explanation used to cost.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            _FEED_ITEMS_SQL + " AND c.item_url_hash = %s",
+            (feed.user_hash, feed.name_hash, url_hash),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        neighbors = _load_neighbors(cur, feed, [row["url_hash"]])
+    return _row_to_features(row, neighbors)
+
+
 def load_feed_features(
     feed: Feed, labeled_only: bool = False, unscored_only: bool = False
 ) -> List[ItemFeatures]:

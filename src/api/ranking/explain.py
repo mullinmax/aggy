@@ -14,17 +14,22 @@ random substitutes. Tapping a field also shows a preview of exactly what was
 being evaluated for it (this article's text, its thumbnail, its source, …).
 
 Computed on demand (it retrains the winning model on the feed's votes), because
-users look at it rarely.
+users look at it rarely. That retrain is the slow part, so the work is exposed
+as a generator rather than one return value: what the model was shown (the
+previews) is known before it is fitted and goes out first, and each field's
+contribution follows as its ablation finishes. `explain_item` drains the
+generator for callers that want the finished thing; the streaming route relays
+each step as it lands.
 """
 
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from db.base import get_db_con
 from db.feed import Feed
-from .engine import MIN_LABELS_TO_RANK, load_feed_features
+from .engine import MIN_LABELS_TO_RANK, load_feed_features, load_item_features
 from .models import ItemFeatures, all_models, evaluate_models
 
 # Marks rank the fields against each other rather than against a fixed Δ scale,
@@ -141,6 +146,63 @@ class ItemExplanation:
     fields: List[FieldContribution]
 
 
+class ExplanationUnavailable(Exception):
+    """The feed has too few votes to explain anything, the article is not in
+    it, or no model could be chosen. Raised on the generator's first step, so a
+    caller can answer with a status rather than an empty stream."""
+
+
+@dataclass
+class FieldOutline:
+    """A field the model reads, before anything has been measured about it."""
+
+    field: str
+    label: str
+    description: str
+
+
+@dataclass
+class ExplanationStarted:
+    """What the model is being shown, sent before it is fitted. This is the
+    whole point of streaming: the previews are a property of the article and
+    cost one query, while the marks wait on a retrain."""
+
+    fields: List[FieldOutline]
+    preview: FieldPreview
+
+
+@dataclass
+class ExplanationBaseline:
+    """The model chose and fitted, and the article scored as it stands."""
+
+    model_name: str
+    baseline_score: float
+
+
+@dataclass
+class FieldMark:
+    field: str
+    sign: int
+    level: int
+
+
+@dataclass
+class FieldScored:
+    """One field's ablation, finished.
+
+    `marks` covers every field scored so far, not just this one. Marks are
+    ranked against each other (see `_assign_marks`), so a field's level is only
+    ever true of the set it was ranked within: each new field can move an
+    earlier one, and the last event is the only one ranked over all of them.
+    Sending the whole set each time keeps the display honest at every step
+    rather than leaving stale levels behind it.
+    """
+
+    field: str
+    delta: float
+    marks: List[FieldMark]
+
+
 def _winner_model(feed: Feed, labeled: List[ItemFeatures]):
     """The model currently ranking this feed, so the explanation matches the
     score the user sees. Prefer the persisted choice; fall back to evaluating."""
@@ -236,35 +298,39 @@ def _preview_text(row: dict) -> Optional[str]:
     return "\n\n".join(part for part in (title, body) if part) or None
 
 
-def explain_item(
-    feed: Feed, item_url_hash: str
-) -> Optional[ItemExplanation]:
-    """Return a per-field breakdown of what drives this item's predicted score,
-    or None when the feed has too few votes / the item isn't in the feed.
+def explain_item_stream(feed: Feed, item_url_hash: str) -> Iterator[object]:
+    """Walk the explanation, yielding each step as it is finished.
 
-    Each field is scored by blanking it out on the article and re-evaluating:
-    the drop (or rise) versus the full-article baseline is its contribution."""
-    features = load_feed_features(feed)
-    labeled = [f for f in features if f.label is not None]
-    if len(labeled) < MIN_LABELS_TO_RANK:
-        return None
+    Order is deliberate. `ExplanationStarted` carries the previews -- what the
+    model is shown for each field -- and goes out before the model is fitted,
+    because it is a fact about the article and needs one query. Then
+    `ExplanationBaseline` once the winner is fitted and the article scored as
+    it stands. Then one `FieldScored` per field, each blanking that field out
+    and re-scoring: the drop (or rise) versus the baseline is its
+    contribution.
 
-    target = next((f for f in features if f.url_hash == item_url_hash), None)
+    Raises ExplanationUnavailable when it cannot go on: on the first step when
+    the feed has too few votes or the article is not in it, and after the
+    previews when no model could be chosen -- picking one is deliberately left
+    until then, so the slow path through it cannot hold the previews up.
+    """
+    target = load_item_features(feed, item_url_hash)
     if target is None:
-        return None
+        raise ExplanationUnavailable("That article is not in this feed.")
 
-    model = _winner_model(feed, labeled)
-    if model is None:
-        return None
-    model.fit(labeled)
-    # The votes the model was fitted on, which is exactly the set the neighbour
-    # field is allowed to read -- so the preview's count matches what was
-    # actually scored rather than every vote in the feed.
+    labeled = load_feed_features(feed, labeled_only=True)
+    if len(labeled) < MIN_LABELS_TO_RANK:
+        raise ExplanationUnavailable(
+            "Not enough votes yet to explain this recommendation."
+        )
+
+    # The votes the model will be fitted on, which is exactly the set the
+    # neighbour field is allowed to read -- so the preview's count matches what
+    # is actually scored rather than every vote in the feed.
     voted_hashes = {f.url_hash for f in labeled}
 
     # score the article as-of now (not vote time)
     target = replace(target, label_date=None)
-    baseline = float(model.predict([target])[0][0])
 
     row = _load_item_display(feed, item_url_hash)
     preview = FieldPreview(
@@ -282,32 +348,88 @@ def explain_item(
             if neighbor_hash in voted_hashes
         ),
     )
+    yield ExplanationStarted(
+        fields=[
+            FieldOutline(field=field, label=label, description=description)
+            for field, label, _null_map, description in _FIELDS
+        ],
+        preview=preview,
+    )
 
-    # Score every single-field ablation first, then assign marks from the whole
-    # set so they're normalized against each other (see _assign_marks).
-    deltas = []
-    for _field, _label, null_map, _description in _FIELDS:
+    # After the previews, deliberately. Choosing the model falls back to
+    # cross-validating the whole zoo when the feed has no persisted winner,
+    # which is the slowest thing the API does -- and nothing in the previews
+    # depends on which model it lands on.
+    model = _winner_model(feed, labeled)
+    if model is None:
+        raise ExplanationUnavailable("No model has been chosen for this feed.")
+
+    model.fit(labeled)
+    baseline = float(model.predict([target])[0][0])
+    yield ExplanationBaseline(model_name=model.name, baseline_score=baseline)
+
+    deltas: List[float] = []
+    for field, _label, null_map, _description in _FIELDS:
         ablated = replace(target, **null_map)
         score = float(model.predict([ablated])[0][0])
         # removing a helpful field lowers the score, so baseline - score > 0
         deltas.append(baseline - score)
-
-    marks = _assign_marks(deltas)
-    contributions = [
-        FieldContribution(
+        # Marks are ranked across the fields, so they are recomputed over
+        # everything measured so far and resent whole (see FieldScored).
+        marks = _assign_marks(deltas)
+        yield FieldScored(
             field=field,
-            label=label,
-            sign=sign,
-            level=level,
-            delta=delta,
-            description=description,
-            preview=preview,
+            delta=deltas[-1],
+            marks=[
+                FieldMark(field=f[0], sign=sign, level=level)
+                for f, (sign, level) in zip(_FIELDS, marks)
+            ],
         )
-        for (field, label, _null_map, description), delta, (sign, level) in zip(
-            _FIELDS, deltas, marks
-        )
-    ]
+
+
+def explain_item(feed: Feed, item_url_hash: str) -> Optional[ItemExplanation]:
+    """The finished per-field breakdown of what drives this item's predicted
+    score, or None when the feed has too few votes / the item isn't in the
+    feed.
+
+    The whole of `explain_item_stream`, drained: the marks that come back are
+    the last ones it sent, which are the only ones ranked over every field.
+    """
+    model_name: Optional[str] = None
+    baseline = 0.0
+    deltas: dict = {}
+    marks: dict = {}
+    preview: Optional[FieldPreview] = None
+
+    try:
+        for event in explain_item_stream(feed, item_url_hash):
+            if isinstance(event, ExplanationStarted):
+                preview = event.preview
+            elif isinstance(event, ExplanationBaseline):
+                model_name = event.model_name
+                baseline = event.baseline_score
+            elif isinstance(event, FieldScored):
+                deltas[event.field] = event.delta
+                marks = {mark.field: mark for mark in event.marks}
+    except ExplanationUnavailable:
+        return None
+
+    if model_name is None or preview is None:
+        return None
 
     return ItemExplanation(
-        model_name=model.name, baseline_score=baseline, fields=contributions
+        model_name=model_name,
+        baseline_score=baseline,
+        fields=[
+            FieldContribution(
+                field=field,
+                label=label,
+                sign=marks[field].sign,
+                level=marks[field].level,
+                delta=deltas[field],
+                description=description,
+                preview=preview,
+            )
+            for field, label, _null_map, description in _FIELDS
+        ],
     )

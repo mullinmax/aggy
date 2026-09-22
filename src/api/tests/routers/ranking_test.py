@@ -1,10 +1,12 @@
 """Integration tests for feed item filters/sorts and the ranking endpoints."""
 
+import json
 import time
 
 from pydantic import HttpUrl
 
 from db.item_state import ItemState
+from ranking import explain
 from tests.testing_utils import build_api_request_args
 
 
@@ -419,6 +421,174 @@ def test_item_explanation(
     assert image_preview["has_image"] is True  # item[4] is even/imaged
     # no vision model in the test, so the image is scored by presence only
     assert image_preview["image_embedded"] is False
+
+
+def test_item_explanation_streams_the_previews_before_the_marks(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    """The point of the stream: what the model is shown arrives before the
+    model has been fitted, so the modal has content in it while the slow part
+    runs."""
+    items = _make_items(existing_feed, existing_source, unique_item_strict)
+    for i, item in enumerate(items[:4]):
+        ItemState.set_state(
+            user_hash=existing_user.name_hash,
+            feed_hash=existing_feed.name_hash,
+            item_url_hash=item.url_hash,
+            score=1 if i % 2 == 0 else -1,
+            is_read=True,
+        )
+
+    args = build_api_request_args(
+        path="/feed/item_explanation_stream",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": items[4].url_hash,
+        },
+        token=token,
+    )
+    response = client.get(**args)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+
+    # order is the promise: content, then the fitted model, then one field at a
+    # time, then an explicit end
+    assert events[0]["type"] == "started"
+    assert events[1]["type"] == "baseline"
+    assert events[-1]["type"] == "done"
+    assert [e["type"] for e in events[2:-1]] == ["field"] * len(events[2:-1])
+
+    # the first line already carries every field's label and the article's own
+    # data, with nothing measured yet
+    started = events[0]
+    listed = {f["field"] for f in started["fields"]}
+    assert listed >= {"text", "image", "source", "author", "recency", "media"}
+    assert "similar" in listed
+    assert all(f["label"] and f["description"] for f in started["fields"])
+    assert started["preview"]["text"]
+    assert started["preview"]["has_image"] is True
+    assert "marks" not in started
+
+    assert events[1]["model_name"]
+    assert isinstance(events[1]["baseline_score"], float)
+
+    # every field is measured exactly once, in the order the modal lists them
+    scored = [e["field"] for e in events[2:-1]]
+    assert scored == [f["field"] for f in started["fields"]]
+
+    # a field line re-sends every mark measured so far, because a mark is a
+    # rank among the fields rather than a fact about one
+    for i, event in enumerate(events[2:-1], start=1):
+        assert [m["field"] for m in event["marks"]] == scored[:i]
+        for mark in event["marks"]:
+            assert mark["level"] in (0, 1, 2)
+            assert mark["sign"] in (-1, 0, 1)
+            assert (mark["level"] == 0) == (mark["sign"] == 0)
+
+    # and the last line's marks are the ones the whole-body route returns,
+    # since those are the only ones ranked over every field
+    whole_args = build_api_request_args(
+        path="/feed/item_explanation",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": items[4].url_hash,
+        },
+        token=token,
+    )
+    whole = client.get(**whole_args).json()
+    assert {(m["field"], m["sign"], m["level"]) for m in events[-2]["marks"]} == {
+        (f["field"], f["sign"], f["level"]) for f in whole["fields"]
+    }
+
+
+def test_the_previews_go_out_before_the_model_is_fitted(
+    monkeypatch, existing_user, existing_feed, existing_source, unique_item_strict
+):
+    """The whole reason the explanation streams.
+
+    Fitting the model on the feed's votes is the slow step, and what the model
+    is shown does not depend on it. A refactor that moved the fit earlier would
+    still pass every test about the stream's contents while putting the spinner
+    back, so the order is asserted directly.
+    """
+    items = _make_items(existing_feed, existing_source, unique_item_strict)
+    for i, item in enumerate(items[:4]):
+        ItemState.set_state(
+            user_hash=existing_user.name_hash,
+            feed_hash=existing_feed.name_hash,
+            item_url_hash=item.url_hash,
+            score=1 if i % 2 == 0 else -1,
+            is_read=True,
+        )
+
+    order = []
+    choose = explain._winner_model
+
+    def watched(feed, labeled):
+        model = choose(feed, labeled)
+        fit = model.fit
+
+        def record(rows):
+            order.append("fit")
+            return fit(rows)
+
+        model.fit = record
+        return model
+
+    monkeypatch.setattr(explain, "_winner_model", watched)
+    for event in explain.explain_item_stream(existing_feed, items[4].url_hash):
+        order.append(type(event).__name__)
+
+    assert order.index("ExplanationStarted") < order.index("fit")
+    # and the first field's measurement necessarily comes after it
+    assert order.index("fit") < order.index("FieldScored")
+
+
+def test_explaining_one_article_does_not_read_the_whole_feed(
+    monkeypatch, existing_user, existing_feed, existing_source, unique_item_strict
+):
+    """An explanation needs the votes it fits on and the one article it is
+    about. A feed holds thousands of articles and each carries a full embedding
+    vector, so reaching one row by loading the lot was most of the wait."""
+    items = _make_items(existing_feed, existing_source, unique_item_strict)
+    for i, item in enumerate(items[:4]):
+        ItemState.set_state(
+            user_hash=existing_user.name_hash,
+            feed_hash=existing_feed.name_hash,
+            item_url_hash=item.url_hash,
+            score=1 if i % 2 == 0 else -1,
+            is_read=True,
+        )
+
+    loads = []
+    real = explain.load_feed_features
+
+    def watched(feed, **kwargs):
+        loads.append(kwargs)
+        return real(feed, **kwargs)
+
+    monkeypatch.setattr(explain, "load_feed_features", watched)
+    events = list(explain.explain_item_stream(existing_feed, items[4].url_hash))
+
+    assert events, "the stream produced nothing"
+    assert loads == [{"labeled_only": True}]
+
+
+def test_item_explanation_stream_needs_votes(
+    client, existing_user, existing_feed, existing_item_strict, token
+):
+    """Too few votes is a status, not an error line inside a 200 -- the stream
+    is not opened at all."""
+    args = build_api_request_args(
+        path="/feed/item_explanation_stream",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": existing_item_strict.url_hash,
+        },
+        token=token,
+    )
+    assert client.get(**args).status_code == 409
 
 
 def test_item_explanation_needs_votes(
