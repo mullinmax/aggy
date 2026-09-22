@@ -83,6 +83,9 @@ KNOWN_CONFIG_VALUES = [
     "DUPLICATE_MAX_GROUP",
     "DUPLICATE_RECHECK_DAYS",
     "DUPLICATE_SIMILARITY_THRESHOLD",
+    "DUPLICATE_CANDIDATE_FLOOR",
+    "DUPLICATE_MODEL_MIN_LABELS",
+    "DUPLICATE_MODEL_DECISION",
     # The similarity pass (src/api/neighbors): the nearest-neighbour graph over
     # each feed, which the embedding duplicate signal, the recommender and the
     # reader's related-articles rail are all read out of.
@@ -228,6 +231,23 @@ DEFAULT_CONFIG = {
     # gets to see. An uncollapsed duplicate is the cheaper mistake, which is the
     # same bias the canonical-URL signal has.
     "DUPLICATE_SIMILARITY_THRESHOLD": 0.93,
+    # The band the review queue draws its near-misses from, and the floor the
+    # model is allowed to consider once one exists. Pairs between this and the
+    # threshold are the ones the constant is deciding *badly* -- above it
+    # everything is collapsed and below it nothing is, so neither tells you
+    # anything about where the line should be. Without a model nothing in this
+    # band is ever grouped, exactly as before.
+    "DUPLICATE_CANDIDATE_FLOOR": 0.80,
+    # How many pairs you have to judge before the model replaces the constant.
+    # Low on purpose: a logistic regression over seven features is useful at
+    # this size, and nobody is going to click through hundreds. It needs both
+    # answers among them, which `dedup.model.train` enforces separately.
+    "DUPLICATE_MODEL_MIN_LABELS": 12,
+    # How sure the model has to be to collapse a pair. Above a half because
+    # the bias that picked a high constant threshold has not changed: an
+    # uncollapsed duplicate is a much cheaper mistake than an article you
+    # never get to see.
+    "DUPLICATE_MODEL_DECISION": 0.65,
     # The similarity pass: place articles in the neighbour graph, then group
     # the duplicates that finds.
     "NEIGHBOR_GRAPH_INTERVAL_MINUTES": 10,

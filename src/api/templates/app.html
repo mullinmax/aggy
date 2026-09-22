@@ -246,6 +246,36 @@
     <p class="text-xs text-base-content/50 mt-2" id="graphFooter"></p>
   </div>
 
+  <!-- Duplicate Review View -->
+  <div id="viewDuplicates" class="hidden">
+    <div class="breadcrumbs text-sm mb-4">
+      <ul>
+        <li><a href="#/">Feeds</a></li>
+        <li id="duplicatesBreadcrumb"></li>
+        <li>Duplicates</li>
+      </ul>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div>
+        <h1 class="text-2xl font-bold">Are these the same story?</h1>
+        <p class="text-sm text-base-content/60 mt-1 max-w-2xl">
+          Aggy collapses articles it thinks are the same story, using one number
+          and a fixed cutoff. Judge a few pairs and it learns where the line
+          belongs for your articles instead. Pairs it is least sure about come
+          first, and rejecting a collapse puts the hidden article straight back
+          in your feed.
+        </p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="duplicatesRefreshBtn">Refresh</button>
+    </div>
+
+    <!-- how many judgements so far, and what the model makes of them -->
+    <div id="duplicatesModel" class="mb-4"></div>
+
+    <div id="duplicatesBody"></div>
+  </div>
+
   <!-- Feed Detail View -->
   <div id="viewFeed" class="hidden">
     <div class="breadcrumbs text-sm mb-4">
@@ -275,6 +305,12 @@
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
           <circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="17" r="2.2"/><circle cx="12" cy="6" r="2.2"/>
           <path stroke-linecap="round" d="M7.6 16.4 10.8 8M13.4 7.6l3.4 7.5M8.1 18.4l7.8-.8"/>
+        </svg>
+      </button>
+      <button class="btn btn-ghost btn-sm btn-square" id="duplicatesBtn" title="Review duplicates">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+          <rect x="3.5" y="3.5" width="12" height="12" rx="2"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8.5 20.5h10a2 2 0 002-2v-10"/>
         </svg>
       </button>
       <button class="btn btn-ghost btn-sm btn-square" id="manageSourcesBtn" title="Manage sources">

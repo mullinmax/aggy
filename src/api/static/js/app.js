@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     .add('tasks', showTasks)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
     .add('feed/:hash/graph', ({ hash }) => showFeedGraph(hash))
+    .add('feed/:hash/duplicates', ({ hash }) => showFeedDuplicates(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
 });
@@ -80,6 +81,12 @@ function bindControls() {
   $('statsBtn').onclick = openStatsModal;
   $('graphBtn').onclick = () => {
     if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/graph`);
+  };
+  $('duplicatesBtn').onclick = () => {
+    if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/duplicates`);
+  };
+  $('duplicatesRefreshBtn').onclick = () => {
+    if (currentFeed) loadDuplicateReview();
   };
   $('rerankBtn').onclick = handleRerank;
   $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; onFiltersChanged(); };
@@ -178,6 +185,7 @@ function setView(name) {
   $('viewStats').classList.toggle('hidden', name !== 'stats');
   $('viewTasks').classList.toggle('hidden', name !== 'tasks');
   $('viewGraph').classList.toggle('hidden', name !== 'graph');
+  $('viewDuplicates').classList.toggle('hidden', name !== 'duplicates');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -399,6 +407,8 @@ function switchFeedTab(tab) {
   $('filterBtn').classList.toggle('hidden', tab !== 'items');
   // the graph is a view of the articles, so it belongs with them
   $('graphBtn').classList.toggle('hidden', tab !== 'items');
+  // and so is the duplicate queue: it is about which articles you are shown
+  $('duplicatesBtn').classList.toggle('hidden', tab !== 'items');
   if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
 }
@@ -2131,6 +2141,237 @@ async function openExplanationModal(item) {
   } finally {
     if (explainRun === controller) explainRun = null;
   }
+}
+
+// ---------- duplicate review ----------
+
+// Detection collapses two articles when one number clears a fixed cutoff.
+// This is where you tell it when that was wrong, and where enough of those
+// answers turn into a model that decides better than the cutoff did.
+
+// Bumped whenever the queue is reloaded or left, so a verdict that comes back
+// after you have moved on cannot repaint a queue it is no longer part of.
+let duplicatesToken = 0;
+
+// What the model line says, and it spends most of its life saying "not yet".
+// That state has to explain itself: a bare "0 of 12" reads as broken rather
+// than as the beginning of something.
+function duplicateModelPanel(model) {
+  const judged = model.confirmed + model.rejected;
+  const pct = model.accuracy == null ? null : Math.round(model.accuracy * 100);
+
+  const counts = h('div', { class: 'flex items-center gap-3 text-xs' },
+    h('span', { class: 'text-success font-semibold' }, `${model.confirmed} same`),
+    h('span', { class: 'text-error font-semibold' }, `${model.rejected} different`));
+
+  if (!model.trained) {
+    const remaining = Math.max(0, model.needed - judged);
+    return h('div', { class: 'alert bg-base-200 border border-base-300 text-sm' },
+      h('div', { class: 'flex flex-col gap-1' },
+        h('p', { class: 'font-semibold' },
+          remaining
+            ? `${remaining} more to go before Aggy can learn from these`
+            : 'Waiting on an answer of each kind'),
+        h('p', { class: 'text-xs text-base-content/60' },
+          remaining
+            ? 'Until then the fixed cutoff decides, exactly as it does today. '
+              + 'Your answers already count though: a pair you reject is never '
+              + 'collapsed again, and one you confirm collapses now.'
+            : 'A model needs to have seen both answers. Everything judged so '
+              + 'far points the same way, so there is no line to draw yet.'),
+        counts));
+  }
+
+  return h('div', { class: 'alert bg-base-200 border border-base-300 text-sm' },
+    h('div', { class: 'flex flex-col gap-2 w-full min-w-0' },
+      h('div', { class: 'flex flex-wrap items-center gap-3' },
+        h('p', { class: 'font-semibold' }, 'Aggy is using your answers'),
+        counts,
+        pct != null
+          ? h('span', { class: 'badge badge-sm badge-ghost' }, `${pct}% on held-out pairs`)
+          : null),
+      // Which signals actually separated the answers. A positive weight pushes
+      // towards "same story", a negative one away from it.
+      model.coefficients.length
+        ? h('div', { class: 'flex flex-wrap gap-1.5' },
+            model.coefficients.slice(0, 4).map(([name, weight]) =>
+              h('span', {
+                class: `badge badge-sm ${weight >= 0 ? 'badge-success' : 'badge-error'} badge-outline`,
+                title: `weight ${weight.toFixed(2)}`,
+              }, `${weight >= 0 ? '↑' : '↓'} ${name}`)))
+        : null));
+}
+
+// One side of a pair. Deliberately not the feed's card: this is a comparison,
+// so the two sit level and show the same fields in the same order, and the
+// picture is small enough that the headline stays the thing you read first.
+function reviewArticle(article, { anchor = false } = {}) {
+  const thumb = article.item_image_url
+    ? h('img', {
+        src: article.item_image_url, alt: '', loading: 'lazy',
+        class: 'w-full h-28 object-cover rounded bg-base-300',
+        onerror: (e) => e.target.remove(),
+      })
+    : null;
+  return h('div', { class: 'flex-1 min-w-0 flex flex-col gap-2' },
+    thumb,
+    h('div', { class: 'flex items-center gap-1.5 flex-wrap' },
+      sourceBadge(article.item_source_name),
+      article.item_date_published
+        ? h('span', { class: 'text-[10px] text-base-content/40' }, timeAgo(article.item_date_published))
+        : null,
+      anchor ? h('span', { class: 'badge badge-xs badge-ghost' }, 'kept') : null),
+    h('a', {
+      href: article.item_url, target: '_blank', rel: 'noopener noreferrer',
+      class: 'text-sm font-semibold leading-snug link link-hover line-clamp-3',
+    }, article.item_title || article.item_url),
+    article.item_excerpt
+      ? h('p', { class: 'text-xs text-base-content/50 line-clamp-3' }, article.item_excerpt)
+      : null);
+}
+
+// The question above each pair. It differs by kind, because "was this right?"
+// and "should this have happened?" are different questions and answering the
+// wrong one wastes the judgement.
+function reviewQuestion(pair) {
+  const pct = Math.round(pair.similarity * 100);
+  if (pair.grouped) {
+    const how = pair.signal === 'canonical_url'
+      ? 'same link'
+      : pair.signal === 'confirmed'
+        ? 'you confirmed this'
+        : `${pct}% alike`;
+    return h('div', { class: 'flex items-center gap-2 flex-wrap' },
+      h('span', { class: 'badge badge-sm badge-warning badge-outline' }, 'collapsed now'),
+      h('span', { class: 'text-xs text-base-content/50' },
+        `Aggy is hiding the left one behind the right (${how})`));
+  }
+  return h('div', { class: 'flex items-center gap-2 flex-wrap' },
+    h('span', { class: 'badge badge-sm badge-ghost' }, 'both shown'),
+    h('span', { class: 'text-xs text-base-content/50' },
+      `${pct}% alike — just under the cutoff, so Aggy left both in your feed`));
+}
+
+// One pair, with the two buttons. The card removes itself on an answer rather
+// than reloading the queue: a list that reshuffles under you after every click
+// is miserable to work through, and the ordering is only a suggestion anyway.
+function reviewPairCard(pair, onAnswered) {
+  const card = h('div', { class: 'card bg-base-200 border border-base-300 overflow-hidden' });
+
+  const answer = async (isDuplicate, button) => {
+    const token = duplicatesToken;
+    card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    button.classList.add('loading');
+    try {
+      const result = await sdk.feedDuplicateVerdict({
+        feed_name_hash: currentFeed.feed_name_hash,
+        candidate_hash: pair.candidate.item_hash,
+        anchor_hash: pair.anchor.item_hash,
+        is_duplicate: isDuplicate,
+      });
+      if (token !== duplicatesToken) return;
+      collapseCard(card);
+      onAnswered(result);
+    } catch (err) {
+      toast(err.message, 'alert-error');
+      card.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      button.classList.remove('loading');
+    }
+  };
+
+  const sameBtn = h('button', {
+    type: 'button', class: 'btn btn-sm btn-success gap-1.5',
+    onclick: (e) => answer(true, e.currentTarget),
+  }, '✓', h('span', {}, 'Same story'));
+  const differentBtn = h('button', {
+    type: 'button', class: 'btn btn-sm btn-error btn-outline gap-1.5',
+    onclick: (e) => answer(false, e.currentTarget),
+  }, '✕', h('span', {}, 'Different'));
+
+  render(card,
+    h('div', { class: 'px-4 pt-3' }, reviewQuestion(pair)),
+    h('div', { class: 'flex gap-4 p-4' },
+      reviewArticle(pair.candidate),
+      h('div', { class: 'w-px bg-base-300 shrink-0' }),
+      reviewArticle(pair.anchor, { anchor: true })),
+    h('div', { class: 'flex justify-end gap-2 px-4 pb-4' }, differentBtn, sameBtn));
+  return card;
+}
+
+async function showFeedDuplicates(feedHash) {
+  setView('duplicates');
+  currentList = null;
+
+  // Reuse the feed the list view already fetched when it is the same one, the
+  // same way the graph does.
+  if (!currentFeed || currentFeed.feed_name_hash !== feedHash) {
+    try {
+      currentFeed = await sdk.feedGet({ feed_name_hash: feedHash });
+    } catch (err) {
+      toast(err.message, 'alert-error');
+      router.go('');
+      return;
+    }
+  }
+
+  render($('duplicatesBreadcrumb'),
+    h('a', { href: `#/feed/${feedHash}` }, currentFeed.feed_name));
+  loadDuplicateReview();
+}
+
+async function loadDuplicateReview() {
+  const token = ++duplicatesToken;
+  render($('duplicatesBody'), spinner());
+  render($('duplicatesModel'));
+
+  let data;
+  try {
+    data = await sdk.feedDuplicateReview({
+      feed_name_hash: currentFeed.feed_name_hash,
+      limit: 20,
+    });
+  } catch (err) {
+    if (token !== duplicatesToken) return;
+    render($('duplicatesBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+    return;
+  }
+  if (token !== duplicatesToken) return;
+
+  render($('duplicatesModel'), duplicateModelPanel(data.model));
+
+  if (!data.pairs.length) {
+    render($('duplicatesBody'), emptyState(
+      '🧐',
+      'Nothing to judge right now',
+      'Every pair Aggy is unsure about has been answered. More will turn up as '
+      + 'articles arrive and the similarity pass links them.'));
+    return;
+  }
+
+  // The count left is the honest one: pairs already answered are gone from the
+  // queue, so it only ever goes down as you work.
+  const remaining = h('p', { class: 'text-xs text-base-content/50 mb-3' },
+    `${data.pairs.length} pair${data.pairs.length === 1 ? '' : 's'} to judge`);
+  const list = h('div', { class: 'flex flex-col gap-3' });
+
+  let left = data.pairs.length;
+  const onAnswered = (result) => {
+    left -= 1;
+    remaining.textContent = left
+      ? `${left} pair${left === 1 ? '' : 's'} to judge`
+      : 'All caught up — reload for more';
+    // The model line moves as you answer, which is the whole feedback loop:
+    // the counts climb, then one day it says it is using them.
+    render($('duplicatesModel'), duplicateModelPanel(result.model));
+    if (result.outcome === 'split') {
+      toast('Put back in your feed', 'alert-success');
+    } else if (result.outcome === 'grouped') {
+      toast('Collapsed into one', 'alert-success');
+    }
+  };
+
+  render(list, data.pairs.map((pair) => reviewPairCard(pair, onAnswered)));
+  render($('duplicatesBody'), remaining, list);
 }
 
 // Animate a voted card shrinking away, then drop it from the DOM.

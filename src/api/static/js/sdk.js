@@ -110,6 +110,16 @@ class AggySDK {
     return this._request("DELETE", "/feed/delete", { query: { feed_name_hash } });
   }
 
+  /** Pairs of articles worth judging, most uncertain first */
+  async feedDuplicateReview({ feed_name_hash, limit }) {
+    return this._request("GET", "/feed/duplicate_review", { query: { feed_name_hash, limit } });
+  }
+
+  /** Record whether two articles are the same story */
+  async feedDuplicateVerdict({ feed_name_hash, candidate_hash, anchor_hash, is_duplicate }) {
+    return this._request("POST", "/feed/duplicate_verdict", { query: { feed_name_hash, candidate_hash, anchor_hash, is_duplicate } });
+  }
+
   /** Get a feed */
   async feedGet({ feed_name_hash }) {
     return this._request("GET", "/feed/get", { query: { feed_name_hash } });

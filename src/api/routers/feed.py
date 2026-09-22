@@ -24,6 +24,13 @@ from route_models.item import (
     RelatedItemsResponse,
 )
 from route_models.acknowledge import AcknowledgeResponse
+from route_models.duplicate_review import (
+    DuplicateModelResponse,
+    DuplicateReviewResponse,
+    DuplicateVerdictResponse,
+    ReviewArticleResponse,
+    ReviewPairResponse,
+)
 from route_models.ranking import (
     FieldContributionResponse,
     FieldPreviewResponse,
@@ -34,6 +41,11 @@ from route_models.ranking import (
     TrainingStatusResponse,
 )
 from routers.auth import authenticate
+from config import config
+from dedup.labels import label_count
+from dedup.model import model_for
+from dedup.review import review_pairs
+from dedup.verdict import apply_verdict
 from ranking import progress
 from ranking.engine import (
     label_counts,
@@ -507,6 +519,95 @@ def get_item_explanation_stream(
         # nginx and friends will happily sit on a streamed body until it ends,
         # which would undo the whole point of sending it in pieces.
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+def _model_status(user_hash: str) -> DuplicateModelResponse:
+    """Where this account's duplicate model stands.
+
+    Built from the labels rather than from the model, so it reads sensibly
+    before one exists -- which is the state the page spends most of its life
+    in, and the state it has to explain.
+    """
+    confirmed, rejected = label_count(user_hash)
+    model = model_for(user_hash)
+    report = model.report if model else None
+    return DuplicateModelResponse(
+        confirmed=confirmed,
+        rejected=rejected,
+        needed=config.get_int("DUPLICATE_MODEL_MIN_LABELS"),
+        trained=model is not None,
+        accuracy=report.accuracy if report else None,
+        coefficients=[[name, weight] for name, weight in report.coefficients]
+        if report
+        else [],
+    )
+
+
+def _review_article(row: dict) -> ReviewArticleResponse:
+    return ReviewArticleResponse(
+        item_hash=row["url_hash"],
+        item_url=row["url"],
+        item_title=row.get("title"),
+        item_excerpt=row.get("excerpt"),
+        item_author=row.get("author"),
+        item_source_name=row.get("source_name"),
+        item_image_url=row.get("image_url"),
+        item_date_published=row.get("published"),
+    )
+
+
+@feed_router.get(
+    "/duplicate_review",
+    summary="Pairs of articles worth judging, most uncertain first",
+    response_model=DuplicateReviewResponse,
+)
+def get_duplicate_review(
+    feed_name_hash: str,
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(authenticate),
+) -> DuplicateReviewResponse:
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    pairs = review_pairs(user.name_hash, feed.name_hash, limit=limit)
+    return DuplicateReviewResponse(
+        pairs=[
+            ReviewPairResponse(
+                anchor=_review_article(pair["anchor"]),
+                candidate=_review_article(pair["candidate"]),
+                grouped=pair["grouped"],
+                signal=pair["signal"],
+                similarity=pair["similarity"],
+            )
+            for pair in pairs
+        ],
+        model=_model_status(user.name_hash),
+    )
+
+
+@feed_router.post(
+    "/duplicate_verdict",
+    summary="Record whether two articles are the same story",
+    response_model=DuplicateVerdictResponse,
+)
+def post_duplicate_verdict(
+    feed_name_hash: str,
+    candidate_hash: str,
+    anchor_hash: str,
+    is_duplicate: bool,
+    user: User = Depends(authenticate),
+) -> DuplicateVerdictResponse:
+    # The feed is authenticated but not otherwise used: a verdict is about two
+    # articles, and item_duplicates is scoped per account, not per feed. Taking
+    # it anyway keeps the page honest about which feed it is working through
+    # and refuses a hash the user does not hold.
+    get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    if candidate_hash == anchor_hash:
+        raise HTTPException(
+            status_code=422, detail="An article cannot be a duplicate of itself."
+        )
+    outcome = apply_verdict(user.name_hash, candidate_hash, anchor_hash, is_duplicate)
+    return DuplicateVerdictResponse(
+        outcome=outcome, model=_model_status(user.name_hash)
     )
 
 

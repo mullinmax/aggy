@@ -51,6 +51,8 @@ from db.propagation import inherit_votes_from_duplicates
 from neighbors.graph import neighbor_similarities, similarity_between
 
 from .canonical import canonical_url
+from .labels import labels_for, pair_key
+from .model import model_for, pair_features
 
 # The signals a group can be built from, in the order they are tried.
 #
@@ -207,60 +209,134 @@ def _within_window(left, right, window_days: int) -> bool:
 
 # What the embedding signal needs to know about a candidate: when it was
 # published, whether it is already in a group, and how big that group is.
-_CANDIDATE_SQL = (
+#
+# The model wants more than that -- a headline, a site, an author, a picture --
+# and those columns are only selected when there is a model to read them, so
+# an install still on the constant threshold pays nothing for a feature set
+# nothing is going to look at. The image embedding is the reason this is worth
+# splitting: it is a full vector per candidate.
+_CANDIDATE_COLUMNS = (
     "SELECT i.url_hash, " + _PUBLISHED + " AS published, d.group_hash, ("
     " SELECT COUNT(*) FROM item_duplicates m"
-    "  WHERE m.user_hash = %s AND m.group_hash = d.group_hash) AS group_size "
-    "FROM items i "
+    "  WHERE m.user_hash = %s AND m.group_hash = d.group_hash) AS group_size"
+)
+_FEATURE_COLUMNS = ", i.title, i.url, i.author, i.image_embeddings"
+_CANDIDATE_FROM = (
+    " FROM items i "
     "LEFT JOIN item_duplicates d ON d.user_hash = %s AND d.item_url_hash = i.url_hash "
     "WHERE i.url_hash = ANY(%s)"
 )
 
 
-def _candidate_info(cur, user_hash: str, url_hashes) -> dict:
+def _candidate_info(
+    cur, user_hash: str, url_hashes, with_features: bool = False
+) -> dict:
     url_hashes = [h for h in dict.fromkeys(url_hashes) if h]
     if not url_hashes:
         return {}
-    cur.execute(_CANDIDATE_SQL, (user_hash, user_hash, url_hashes))
+    sql = _CANDIDATE_COLUMNS + (_FEATURE_COLUMNS if with_features else "")
+    cur.execute(sql + _CANDIDATE_FROM, (user_hash, user_hash, url_hashes))
     return {row["url_hash"]: row for row in cur.fetchall()}
+
+
+def same_story(
+    subject: dict, other: dict, sim: float, model, verdict: Optional[bool]
+) -> bool:
+    """Whether these two articles are the same story.
+
+    Three authorities, in order. Your own verdict on the pair wins outright:
+    you looked at both articles, which is more than anything here can do. Then
+    the model, once you have judged enough pairs for one to exist. Then the
+    hand-picked constant, which is where every install starts and where one
+    that never reviews anything stays.
+    """
+    if verdict is not None:
+        return verdict
+    if model is None:
+        return sim >= config.get_float("DUPLICATE_SIMILARITY_THRESHOLD")
+    probability = model.probability(pair_features(subject, other, sim))
+    return probability >= config.get_float("DUPLICATE_MODEL_DECISION")
+
+
+def _same_story(subject, other, sim, model, verdicts, url_hash) -> bool:
+    """``same_story`` with this pair's verdict looked up for it."""
+    return same_story(
+        subject,
+        other,
+        sim,
+        model,
+        verdicts.get(pair_key(url_hash, other["url_hash"])),
+    )
 
 
 def _embedding_match(cur, row: dict) -> Optional[DuplicateMatch]:
     """The group this item joins on the strength of its content, if any.
 
     The candidates are the item's neighbours in the graph -- the articles a
-    walk found nearest to it -- and only those above
-    ``DUPLICATE_SIMILARITY_THRESHOLD`` are considered at all. The article has
-    always been placed in the graph by the time this runs: examining it is the
-    second half of the pass that placed it (see ``neighbors.graph``).
+    walk found nearest to it. The article has always been placed in the graph
+    by the time this runs: examining it is the second half of the pass that
+    placed it (see ``neighbors.graph``).
+
+    Whether a candidate is the *same story* is then decided by ``same_story``:
+    your own verdict on the pair if you have given one, else this account's
+    model if it has enough labels to have one, else the hand-picked constant.
+    Candidates are drawn from ``DUPLICATE_CANDIDATE_FLOOR`` rather than the
+    constant so a model is shown the band the constant declines -- with no
+    model nothing in that band is grouped, which is exactly the old behaviour.
 
     The star rule is what makes this more than "pick the nearest": joining an
     established group means matching its *representative*, and the neighbour
     that led us to the group is very often not it. So the representative is
-    measured directly, and a group whose representative is not close enough is
+    judged directly, and a group whose representative is not the same story is
     declined even though one of its members was.
     """
-    threshold = config.get_float("DUPLICATE_SIMILARITY_THRESHOLD")
     window_days = config.get_int("DUPLICATE_WINDOW_DAYS")
     max_group = config.get_int("DUPLICATE_MAX_GROUP")
     user_hash = row["user_hash"]
     url_hash = row["url_hash"]
 
+    model = model_for(user_hash)
+    floor = min(
+        config.get_float("DUPLICATE_CANDIDATE_FLOOR"),
+        config.get_float("DUPLICATE_SIMILARITY_THRESHOLD"),
+    )
     candidates = [
         (neighbor_hash, sim)
         for neighbor_hash, sim in neighbor_similarities(cur, user_hash, url_hash)
-        if sim >= threshold
+        if sim >= floor
     ]
     if not candidates:
         return None
 
-    infos = _candidate_info(cur, user_hash, [h for h, _ in candidates])
+    with_features = model is not None
+    infos = _candidate_info(
+        cur, user_hash, [h for h, _ in candidates], with_features=with_features
+    )
     # Representatives are looked up in the same pass: a candidate's group is
     # anchored by an item that need not be a neighbour of ours at all.
     representatives = {
         info["group_hash"] for info in infos.values() if info["group_hash"]
     }
-    infos.update(_candidate_info(cur, user_hash, representatives - set(infos)))
+    infos.update(
+        _candidate_info(
+            cur,
+            user_hash,
+            representatives - set(infos),
+            with_features=with_features,
+        )
+    )
+    # The subject's own columns, for the same reason the candidates' are read:
+    # a pair's features are about both articles. Only the model needs them.
+    subject = (
+        _candidate_info(cur, user_hash, [url_hash], with_features=True).get(
+            url_hash, row
+        )
+        if with_features
+        else row
+    )
+    verdicts = labels_for(
+        cur, user_hash, [(url_hash, other) for other in infos if other != url_hash]
+    )
 
     for candidate_hash, sim in candidates:
         info = infos.get(candidate_hash)
@@ -272,6 +348,8 @@ def _embedding_match(cur, row: dict) -> Optional[DuplicateMatch]:
             # Neither is in a group, so the two of them start one, anchored by
             # the earlier published -- the same rule the URL signal uses, so
             # the group's identity does not depend on processing order.
+            if not _same_story(subject, info, sim, model, verdicts, url_hash):
+                continue
             if not _within_window(row["published"], info["published"], window_days):
                 continue
             pair = sorted(
@@ -298,15 +376,19 @@ def _embedding_match(cur, row: dict) -> Optional[DuplicateMatch]:
             row["published"], representative["published"], window_days
         ):
             continue
-        # Measured against the representative, not inherited from the
-        # neighbour: A being near B and B being near C does not make A near C,
-        # and taking that closure is exactly how a mega-group happens.
+        # Judged against the representative, not inherited from the neighbour:
+        # A being near B and B being near C does not make A near C, and taking
+        # that closure is exactly how a mega-group happens.
         representative_sim = (
             sim
             if group_hash == candidate_hash
             else similarity_between(cur, url_hash, group_hash)
         )
-        if representative_sim is None or representative_sim < threshold:
+        if representative_sim is None:
+            continue
+        if not _same_story(
+            subject, representative, representative_sim, model, verdicts, url_hash
+        ):
             continue
         return DuplicateMatch(
             user_hash=user_hash,
