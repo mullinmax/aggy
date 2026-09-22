@@ -49,6 +49,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     .add('stats', showArticleStats)
     .add('tasks', showTasks)
     .add('feed/:hash', ({ hash }) => showFeed(hash))
+    .add('feed/:hash/graph', ({ hash }) => showFeedGraph(hash))
+    .add('feed/:hash/duplicates', ({ hash }) => showFeedDuplicates(hash))
     .add('list/:hash', ({ hash }) => showList(hash))
     .start();
 });
@@ -77,8 +79,17 @@ function bindControls() {
   $('manageSourcesBtn').onclick = () => switchFeedTab('sources');
   $('filterBtn').onclick = toggleFilterPanel;
   $('statsBtn').onclick = openStatsModal;
+  $('graphBtn').onclick = () => {
+    if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/graph`);
+  };
+  $('duplicatesBtn').onclick = () => {
+    if (currentFeed) router.go(`feed/${currentFeed.feed_name_hash}/duplicates`);
+  };
+  $('duplicatesRefreshBtn').onclick = () => {
+    if (currentFeed) startDuplicateReview();
+  };
   $('rerankBtn').onclick = handleRerank;
-  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; reloadItems(); };
+  $('filterSort').onchange = (e) => { feedFilters.sort = e.target.value; onFiltersChanged(); };
   postTypeCheckboxes().forEach((box) => {
     box.onchange = () => {
       const picked = postTypeCheckboxes()
@@ -87,12 +98,12 @@ function bindControls() {
       // every type ticked is the same view as none ticked; keep the state as
       // "no filter" so the request stays clean
       feedFilters.postTypes = picked.length === POST_TYPES.length ? null : picked;
-      reloadItems();
+      onFiltersChanged();
     };
   });
-  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; reloadItems(); };
-  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; reloadItems(); };
-  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; reloadItems(); };
+  $('filterDate').onchange = (e) => { feedFilters.maxAge = e.target.value; onFiltersChanged(); };
+  $('filterIncludeRead').onchange = (e) => { feedFilters.includeRead = e.target.checked; onFiltersChanged(); };
+  $('filterOnlyDuplicates').onchange = (e) => { feedFilters.onlyDuplicates = e.target.checked; onFiltersChanged(); };
   $('sourcesBackBtn').onclick = () => { itemSkip = 0; switchFeedTab('items'); loadFeedItems(); };
   $('loadMoreBtn').onclick = () => { itemSkip += PAGE_SIZE; loadFeedItems(); };
 
@@ -123,8 +134,16 @@ function bindControls() {
     destroyPlayersIn($('readerMedia'));
     render($('readerMedia'));
     render($('readerVotes'));
+    // and drop the related rail, bumping the token so a request still in
+    // flight cannot paint into the next article's reader
+    readerRelatedToken += 1;
+    render($('readerRelated'));
     updateGifPlayback();
   });
+
+  // Closing the explanation drops the stream behind it. The fields land one at
+  // a time over several seconds, and there is nothing left to paint them into.
+  $('explainModal').addEventListener('close', stopExplaining);
 
   // infinite scroll: when the load-more button scrolls near the viewport,
   // click it automatically
@@ -165,6 +184,8 @@ function setView(name) {
   $('viewList').classList.toggle('hidden', name !== 'list');
   $('viewStats').classList.toggle('hidden', name !== 'stats');
   $('viewTasks').classList.toggle('hidden', name !== 'tasks');
+  $('viewGraph').classList.toggle('hidden', name !== 'graph');
+  $('viewDuplicates').classList.toggle('hidden', name !== 'duplicates');
   // never leave the navbar tucked away when switching views
   $('appNavbar')?.classList.remove('-translate-y-full');
 }
@@ -331,6 +352,7 @@ async function handleRenameFeed(e) {
 // ---------- feed view ----------
 async function showFeed(hash) {
   setView('feed');
+  adoptFilterPanel('feedFilterHost');
   currentList = null; // leaving any list-detail context
   itemSkip = 0;
   render($('itemList'), spinner());
@@ -383,6 +405,10 @@ function switchFeedTab(tab) {
   // The filter only applies to the article list; hide the button (and any
   // open panel) on the sources/settings tab.
   $('filterBtn').classList.toggle('hidden', tab !== 'items');
+  // the graph is a view of the articles, so it belongs with them
+  $('graphBtn').classList.toggle('hidden', tab !== 'items');
+  // and so is the duplicate queue: it is about which articles you are shown
+  $('duplicatesBtn').classList.toggle('hidden', tab !== 'items');
   if (tab !== 'items') $('filterPanel').classList.add('hidden');
   if (tab === 'sources') loadSources();
 }
@@ -465,6 +491,35 @@ function reloadItems() {
   loadFeedItems();
 }
 
+// The filter panel is one set of controls over one piece of state, shown on
+// whichever of the two screens is open. Which one has to reload is therefore
+// decided here rather than by each handler.
+function onFiltersChanged() {
+  if (!$('viewGraph').classList.contains('hidden')) {
+    loadFeedGraph();
+    return;
+  }
+  reloadItems();
+}
+
+// Move the shared panel to the screen that is being shown. One element rather
+// than two copies: a graph that filtered by its own controls would quietly
+// drift out of step with the list it is a picture of.
+function adoptFilterPanel(hostId) {
+  const panel = $('filterPanel');
+  const host = $(hostId);
+  if (panel && host && panel.parentElement !== host) host.appendChild(panel);
+
+  // The same control, honestly labelled for the screen it is on. In the list
+  // it orders the articles; in the graph nothing is in an order, so all it
+  // does is choose which ones get drawn — and a box marked "Sort by" over a
+  // picture invites you to read the arrangement as the sort, which it never is.
+  const label = $('filterSortLabel');
+  if (label) {
+    label.textContent = hostId === 'graphFilterHost' ? 'Show first' : 'Sort by';
+  }
+}
+
 // Whether anything but the sort is currently hiding articles.
 function isFiltered() {
   return feedFilters.postTypes !== null
@@ -479,7 +534,7 @@ function clearFilters() {
   feedFilters = { ...defaultFilters(), sort, includeRead };
   syncFilterControls();
   renderFilterSources();
-  reloadItems();
+  onFiltersChanged();
 }
 
 async function toggleFilterPanel() {
@@ -981,15 +1036,7 @@ function duplicateBadge(item) {
         });
         // the shown copy is in the response so it can be marked rather than
         // guessed at; the others are what this badge is about
-        render(panel, h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
-          data.members.map((m) => h('li', { class: 'flex items-center gap-2 min-w-0' },
-            h('span', { class: 'shrink-0 text-base-content/30' }, m.item_is_shown ? '●' : '○'),
-            sourceBadge(m.item_source_name),
-            h('a', {
-              href: m.item_url, target: '_blank', rel: 'noopener noreferrer',
-              class: 'link link-hover truncate min-w-0',
-              onclick: (ev) => ev.stopPropagation(),
-            }, m.item_title || m.item_url)))));
+        render(panel, duplicateMemberLinks(data.members, { showShownMarker: true }));
         loaded = true;
       } catch (err) {
         render(panel, h('p', { class: 'text-xs text-error' }, err.message));
@@ -998,6 +1045,138 @@ function duplicateBadge(item) {
   }, `also in ${count} other source${count === 1 ? '' : 's'}`);
 
   return [badge, panel];
+}
+
+// ---------- related articles ----------
+
+// Which article the reader is currently loading related items for. Opening a
+// second article before the first request lands would otherwise paint the
+// wrong rail beside it.
+let readerRelatedToken = 0;
+let readerDuplicateOpenToken = 0;
+
+function duplicateMemberLinks(members, { showShownMarker = false } = {}) {
+  return h('ul', { class: 'text-xs text-base-content/60 space-y-1' },
+    members.map((m) => h('li', { class: 'flex items-center gap-2 min-w-0' },
+      showShownMarker && h('span', { class: 'shrink-0 text-base-content/30' }, m.item_is_shown ? '●' : '○'),
+      sourceBadge(m.item_source_name),
+      h('a', {
+        href: m.item_url, target: '_blank', rel: 'noopener noreferrer',
+        class: 'link link-hover truncate min-w-0',
+        onclick: (ev) => ev.stopPropagation(),
+      }, m.item_title || m.item_url))));
+}
+
+// One entry in the reader's related rail: a thumbnail, the title, and how
+// alike the two articles are. Tapping it opens that article in the same
+// reader, which is why the endpoint returns whole items rather than summaries.
+function relatedCard(related) {
+  const thumb = related.item_image_url
+    ? h('img', {
+        src: related.item_image_url, alt: '', loading: 'lazy',
+        class: 'w-12 h-12 rounded object-cover bg-base-300 shrink-0',
+        onerror: (e) => e.target.remove(),
+      })
+    : null;
+  // A percentage reads as "how alike", which is what the number means here --
+  // the raw cosine similarity would be precision nobody asked for.
+  const pct = Math.round((related.item_similarity || 0) * 100);
+  return h('button', {
+    type: 'button',
+    class: 'w-full text-left flex gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors',
+    onclick: () => openReader(related),
+  },
+    thumb,
+    h('div', { class: 'min-w-0 flex-1' },
+      h('p', { class: 'text-xs font-medium line-clamp-2' }, related.item_title || related.item_url),
+      h('div', { class: 'flex items-center gap-1.5 mt-1 min-w-0' },
+        sourceBadge(related.item_source_name, related.item_source_color),
+        h('span', { class: 'text-[10px] text-base-content/40 shrink-0' }, `${pct}% alike`))));
+}
+
+function duplicateReaderCard(duplicate) {
+  return h('button', {
+    type: 'button',
+    class: 'w-full text-left flex items-start gap-2 p-2 rounded-lg hover:bg-base-200 transition-colors',
+    onclick: async () => {
+      const token = ++readerDuplicateOpenToken;
+      try {
+        const full = await sdk.feedItem({
+          feed_name_hash: currentFeed.feed_name_hash,
+          item_url_hash: duplicate.item_hash,
+        });
+        if (token !== readerDuplicateOpenToken) return;
+        openReader(full);
+      } catch (err) {
+        if (token === readerDuplicateOpenToken) toast(err.message, 'alert-error');
+      }
+    },
+  },
+  h('div', { class: 'min-w-0 flex-1' },
+    h('p', { class: 'text-xs font-medium line-clamp-2' }, duplicate.item_title || duplicate.item_url),
+    h('div', { class: 'flex items-center gap-1.5 mt-1 min-w-0' },
+      sourceBadge(duplicate.item_source_name),
+      h('span', { class: 'text-[10px] text-base-content/40 shrink-0' }, 'Same story'))),
+  openLinkButton(duplicate.item_url));
+}
+
+function duplicateReaderSection(members) {
+  const count = members.length;
+  if (!count) return null;
+  return h('details', { class: 'rounded-lg border border-base-300 bg-base-100 overflow-hidden' },
+    h('summary', { class: 'cursor-pointer px-3 py-2 text-xs font-semibold text-base-content/60 uppercase tracking-wide' },
+      `${count} other source${count === 1 ? '' : 's'} carrying this story`),
+    h('div', { class: 'flex flex-col gap-1 p-1 border-t border-base-300' }, members.map(duplicateReaderCard)));
+}
+
+// Fill the reader's side rail with what else in this feed is about the same
+// thing. Quietly empty when there is nothing: an article ingested minutes ago
+// has not been linked into the similarity graph yet, and an empty heading over
+// an empty list would read as a fault rather than as "not yet".
+async function loadRelated(item) {
+  const host = $('readerRelated');
+  if (!host) return;
+  render(host);
+  // a list has no feed behind it, so nothing to be related within
+  if (!currentFeed || currentList) return;
+
+  const token = ++readerRelatedToken;
+  const relatedReq = sdk.feedRelatedItems({
+    feed_name_hash: currentFeed.feed_name_hash,
+    item_url_hash: item.item_hash,
+    limit: 5,
+  });
+  const duplicateReq = item.item_duplicate_count && item.item_duplicate_group
+    ? sdk.feedItemDuplicates({
+      feed_name_hash: currentFeed.feed_name_hash,
+      group_hash: item.item_duplicate_group,
+    })
+    : Promise.resolve({ members: [] });
+  try {
+    const [relatedResult, duplicateResult] = await Promise.allSettled([relatedReq, duplicateReq]);
+    if (token !== readerRelatedToken) return;
+    const related = relatedResult.status === 'fulfilled' ? (relatedResult.value.related || []) : [];
+    const duplicates = duplicateResult.status === 'fulfilled'
+      ? (duplicateResult.value.members || []).filter((member) => !member.item_is_shown)
+      : [];
+    if (!related.length && !duplicates.length) return;
+    const blocks = [];
+    const duplicateSection = duplicateReaderSection(duplicates);
+    if (duplicateSection) blocks.push(duplicateSection);
+    if (related.length) {
+      blocks.push(
+        h('div', {},
+          h('h3', { class: 'text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-2 lg:mb-3 pt-3 border-t border-base-300' },
+            'Related in this feed'),
+          h('div', { class: 'flex flex-col gap-1' }, related.map(relatedCard))));
+    }
+    render(host, h('div', { class: 'lg:sticky lg:top-0 flex flex-col gap-3' }, blocks));
+  } catch {
+    // Promise.allSettled above means this is only for something stranger than a
+    // request failure. The rail is a bonus beside the article, never the point
+    // of opening it.
+    if (token === readerRelatedToken) render(host);
+  }
 }
 
 // "Open in new tab" icon (matches the modal close button's size/style),
@@ -1721,7 +1900,15 @@ function refreshVoteRows(item) {
 // below, then the action row. In `listMode` the recommendation-engine bits
 // (the "why recommended" button, the predicted-match badge, and the vote
 // buttons) are dropped — a list is a plain saved collection.
-function itemCard(item, { listMode = false } = {}) {
+// `review` is the duplicate queue's reading of a card: the same article, drawn
+// the same way, with nothing on it that acts. The queue asks one question and
+// has two buttons of its own for it, so a vote row, a list button and an
+// explain button beside them are three more ways to answer the wrong one. It
+// also stops clamping the title and the excerpt and shows the text alongside
+// the picture rather than instead of it -- deciding whether two articles are
+// the same story is exactly the case where the two lines a feed card spares
+// you are the two lines you need.
+function itemCard(item, { listMode = false, review = false } = {}) {
   const published = item.item_date_published ? timeAgo(item.item_date_published) : '';
   const ytId = youtubeId(item.item_url);
   const media = !ytId && (item.item_media || []).length ? item.item_media : null;
@@ -1749,16 +1936,27 @@ function itemCard(item, { listMode = false } = {}) {
       }, `${predicted > 0 ? '+' : ''}${(predicted * 100).toFixed(0)}% match`)
     : null;
 
+  const actions = review
+    ? null
+    : h('div', { class: 'flex items-center gap-1 ml-auto' },
+        listButton(item),
+        listMode ? null : voteRow(item));
+
   return h('div', {
     class: 'card bg-base-200 border border-base-300 hover:border-primary/50 transition-colors cursor-pointer overflow-hidden',
     onclick: () => openReader(item),
   },
     h('div', { class: 'px-4 pt-3 pb-2' },
       h('div', { class: 'flex items-start gap-2' },
-        h('h3', { class: 'font-semibold leading-snug flex-1 min-w-0 line-clamp-2' }, item.item_title || 'Untitled'),
-        listMode ? null : explainButton(item),
+        h('h3', {
+          class: `font-semibold leading-snug flex-1 min-w-0 ${review ? '' : 'line-clamp-2'}`,
+        }, item.item_title || 'Untitled'),
+        listMode || review ? null : explainButton(item),
         openLinkButton(item.item_url)),
-      !mediaBlock && excerpt && h('p', { class: 'text-xs text-base-content/50 line-clamp-2 mt-1' }, excerpt)),
+      (review || !mediaBlock) && excerpt
+        && h('p', {
+          class: `text-xs text-base-content/50 mt-1 ${review ? '' : 'line-clamp-2'}`,
+        }, excerpt)),
     mediaBlock,
     h('div', { class: 'flex items-center gap-1 px-2 py-1.5' },
       h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-base-content/50 min-w-0 pl-2' },
@@ -1767,9 +1965,7 @@ function itemCard(item, { listMode = false } = {}) {
         published && h('span', { class: 'whitespace-nowrap' }, published),
         listMode ? null : predictedBadge,
         listMode ? null : duplicateBadge(item)),
-      h('div', { class: 'flex items-center gap-1 ml-auto' },
-        listButton(item),
-        listMode ? null : voteRow(item))));
+      actions));
 }
 
 // ---------- why recommended ----------
@@ -1815,6 +2011,13 @@ function fieldPreview(p, field) {
   else if (field === 'author') txt = p.author ? `@${p.author}` : '(no author)';
   else if (field === 'recency') txt = p.date_published ? timeAgo(p.date_published) : '(no date)';
   else if (field === 'media') txt = p.has_media ? 'video / audio' : 'no media';
+  // How many of the nearest articles you had actually voted on. Zero is worth
+  // spelling out: it means the field had nothing to go on, which is a
+  // different thing from the model looking and deciding it did not matter.
+  else if (field === 'similar') {
+    const n = p.voted_neighbors || 0;
+    txt = n ? `${n} similar article${n === 1 ? '' : 's'} you voted on` : 'no votes nearby';
+  }
   return h('span', { class: 'shrink-0 badge badge-outline whitespace-nowrap' }, txt);
 }
 
@@ -1831,10 +2034,17 @@ function fieldDetail(f) {
 }
 
 // A tappable field row: the label + marks, expanding to show fieldDetail().
+//
+// The marks arrive after the row does. The row is built from what the model is
+// shown, which is known immediately, while a mark waits on the model being
+// fitted and that field being ablated. So the marks live in their own element
+// the caller holds on to and writes into as each measurement lands.
 function fieldRow(f) {
   const detail = fieldDetail(f);
   detail.classList.add('hidden');
   const chevron = h('span', { class: 'text-base-content/30 text-xs w-3' }, '▸');
+  const marks = h('span', { class: 'text-lg leading-none tracking-widest' },
+    h('span', { class: 'loading loading-dots loading-xs opacity-30' }));
   const header = h('button', {
     type: 'button', class: 'w-full flex items-center justify-between py-1.5 text-left',
     onclick: () => {
@@ -1843,29 +2053,404 @@ function fieldRow(f) {
     },
   },
     h('span', { class: 'flex items-center gap-2' }, chevron, h('span', { class: 'text-sm' }, f.label)),
-    h('span', { class: 'text-lg leading-none tracking-widest' }, contributionMarks(f.sign, f.level)));
-  return h('div', { class: 'border-b border-base-300 last:border-b-0' }, header, detail);
+    marks);
+  const row = h('div', { class: 'border-b border-base-300 last:border-b-0' }, header, detail);
+  return { row, marks };
 }
 
-function renderExplanation(data) {
-  const pct = Math.round(data.baseline_score * 100);
-  render($('explainBody'),
-    h('div', { class: 'flex flex-col' }, data.fields.map(fieldRow)),
-    h('p', { class: 'text-xs text-base-content/50 mt-4' },
-      `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: ${MODEL_LABELS[data.model_name] || data.model_name}`));
+// Read an NDJSON stream a line at a time, calling back with each parsed
+// object. The generated SDK parses a whole body as one JSON document, which is
+// exactly what this is not, so the request is made by hand -- and with fetch
+// rather than EventSource, which cannot send the Authorization header.
+async function streamNdjson(path, query, onEvent, signal) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v != null) params.append(k, String(v));
+  }
+  const headers = {};
+  if (sdk.token) headers['Authorization'] = `Bearer ${sdk.token}`;
+  const resp = await fetch(`${sdk.baseUrl}${path}?${params}`, { headers, signal });
+  if (!resp.ok) {
+    if (resp.status === 401) sdk.token = null;
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || `Request failed (${resp.status})`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // A chunk can split a line anywhere, so everything up to the last newline
+    // is whole and whatever follows it waits for the next chunk.
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line));
+    }
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer));
+}
+
+// Only one explanation is ever on screen, and the modal can be closed or
+// pointed at another article long before the model has finished with this one.
+let explainRun = null;
+
+function stopExplaining() {
+  if (explainRun) explainRun.abort();
+  explainRun = null;
 }
 
 async function openExplanationModal(item) {
+  stopExplaining();
+  const controller = new AbortController();
+  explainRun = controller;
   showModal('explainModal');
   render($('explainBody'), spinner());
+
+  // The footer says which model this is and what it predicted, neither of
+  // which is known until it has been fitted.
+  const footer = h('p', { class: 'text-xs text-base-content/50 mt-4' },
+    'Scoring each piece…');
+  const markHosts = new Map();
+
   try {
-    renderExplanation(await sdk.feedItemExplanation({
+    await streamNdjson('/feed/item_explanation_stream', {
       feed_name_hash: currentFeed.feed_name_hash,
       item_url_hash: item.item_hash,
-    }));
+    }, (event) => {
+      if (event.type === 'started') {
+        // Everything the model is shown, on screen before it has been fitted.
+        markHosts.clear();
+        const rows = event.fields.map((f) => {
+          const { row, marks } = fieldRow({ ...f, preview: event.preview });
+          markHosts.set(f.field, marks);
+          return row;
+        });
+        render($('explainBody'), h('div', { class: 'flex flex-col' }, rows), footer);
+      } else if (event.type === 'baseline') {
+        const pct = Math.round(event.baseline_score * 100);
+        footer.textContent = `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: `
+          + `${MODEL_LABELS[event.model_name] || event.model_name}`;
+      } else if (event.type === 'field') {
+        // Every mark measured so far, not just this field's: a mark is a rank
+        // among the fields, so a new measurement can move an earlier one.
+        for (const mark of event.marks) {
+          const host = markHosts.get(mark.field);
+          if (host) render(host, contributionMarks(mark.sign, mark.level));
+        }
+      } else if (event.type === 'error') {
+        footer.textContent = event.detail;
+      }
+    }, controller.signal);
+    // A field the stream never reached would otherwise spin forever.
+    for (const host of markHosts.values()) {
+      if (host.querySelector('.loading')) render(host, contributionMarks(0, 0));
+    }
   } catch (err) {
-    render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+    if (controller.signal.aborted) return;
+    // Nothing is drawn yet when the request itself fails; once the fields are
+    // up, the previews are still worth keeping and only the footer carries
+    // the bad news.
+    if (markHosts.size) footer.textContent = err.message;
+    else render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+  } finally {
+    if (explainRun === controller) explainRun = null;
   }
+}
+
+// ---------- duplicate review ----------
+
+// Detection collapses two articles when one number clears a fixed cutoff.
+// This is where you tell it when that was wrong, and where enough of those
+// answers turn into a model that decides better than the cutoff did.
+//
+// One pair at a time, rather than a page of them. Judging whether two articles
+// are the same story means actually reading both, and a list invites skimming
+// the headlines and clicking down the column. It also makes "what am I looking
+// at" unambiguous: there is one question on screen and two buttons under it.
+
+const duplicatesState = {
+  // Pairs fetched and not yet answered. The queue is kept a few deep so
+  // answering one shows the next immediately rather than after a round trip.
+  queue: [],
+  model: null,
+  // Bumped on every reload and on leaving the view, so a response that arrives
+  // late cannot paint over a queue it is no longer part of.
+  token: 0,
+  loading: false,
+  done: false,
+  // How many you have answered in this sitting, for the "N judged" line. The
+  // model's own totals are the authority on how many exist.
+  answered: 0,
+  // Pairs answered in this sitting. The server filters out what you have
+  // judged, but a refill already in flight when you answer was asked before
+  // the verdict existed, so its reply can still carry that pair -- and the
+  // queue it lands in no longer holds it to be deduplicated against.
+  judged: new Set(),
+};
+
+// How many pairs to hold. Three is enough that the next one is always ready
+// and the one after that is being decoded, without asking the server for a
+// screenful of articles nobody may ever look at.
+const DUPLICATES_AHEAD = 3;
+const DUPLICATES_FETCH = 8;
+
+// Pull the next pair's pictures into the browser cache while you are still
+// reading this one. Without it the card appears instantly and then visibly
+// fills in, which reads as slower than waiting would have.
+function prefetchPairMedia(pair) {
+  if (!pair) return;
+  for (const article of [pair.candidate, pair.anchor]) {
+    const urls = [article.item_image_url, ...(article.item_media || []).map((m) => m.poster || m.url)];
+    for (const url of urls) {
+      if (!url) continue;
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = url;
+    }
+  }
+}
+
+// Progress towards a model, with a mark at the point it starts deciding.
+//
+// The bar deliberately runs past that mark rather than ending at it: answers
+// given afterwards still improve the model, and a bar that fills up and stops
+// says the opposite.
+function duplicateProgress(model, answered) {
+  const judged = model.confirmed + model.rejected;
+  const span = Math.max(model.needed * 2, judged + 2);
+  const pct = (value) => `${Math.min(100, (value / span) * 100)}%`;
+
+  const bar = h('div', { class: 'relative h-3 rounded-full bg-base-300 overflow-hidden' },
+    h('div', {
+      class: `h-full ${model.trained ? 'bg-success' : 'bg-primary'} transition-all duration-500`,
+      style: `width:${pct(judged)}`,
+    }));
+  // The mark sits on top of the track rather than inside the fill, so it stays
+  // visible once the fill has passed it.
+  const mark = h('div', {
+    class: 'absolute top-0 bottom-0 w-0.5 bg-base-content/40',
+    style: `left:${pct(model.needed)}`,
+  });
+  bar.append(mark);
+
+  const caption = model.trained
+    ? `Aggy is learning from your ${judged} answers`
+    : `${judged} of ${model.needed} before Aggy starts learning from them`;
+
+  return h('div', { class: 'flex flex-col gap-1.5' },
+    bar,
+    h('div', { class: 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs' },
+      h('span', { class: 'text-base-content/60' }, caption),
+      h('span', { class: 'text-success font-semibold' }, `${model.confirmed} same`),
+      h('span', { class: 'text-error font-semibold' }, `${model.rejected} different`),
+      answered
+        ? h('span', { class: 'text-base-content/40 ml-auto' }, `${answered} this session`)
+        : null));
+}
+
+// What the model line says. It spends most of its life saying "not yet", and
+// that state has to explain itself: a bare count reads as broken rather than
+// as the beginning of something.
+function duplicateModelPanel(model, answered) {
+  const judged = model.confirmed + model.rejected;
+  const pct = model.accuracy == null ? null : Math.round(model.accuracy * 100);
+
+  let note;
+  if (model.trained) {
+    note = h('div', { class: 'flex flex-wrap items-center gap-2' },
+      h('span', { class: 'text-xs text-base-content/60' },
+        'Your answers now decide, not the fixed cutoff.'),
+      pct != null
+        ? h('span', { class: 'badge badge-sm badge-ghost' }, `${pct}% on held-out pairs`)
+        : null,
+      // Which signals actually separated the answers: a positive weight pushes
+      // towards "same story", a negative one away from it.
+      ...model.coefficients.slice(0, 3).map(([name, weight]) =>
+        h('span', {
+          class: `badge badge-sm ${weight >= 0 ? 'badge-success' : 'badge-error'} badge-outline`,
+          title: `weight ${weight.toFixed(2)}`,
+        }, `${weight >= 0 ? '↑' : '↓'} ${name}`)));
+  } else if (judged >= model.needed) {
+    note = h('p', { class: 'text-xs text-base-content/60' },
+      'A model needs to have seen both answers. Everything judged so far points '
+      + 'the same way, so there is no line to draw yet.');
+  } else {
+    note = h('p', { class: 'text-xs text-base-content/60' },
+      'Until then the fixed cutoff decides, exactly as it does today. Your '
+      + 'answers already count though: a pair you reject is never collapsed '
+      + 'again, and one you confirm collapses now.');
+  }
+
+  return h('div', { class: 'rounded-box border border-base-300 bg-base-200 p-4 flex flex-col gap-3' },
+    duplicateProgress(model, answered),
+    note);
+}
+
+// The pair on screen: two feed cards side by side, and the two buttons.
+function duplicatePairView(pair, onAnswer) {
+  const stage = h('div', { class: 'flex flex-col gap-4' });
+
+  const buttons = h('div', { class: 'flex justify-center gap-3' });
+  const differentBtn = h('button', {
+    type: 'button', class: 'btn btn-error btn-outline gap-2 min-w-40',
+    onclick: (e) => onAnswer(false, e.currentTarget),
+  }, h('span', { class: 'text-lg leading-none' }, '✕'), 'Different');
+  const sameBtn = h('button', {
+    type: 'button', class: 'btn btn-success gap-2 min-w-40',
+    onclick: (e) => onAnswer(true, e.currentTarget),
+  }, h('span', { class: 'text-lg leading-none' }, '✓'), 'Same story');
+  render(buttons, differentBtn, sameBtn);
+
+  render(stage,
+    // Stacked on a phone, side by side from `md` up. The cards carry their own
+    // media and body, so on a narrow screen two columns would be two slivers.
+    h('div', { class: 'grid grid-cols-1 md:grid-cols-2 gap-4 items-start' },
+      itemCard(pair.candidate, { review: true }),
+      itemCard(pair.anchor, { review: true })),
+    buttons);
+  return stage;
+}
+
+async function showFeedDuplicates(feedHash) {
+  setView('duplicates');
+  currentList = null;
+
+  // Reuse the feed the list view already fetched when it is the same one, the
+  // same way the graph does.
+  if (!currentFeed || currentFeed.feed_name_hash !== feedHash) {
+    try {
+      currentFeed = await sdk.feedGet({ feed_name_hash: feedHash });
+    } catch (err) {
+      toast(err.message, 'alert-error');
+      router.go('');
+      return;
+    }
+  }
+
+  render($('duplicatesBreadcrumb'),
+    h('a', { href: `#/feed/${feedHash}` }, currentFeed.feed_name));
+  startDuplicateReview();
+}
+
+function startDuplicateReview() {
+  duplicatesState.token += 1;
+  duplicatesState.queue = [];
+  duplicatesState.model = null;
+  duplicatesState.done = false;
+  duplicatesState.answered = 0;
+  duplicatesState.judged = new Set();
+  // A request still in flight for the old token will not clear this itself,
+  // and leaving it set would have the next refill wait on a promise whose
+  // result is thrown away.
+  duplicatesState.loading = false;
+  render($('duplicatesModel'));
+  render($('duplicatesBody'), spinner());
+  refillDuplicateQueue().then(showNextDuplicatePair);
+}
+
+// Top the queue up, skipping pairs already in hand so a refill mid-session
+// does not offer the same pair twice.
+//
+// Returns the in-flight request when there is one rather than doing nothing,
+// so a caller that needs a pair *now* can wait on the refill already running
+// instead of concluding there are none.
+function refillDuplicateQueue() {
+  if (duplicatesState.done) return Promise.resolve();
+  if (duplicatesState.loading) return duplicatesState.loading;
+  const token = duplicatesState.token;
+
+  duplicatesState.loading = (async () => {
+    try {
+      const data = await sdk.feedDuplicateReview({
+        feed_name_hash: currentFeed.feed_name_hash,
+        limit: DUPLICATES_FETCH,
+      });
+      if (token !== duplicatesState.token) return;
+      duplicatesState.model = data.model;
+      const held = new Set(duplicatesState.queue.map(pairKeyOf));
+      duplicatesState.queue.push(...data.pairs.filter((pair) => {
+        const key = pairKeyOf(pair);
+        return !held.has(key) && !duplicatesState.judged.has(key);
+      }));
+      // Done means the server had nothing at all, not that nothing it sent was
+      // new: a refill while three pairs are still in hand gets those three
+      // back, and treating that as "run out" would end the session early.
+      if (!data.pairs.length) duplicatesState.done = true;
+    } catch (err) {
+      if (token === duplicatesState.token) toast(err.message, 'alert-error');
+    } finally {
+      if (token === duplicatesState.token) duplicatesState.loading = false;
+    }
+  })();
+  return duplicatesState.loading;
+}
+
+function pairKeyOf(pair) {
+  return [pair.candidate.item_hash, pair.anchor.item_hash].sort().join(':');
+}
+
+async function showNextDuplicatePair() {
+  const token = duplicatesState.token;
+  if (duplicatesState.model) {
+    render($('duplicatesModel'),
+      duplicateModelPanel(duplicatesState.model, duplicatesState.answered));
+  }
+
+  // Answering the last pair in hand while the next batch is still on its way
+  // is not the same as having run out, so wait for the refill rather than
+  // telling you there is nothing left.
+  if (!duplicatesState.queue.length && !duplicatesState.done) {
+    render($('duplicatesBody'), spinner());
+    await refillDuplicateQueue();
+    if (token !== duplicatesState.token) return;
+  }
+
+  const pair = duplicatesState.queue[0];
+  if (!pair) {
+    render($('duplicatesBody'), emptyState(
+      '🧐',
+      duplicatesState.answered ? 'That is everything for now' : 'Nothing to judge right now',
+      'Every pair Aggy is unsure about has been answered. More will turn up as '
+      + 'articles arrive and the similarity pass links them.'));
+    return;
+  }
+
+  // The one after this, warmed while you read.
+  prefetchPairMedia(duplicatesState.queue[1]);
+  if (duplicatesState.queue.length <= DUPLICATES_AHEAD) refillDuplicateQueue();
+
+  const onAnswer = async (isDuplicate, button) => {
+    const token = duplicatesState.token;
+    view.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    button.classList.add('loading');
+    try {
+      const result = await sdk.feedDuplicateVerdict({
+        feed_name_hash: currentFeed.feed_name_hash,
+        candidate_hash: pair.candidate.item_hash,
+        anchor_hash: pair.anchor.item_hash,
+        is_duplicate: isDuplicate,
+      });
+      if (token !== duplicatesState.token) return;
+      duplicatesState.judged.add(pairKeyOf(pair));
+      duplicatesState.queue.shift();
+      duplicatesState.model = result.model;
+      duplicatesState.answered += 1;
+      if (result.outcome === 'split') toast('Put back in your feed', 'alert-success');
+      else if (result.outcome === 'grouped') toast('Collapsed into one', 'alert-success');
+      showNextDuplicatePair();
+    } catch (err) {
+      if (token !== duplicatesState.token) return;
+      toast(err.message, 'alert-error');
+      view.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      button.classList.remove('loading');
+    }
+  };
+
+  const view = duplicatePairView(pair, onAnswer);
+  render($('duplicatesBody'), view);
 }
 
 // Animate a voted card shrinking away, then drop it from the DOM.
@@ -2041,6 +2626,7 @@ function stripRedditBoilerplate(root, removeImage) {
 }
 
 function openReader(item) {
+  readerDuplicateOpenToken += 1;
   $('readerTitle').textContent = item.item_title || 'Untitled';
   const parsed = parseItemContent(item);
 
@@ -2099,6 +2685,7 @@ function openReader(item) {
     : []);
 
   showModal('readerModal');
+  loadRelated(item);
 
   if (currentFeed) {
     sdk.itemSetState({

@@ -6,8 +6,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Qu
 from config import config
 from db.item import reset_failed_image_embeds
 from db.task_run import (
-    KIND_DUPLICATE_DETECTION,
     KIND_IMAGE_EMBED_BACKFILL,
+    KIND_NEIGHBOR_GRAPH,
     KIND_SOURCE_INGEST,
     KIND_SOURCE_RESCRAPE,
     TASK_KINDS,
@@ -17,7 +17,7 @@ from db.task_run import (
     running_runs,
 )
 from db.user import User
-from dedup.detect import duplicate_detection_job
+from neighbors.graph import neighbor_graph_job
 from ingest.jobs import (
     ALL_SOURCES_TARGET,
     backfill_image_embeddings_job,
@@ -167,10 +167,10 @@ _TRIGGERS = {
         "system": True,
         "label": "image embedding retry",
     },
-    "duplicate_detection": {
-        "kind": KIND_DUPLICATE_DETECTION,
+    "neighbor_graph": {
+        "kind": KIND_NEIGHBOR_GRAPH,
         "system": True,
-        "label": "duplicate detection",
+        "label": "similar-article linking and duplicate detection",
     },
     "ingest_sources": {
         "kind": KIND_SOURCE_INGEST,
@@ -262,9 +262,12 @@ def run_task_now(
             else "No failed image embeddings to retry; "
             "embedding anything still missing."
         ) + gone_note
-    elif task == "duplicate_detection":
-        background_tasks.add_task(duplicate_detection_job)
-        detail = "Checking for duplicate articles now."
+    elif task == "neighbor_graph":
+        background_tasks.add_task(neighbor_graph_job)
+        detail = (
+            "Linking articles to the ones most like them, and grouping the "
+            "duplicates that finds, now."
+        )
     elif task == "ingest_sources":
         background_tasks.add_task(ingest_user_sources, user.name_hash)
         detail = "Fetching new articles from every one of your sources now."

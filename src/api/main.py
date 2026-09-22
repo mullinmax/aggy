@@ -48,7 +48,7 @@ from ingest.jobs import (
     prune_ingest_attempts_job,
 )
 from ranking.engine import feed_ranking_job
-from dedup.detect import duplicate_detection_job
+from neighbors.graph import neighbor_graph_job
 from db.task_run import abandon_running_runs
 
 # Scheduler instance
@@ -174,19 +174,21 @@ async def app_lifespan(app: FastAPI):
         coalesce=True,
     )
 
-    # Group articles that are the same content reaching the user under several
-    # URLs. Runs at start up too, so an existing install starts working through
-    # its backlog straight away rather than after the first interval; an item
-    # with no item_duplicates row yet reads as "not in a group", so the feed
-    # keeps working throughout. A pass held up by a large backlog can outlast
-    # the interval, and since the job keeps its progress on the rows
-    # themselves, skipping the overlapping run and coalescing the missed ones
-    # loses nothing.
+    # Link each article to the ones most like it, then group the ones that
+    # turn out to be the same story. One pass, because the duplicate check is a
+    # reading of the graph the same pass just built -- and the links it leaves
+    # behind are also what the recommender reads a neighbour's votes from and
+    # what the reader shows beside an article. Runs at start up too, so an
+    # existing install starts working through its backlog straight away rather
+    # than after the first interval; an article with no links yet reads as
+    # having no neighbours and no duplicates, so the feed keeps working
+    # throughout. Progress lives on the rows themselves, so an overrun pass is
+    # skipped and coalesced rather than stacked.
     scheduler.add_job(
-        func=duplicate_detection_job,
+        func=neighbor_graph_job,
         trigger="interval",
-        seconds=60 * config.get_int("DUPLICATE_DETECTION_INTERVAL_MINUTES"),
-        id="duplicate_detection_job",
+        seconds=60 * config.get_int("NEIGHBOR_GRAPH_INTERVAL_MINUTES"),
+        id="neighbor_graph_job",
         replace_existing=False,
         next_run_time=datetime.now(),
         max_instances=1,
