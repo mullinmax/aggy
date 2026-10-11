@@ -249,6 +249,36 @@ class Source(ItemCollection):
                     return cookie
         return None
 
+    @classmethod
+    def for_item(
+        cls, user_hash: str, item_url_hash: str, feed_hash: Optional[str] = None
+    ) -> Optional["Source"]:
+        """A source of this user's that carries this item, or None.
+
+        An item can arrive through several sources; the one that actually
+        fetched it beats one mirroring another feed, and one in `feed_hash`
+        beats the rest, so a re-scrape runs the backend the reader expects.
+        """
+        with cls.db_con() as cur:
+            cur.execute(
+                "SELECT s.feed_hash, s.name_hash FROM source_items si "
+                "JOIN sources s ON s.user_hash = si.user_hash "
+                " AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash "
+                "WHERE si.user_hash = %s AND si.item_url_hash = %s "
+                "ORDER BY (s.source_feed_hash IS NOT NULL), "
+                " (s.feed_hash IS DISTINCT FROM %s) "
+                "LIMIT 1",
+                (user_hash, item_url_hash, feed_hash),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return cls.read(
+            user_hash=user_hash,
+            feed_hash=row["feed_hash"],
+            source_hash=row["name_hash"],
+        )
+
     def trigger_ingest(self, now=False):
         # Compare against the database clock (next_ingest_at is TIMESTAMPTZ);
         # a naive Python datetime here breaks when app/DB timezones differ.

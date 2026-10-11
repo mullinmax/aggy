@@ -108,3 +108,16 @@ class DuplicateMemberResponse(BaseRouteModel):
 class ItemDuplicatesResponse(BaseRouteModel):
     duplicate_group: str
     members: List[DuplicateMemberResponse]
+
+
+class ItemRescrapeResponse(BaseRouteModel):
+    """What re-scraping one article turned up."""
+
+    # Whether the re-scrape found anything new (content, picture, media, or an
+    # embedding that hadn't landed before) and wrote it back.
+    changed: bool
+    # How many feeds that voted on the article are retraining on its new
+    # features, in the background.
+    feeds_retraining: int
+    # The article as it's stored now, so a card can repaint without a refetch.
+    item: ItemResponse

@@ -2,7 +2,14 @@ import logging
 import time
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import confloat
 from typing import Optional
@@ -14,6 +21,9 @@ from db.feed import Feed
 from db.source import Source
 from db.user import User
 from ingest.backends import ytdlp
+from ingest.errors import IngestError
+from ingest.jobs import rerank_feeds, rescrape_item
+from route_models.item import ItemRescrapeResponse, ItemResponse
 from route_models.stream import StreamUrlResponse
 from route_models.thumbnail import ThumbnailResponse
 from streaming import manifest, tickets
@@ -105,6 +115,48 @@ def get_state(
 # Outdated: 🕰️
 # Offensive: 🤡
 # Promotional: 📢
+
+
+@item_router.post(
+    "/rescrape",
+    summary="Re-scrape one article for content, media, and embeddings",
+    response_model=ItemRescrapeResponse,
+)
+def rescrape(
+    item_url_hash: str,
+    background_tasks: BackgroundTasks,
+    feed_hash: Optional[str] = None,
+    user: User = Depends(authenticate),
+) -> ItemRescrapeResponse:
+    """Re-collect one article from its site right now, the way a source
+    re-scrape does for every article it holds.
+
+    The scrape runs while the request waits, so the caller gets the article
+    back as it's now stored. Retraining the feeds that voted on it takes far
+    longer, so that happens in the background. `feed_hash` is the feed the
+    article is being viewed in: when several of the user's sources carry it,
+    the one in that feed decides how it's scraped.
+    """
+    source = Source.for_item(user.name_hash, item_url_hash, feed_hash)
+    item = ItemLoose.read(url_hash=item_url_hash) if source else None
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    try:
+        changed, stale_feeds = rescrape_item(item, source)
+    except IngestError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    if stale_feeds:
+        background_tasks.add_task(rerank_feeds, stale_feeds)
+
+    return ItemRescrapeResponse(
+        changed=changed,
+        feeds_retraining=len(stale_feeds),
+        item=ItemResponse.from_db_model(
+            ItemLoose.read(url_hash=item_url_hash) if changed else item
+        ),
+    )
 
 
 @item_router.get(

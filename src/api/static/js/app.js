@@ -1855,17 +1855,75 @@ function renderExplanation(data) {
       `Predicted match ${pct > 0 ? '+' : ''}${pct}% · model: ${MODEL_LABELS[data.model_name] || data.model_name}`));
 }
 
-async function openExplanationModal(item) {
-  showModal('explainModal');
+// The article the explanation modal is showing, so a re-scrape that finishes
+// after it has moved on to another one doesn't paint over it.
+let explainingItem = null;
+
+async function loadExplanation(item) {
   render($('explainBody'), spinner());
   try {
-    renderExplanation(await sdk.feedItemExplanation({
+    const data = await sdk.feedItemExplanation({
       feed_name_hash: currentFeed.feed_name_hash,
       item_url_hash: item.item_hash,
-    }));
+    });
+    if (explainingItem === item) renderExplanation(data);
   } catch (err) {
-    render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+    if (explainingItem === item) {
+      render($('explainBody'), h('p', { class: 'text-sm text-base-content/60' }, err.message));
+    }
   }
+}
+
+function openExplanationModal(item) {
+  explainingItem = item;
+  showModal('explainModal');
+  const btn = $('explainRescrapeBtn');
+  btn.disabled = false;
+  btn.textContent = 'Re-scrape article';
+  btn.onclick = () => rescrapeItem(item, btn);
+  loadExplanation(item);
+}
+
+// The fields a re-scrape can change. Everything else on the item (the vote,
+// the prediction, the source it's shown under) belongs to this feed and stays.
+const RESCRAPED_FIELDS = [
+  'item_title', 'item_author', 'item_date_published', 'item_domain',
+  'item_excerpt', 'item_content', 'item_image_url', 'item_media',
+];
+
+// Fetch the article from its site again, then show what the model makes of
+// the fresh copy: the explanation reloads, and the card behind it repaints.
+async function rescrapeItem(item, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Re-scraping…';
+  let result = null;
+  try {
+    result = await sdk.itemRescrape({
+      item_url_hash: item.item_hash,
+      feed_hash: currentFeed.feed_name_hash,
+    });
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+  if (explainingItem === item) {
+    btn.disabled = false;
+    btn.textContent = 'Re-scrape article';
+  }
+  if (!result) return;
+  if (!result.changed) {
+    toast('Re-scraped, but nothing new turned up', 'alert-info');
+    return;
+  }
+
+  RESCRAPED_FIELDS.forEach((field) => { item[field] = result.item[field]; });
+  voteRowsFor(item)
+    .map((row) => row.closest('.card'))
+    .filter(Boolean)
+    .forEach((card) => card.replaceWith(itemCard(item)));
+  toast(result.feeds_retraining
+    ? 'Article updated. Retraining on it in the background.'
+    : 'Article updated');
+  if (explainingItem === item) loadExplanation(item);
 }
 
 // Animate a voted card shrinking away, then drop it from the DOM.
