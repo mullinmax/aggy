@@ -48,6 +48,19 @@ jobs:
         docker rm -f ytdlp-check
         exit 1
 
+  # The graph view's force layout is plain arithmetic, so it needs neither a
+  # browser nor a database -- just node, which the runner already has.
+  graph-layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run the graph layout checks
+      run: node src/api/tests/js/graph_layout_test.js
+
   test:
     runs-on: ubuntu-latest
     # A hung step (an apt mirror that never answers, a build that stalls)

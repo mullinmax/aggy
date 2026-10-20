@@ -3,9 +3,9 @@
 import pytest
 
 from db.task_run import (
-    KIND_DUPLICATE_DETECTION,
     KIND_FEED_TRAINING,
     KIND_IMAGE_EMBED_BACKFILL,
+    KIND_NEIGHBOR_GRAPH,
     KIND_SOURCE_INGEST,
     KIND_SOURCE_RESCRAPE,
     start_run,
@@ -43,8 +43,8 @@ def test_runs_are_returned_with_durations(client, existing_user, token):
 
 
 def test_a_system_run_is_labelled_rather_than_claimed(client, existing_user, token):
-    with task_run(KIND_DUPLICATE_DETECTION) as run:
-        run.detail = "500 examined"
+    with task_run(KIND_NEIGHBOR_GRAPH) as run:
+        run.detail = "500 placed"
 
     body = _get(client, token).json()
 
@@ -145,7 +145,7 @@ def no_real_jobs(monkeypatch):
     queued = []
     for name in (
         "backfill_image_embeddings_job",
-        "duplicate_detection_job",
+        "neighbor_graph_job",
         "ingest_user_sources",
         "rescrape_user_sources",
     ):
@@ -331,7 +331,7 @@ def test_each_trigger_reports_the_kind_it_produces(
     one would send you looking for a bar that is in another lane."""
     expected = {
         "image_embed_retry": KIND_IMAGE_EMBED_BACKFILL,
-        "duplicate_detection": KIND_DUPLICATE_DETECTION,
+        "neighbor_graph": KIND_NEIGHBOR_GRAPH,
         "ingest_sources": KIND_SOURCE_INGEST,
         "rescrape_sources": KIND_SOURCE_RESCRAPE,
     }
@@ -344,7 +344,7 @@ def test_each_trigger_reports_the_kind_it_produces(
     assert sorted(no_real_jobs) == sorted(
         [
             "backfill_image_embeddings_job",
-            "duplicate_detection_job",
+            "neighbor_graph_job",
             "ingest_user_sources",
             "rescrape_user_sources",
         ]

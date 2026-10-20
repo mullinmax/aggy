@@ -225,7 +225,7 @@ def test_duplicate_counts_are_scoped_to_what_the_user_holds(
     duplicates they cannot see."""
     from db.feed import Feed
     from db.user import User
-    from dedup.detect import duplicate_detection_job
+    from neighbors.graph import neighbor_graph_job
 
     add_item(existing_feed, "https://example.com/story?utm_source=mine")
 
@@ -237,7 +237,7 @@ def test_duplicate_counts_are_scoped_to_what_the_user_holds(
     other_feed.create()
     add_item(other_feed, "https://example.com/story?utm_source=theirs")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     summary = article_stats(existing_user.name_hash)["summary"]
 
     # the two copies are one group, but only one of them is in this user's feed
@@ -248,7 +248,7 @@ def test_duplicate_counts_are_scoped_to_what_the_user_holds(
 
 
 def test_duplicate_counts_report_groups_and_redundancy(existing_user, existing_feed):
-    from dedup.detect import duplicate_detection_job
+    from neighbors.graph import neighbor_graph_job
 
     # one story collected three times over, one twice, and two singletons
     for i in range(3):
@@ -258,7 +258,7 @@ def test_duplicate_counts_report_groups_and_redundancy(existing_user, existing_f
     add_item(existing_feed, "https://example.com/alone")
     add_item(existing_feed, "https://other.com/alone")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     summary = article_stats(existing_user.name_hash)["summary"]
 
     assert summary["total_articles"] == 7
@@ -273,14 +273,14 @@ def test_duplicate_counts_report_groups_and_redundancy(existing_user, existing_f
 
 def test_duplicate_counts_appear_per_domain(existing_user, existing_feed):
     """The per-article count folds up by domain like every other count."""
-    from dedup.detect import duplicate_detection_job
+    from neighbors.graph import neighbor_graph_job
 
     for i in range(2):
         add_item(existing_feed, f"https://dupes.com/story?utm_source=s{i}")
     add_item(existing_feed, "https://dupes.com/unique")
     add_item(existing_feed, "https://clean.com/unique")
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     rows = {row["domain"]: row for row in domain_stats(existing_user.name_hash)}
 
     assert rows["dupes.com"]["article_count"] == 3
@@ -292,7 +292,7 @@ def test_a_group_spanning_hosts_counts_under_each(existing_user, existing_feed):
     """Copies are grouped by canonical URL, so they can arrive under different
     hosts. That is exactly why the group-level numbers are summary-only: this
     group belongs to no single base domain."""
-    from dedup.detect import duplicate_detection_job
+    from neighbors.graph import neighbor_graph_job
 
     add_item(existing_feed, "https://publisher.com/piece")
     add_item(
@@ -300,7 +300,7 @@ def test_a_group_spanning_hosts_counts_under_each(existing_user, existing_feed):
         "https://news.google.com/articles/x?url=https%3A%2F%2Fpublisher.com%2Fpiece",
     )
 
-    duplicate_detection_job()
+    neighbor_graph_job()
     stats = article_stats(existing_user.name_hash)
     rows = {row["domain"]: row for row in stats["domains"]}
 

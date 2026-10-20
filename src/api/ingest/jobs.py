@@ -415,6 +415,15 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
 
     merged.update()  # persist (overwrites the existing row)
 
+    if embedding_changed:
+        # The similarity graph's links, and the duplicate grouping read out of
+        # them, were all measured against the vector this article just stopped
+        # having. Queue it to be placed again; the re-walk cooldown is about
+        # links going stale with age and would not notice this on its own.
+        from neighbors.graph import mark_relink_needed
+
+        mark_relink_needed(item.url_hash)
+
     # a changed, voted-on item means the models that trained on its old
     # features are now stale — those feeds should retrain
     return True, _feeds_with_votes_on(item.url_hash)

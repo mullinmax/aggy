@@ -367,3 +367,132 @@ def test_a_removed_picture_is_not_the_same_as_never_having_one():
 
     now = datetime.now(timezone.utc)
     assert not np.array_equal(_aux_vector(never, now), _aux_vector(removed, now))
+
+
+# ---------- the neighbour block ----------
+
+
+def test_a_neighbours_vote_reaches_the_model():
+    """The point of the whole graph, as far as the recommender is concerned:
+    how you voted on the articles nearest to this one is evidence about this
+    one, separate from what its own embedding says."""
+    # Every article carries identical text, so the embedding block is constant
+    # and the only thing the model can learn from is the neighbourhood.
+    text = np.array([0.4, 0.4])
+    items = []
+    for i in range(40):
+        liked = i % 2 == 0
+        items.append(
+            ItemFeatures(
+                url_hash=f"n{i}",
+                embedding=text,
+                neighbors=(("liked_anchor", 0.95),)
+                if liked
+                else (("hated_anchor", 0.95),),
+                label=1.0 if liked else -1.0,
+            )
+        )
+    # the two anchors are voted articles of their own
+    items.append(ItemFeatures(url_hash="liked_anchor", embedding=text, label=1.0))
+    items.append(ItemFeatures(url_hash="hated_anchor", embedding=text, label=-1.0))
+
+    model = RidgeModel()
+    model.fit(items)
+
+    near_liked = ItemFeatures(
+        url_hash="q1", embedding=text, neighbors=(("liked_anchor", 0.95),)
+    )
+    near_hated = ItemFeatures(
+        url_hash="q2", embedding=text, neighbors=(("hated_anchor", 0.95),)
+    )
+    scores, _ = model.predict([near_liked, near_hated])
+    assert scores[0] > scores[1]
+
+
+def test_only_real_votes_count_as_a_neighbours_opinion():
+    """An unvoted neighbour contributes nothing. It is not a zero vote, and it
+    is certainly not the model's own guess about it -- feeding predictions back
+    in would have the model learn from its own output."""
+    from ranking.models import _neighbor_vector
+
+    labels = {"voted": 1.0}
+    item = ItemFeatures(
+        url_hash="q",
+        neighbors=(("unvoted", 0.99), ("voted", 0.80)),
+    )
+    vector = _neighbor_vector(item, labels)
+    # the unvoted neighbour is closer, but the average is entirely the voted one
+    assert vector[0] == pytest.approx(1.0)
+    assert vector[1] == pytest.approx(0.80)
+    assert vector[2] == 1.0
+
+
+def test_a_neighbourhood_with_no_votes_is_flagged_not_scored_as_neutral():
+    """Zero votes nearby and a neighbourhood that voted zero are different
+    things, which is what the present/absent flag is for."""
+    from ranking.models import _neighbor_vector
+
+    nothing = _neighbor_vector(
+        ItemFeatures(url_hash="q", neighbors=(("unvoted", 0.9),)), {"other": 1.0}
+    )
+    neutral = _neighbor_vector(
+        ItemFeatures(url_hash="q", neighbors=(("voted", 0.9),)), {"voted": 0.0}
+    )
+    assert list(nothing) == [0.0, 0.0, 0.0]
+    assert neutral[2] == 1.0
+    assert neutral[0] == pytest.approx(0.0)
+    # the flag is what separates them
+    assert not np.array_equal(nothing, neutral)
+
+
+def test_a_neighbour_on_the_far_side_is_not_counted_backwards():
+    """A negative similarity means the two articles point away from each other.
+    Weighting a vote by it would invert that vote, so it is dropped instead."""
+    from ranking.models import _neighbor_vector
+
+    vector = _neighbor_vector(
+        ItemFeatures(url_hash="q", neighbors=(("opposite", -0.8),)),
+        {"opposite": 1.0},
+    )
+    assert list(vector) == [0.0, 0.0, 0.0]
+
+
+def test_the_neighbour_block_sees_only_the_votes_it_was_fitted_on():
+    """The leak this feature would otherwise have: built from every vote in the
+    feed, a held-out article's own label would arrive in the features of the
+    fold predicting it, and cross-validation would report a score the live feed
+    could never reproduce."""
+    text = np.array([0.4, 0.4])
+    fitted = [
+        ItemFeatures(url_hash="a", embedding=text, label=1.0),
+        ItemFeatures(url_hash="b", embedding=text, label=-1.0),
+        ItemFeatures(url_hash="c", embedding=text, label=1.0),
+        ItemFeatures(url_hash="d", embedding=text, label=-1.0),
+        ItemFeatures(url_hash="e", embedding=text, label=1.0),
+    ]
+    model = RidgeModel()
+    model.fit(fitted)
+
+    # "held_out" carries a label, and a neighbour that was never fitted on
+    held_out = ItemFeatures(
+        url_hash="held_out",
+        embedding=text,
+        neighbors=(("unseen", 0.99), ("a", 0.5)),
+        label=1.0,
+    )
+    from ranking.models import _neighbor_vector
+
+    vector = _neighbor_vector(held_out, model.neighbor_labels)
+    # only "a" is in the fitted set, so it is the whole of the neighbour signal
+    assert vector[0] == pytest.approx(1.0)
+    assert vector[1] == pytest.approx(0.5)
+
+
+def test_an_article_is_never_its_own_neighbour():
+    """A self-edge would hand the model the label it is trying to predict."""
+    from ranking.models import _neighbor_vector
+
+    vector = _neighbor_vector(
+        ItemFeatures(url_hash="self", neighbors=(("self", 1.0),)), {"self": 1.0}
+    )
+    assert list(vector) == [0.0, 0.0, 0.0]

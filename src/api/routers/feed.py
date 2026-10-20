@@ -1,20 +1,35 @@
+import json
 import logging
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from typing import List, Optional, Union
 
 from db.feed import Feed, ITEM_AGE_WINDOWS, ITEM_SORTS, POST_TYPES
 from db.user import User
 from route_models.feed import FeedResponse
+from route_models.graph import (
+    FeedGraphResponse,
+    GraphEdgeResponse,
+    GraphNodeResponse,
+)
 from route_models.source import SourceRouteModel
 from route_models.item import (
     DuplicateMemberResponse,
     ItemDuplicatesResponse,
     ItemResponse,
+    RelatedItemResponse,
+    RelatedItemsResponse,
 )
 from route_models.acknowledge import AcknowledgeResponse
+from route_models.duplicate_review import (
+    DuplicateModelResponse,
+    DuplicateReviewResponse,
+    DuplicateVerdictResponse,
+    ReviewPairResponse,
+)
 from route_models.ranking import (
     FieldContributionResponse,
     FieldPreviewResponse,
@@ -25,6 +40,11 @@ from route_models.ranking import (
     TrainingStatusResponse,
 )
 from routers.auth import authenticate
+from config import config
+from dedup.labels import label_count
+from dedup.model import model_for
+from dedup.review import review_pairs
+from dedup.verdict import apply_verdict
 from ranking import progress
 from ranking.engine import (
     label_counts,
@@ -33,7 +53,14 @@ from ranking.engine import (
     start_training,
     training_summary,
 )
-from ranking.explain import explain_item
+from ranking.explain import (
+    ExplanationBaseline,
+    ExplanationStarted,
+    ExplanationUnavailable,
+    FieldScored,
+    explain_item,
+    explain_item_stream,
+)
 
 feed_router = APIRouter()
 
@@ -333,18 +360,6 @@ def get_item_explanation(
             status_code=409,
             detail="Not enough votes yet to explain this recommendation.",
         )
-    def _preview(p) -> FieldPreviewResponse:
-        return FieldPreviewResponse(
-            text=p.text,
-            image_url=p.image_url,
-            source=p.source,
-            author=p.author,
-            date_published=p.date_published,
-            has_image=p.has_image,
-            has_media=p.has_media,
-            image_embedded=p.image_embedded,
-        )
-
     return ItemExplanationResponse(
         model_name=explanation.model_name,
         baseline_score=explanation.baseline_score,
@@ -359,6 +374,242 @@ def get_item_explanation(
             )
             for f in explanation.fields
         ],
+    )
+
+
+# What the reader is told when an explanation cannot be produced. Written here
+# rather than taken from the exception that stopped it: an exception's own text
+# is the one string on this path nobody vets, and an explanation is not worth
+# leaking internals over. The reason still reaches the log.
+#
+# Before the stream opens this is nearly always a feed with too few votes to
+# fit a model on, which is worth saying plainly. Once it is open the only thing
+# left that can stop it is having no model to choose, which is not about votes.
+_CANNOT_EXPLAIN = "Not enough votes yet to explain this recommendation."
+_EXPLANATION_STOPPED = "No model is ranking this feed yet."
+
+
+def _preview(p) -> FieldPreviewResponse:
+    """One article's own data for a field, as the explanation shows it. Shared
+    by the whole-body route and the streaming one, which send the same thing."""
+    return FieldPreviewResponse(
+        text=p.text,
+        image_url=p.image_url,
+        source=p.source,
+        author=p.author,
+        date_published=p.date_published,
+        has_image=p.has_image,
+        has_media=p.has_media,
+        image_embedded=p.image_embedded,
+        voted_neighbors=p.voted_neighbors,
+    )
+
+
+# The explanation as it is computed, one JSON object per line.
+#
+# Fitting the model is the slow part and it is the *last* thing the reader
+# needs: what the model was shown is known before it is fitted, and each
+# field's contribution lands one at a time after it. Holding all of that back
+# to answer once means several seconds of a spinner over a modal that could
+# have been full of the article's own text from the start.
+#
+# NDJSON rather than server-sent events because this needs the Authorization
+# header, which EventSource cannot set. Left out of the OpenAPI schema on
+# purpose: the generated SDK parses a whole body as one JSON document, which is
+# exactly what this is not -- the reader in app.js consumes it line by line.
+#
+# Line types:
+#   {"type": "started",  "fields": [...], "preview": {...}}
+#   {"type": "baseline", "model_name": str, "baseline_score": float}
+#   {"type": "field",    "field": str, "marks": [{field, sign, level}, ...]}
+#   {"type": "done"}
+#   {"type": "error",    "detail": str}
+#
+# A `field` line carries the marks for every field measured so far, not just
+# its own: marks are ranked against each other, so an earlier field's level can
+# move as later ones land (see ranking.explain.FieldScored).
+@feed_router.get(
+    "/item_explanation_stream",
+    summary="Stream an item's explanation as it is computed",
+    include_in_schema=False,
+)
+def get_item_explanation_stream(
+    feed_name_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+):
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    events = explain_item_stream(feed, item_url_hash)
+
+    # Drawn from the generator here, before the response starts, so "not enough
+    # votes yet" is still a 409 the client can read as a status rather than an
+    # error line inside a 200.
+    #
+    # What the client is told is written here rather than taken from the
+    # exception. An exception's own text is for the log: it is the one string
+    # on this path nobody vets, and an explanation is not worth leaking
+    # internals over.
+    try:
+        first = next(events)
+    except ExplanationUnavailable as unavailable:
+        logging.info(f"Cannot explain {item_url_hash}: {unavailable}")
+        raise HTTPException(status_code=409, detail=_CANNOT_EXPLAIN) from None
+    except StopIteration:
+        raise HTTPException(status_code=409, detail=_CANNOT_EXPLAIN) from None
+
+    def encode(event) -> dict:
+        if isinstance(event, ExplanationStarted):
+            return {
+                "type": "started",
+                "fields": [
+                    {
+                        "field": outline.field,
+                        "label": outline.label,
+                        "description": outline.description,
+                    }
+                    for outline in event.fields
+                ],
+                "preview": _preview(event.preview).model_dump(mode="json"),
+            }
+        if isinstance(event, ExplanationBaseline):
+            return {
+                "type": "baseline",
+                "model_name": event.model_name,
+                "baseline_score": event.baseline_score,
+            }
+        if isinstance(event, FieldScored):
+            return {
+                "type": "field",
+                "field": event.field,
+                "marks": [
+                    {"field": m.field, "sign": m.sign, "level": m.level}
+                    for m in event.marks
+                ],
+            }
+        raise TypeError(f"unknown explanation event {type(event)!r}")
+
+    def lines():
+        yield json.dumps(encode(first)) + "\n"
+        try:
+            for event in events:
+                yield json.dumps(encode(event)) + "\n"
+        except ExplanationUnavailable as unavailable:
+            # Choosing the model is left until after the previews, so this can
+            # land mid-stream. It is a reason rather than a fault, but it is
+            # still the exception's own words, so it goes to the log and the
+            # reader gets the vetted line above.
+            logging.info(f"Cannot explain {item_url_hash}: {unavailable}")
+            stopped = {"type": "error", "detail": _EXPLANATION_STOPPED}
+            yield json.dumps(stopped) + "\n"
+            return
+        except Exception as e:
+            # The response is already a 200 by now, so a failure has to be said
+            # in the body. The reader shows it in place of the marks and keeps
+            # the previews it already has.
+            logging.exception(f"Explaining {item_url_hash} failed: {e}")
+            failed = {"type": "error", "detail": "Could not finish this explanation."}
+            yield json.dumps(failed) + "\n"
+            return
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        # nginx and friends will happily sit on a streamed body until it ends,
+        # which would undo the whole point of sending it in pieces.
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+def _model_status(user_hash: str) -> DuplicateModelResponse:
+    """Where this account's duplicate model stands.
+
+    Built from the labels rather than from the model, so it reads sensibly
+    before one exists -- which is the state the page spends most of its life
+    in, and the state it has to explain.
+    """
+    confirmed, rejected = label_count(user_hash)
+    model = model_for(user_hash)
+    report = model.report if model else None
+    return DuplicateModelResponse(
+        confirmed=confirmed,
+        rejected=rejected,
+        needed=config.get_int("DUPLICATE_MODEL_MIN_LABELS"),
+        trained=model is not None,
+        accuracy=report.accuracy if report else None,
+        coefficients=[[name, weight] for name, weight in report.coefficients]
+        if report
+        else [],
+    )
+
+
+@feed_router.get(
+    "/duplicate_review",
+    summary="Pairs of articles worth judging, most uncertain first",
+    response_model=DuplicateReviewResponse,
+)
+def get_duplicate_review(
+    feed_name_hash: str,
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(authenticate),
+) -> DuplicateReviewResponse:
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    pairs = review_pairs(user.name_hash, feed.name_hash, limit=limit)
+
+    # Both sides of every pair in one query. The page draws the feed's own
+    # cards, so it wants whole articles -- and it holds a few pairs ahead so
+    # answering one does not mean waiting for the next, which is a dozen
+    # articles for one screen and a dozen round trips if asked for singly.
+    articles = feed.items_by_hash(
+        [pair["candidate_hash"] for pair in pairs]
+        + [pair["anchor_hash"] for pair in pairs]
+    )
+
+    out = []
+    for pair in pairs:
+        candidate = articles.get(pair["candidate_hash"])
+        anchor = articles.get(pair["anchor_hash"])
+        # An article can leave the feed between choosing the pairs and reading
+        # them, and half a pair is not a question anyone can answer.
+        if candidate is None or anchor is None:
+            continue
+        out.append(
+            ReviewPairResponse(
+                anchor=ItemResponse.from_db_model(anchor[0], **anchor[1]),
+                candidate=ItemResponse.from_db_model(candidate[0], **candidate[1]),
+                grouped=pair["grouped"],
+                signal=pair["signal"],
+                similarity=pair["similarity"],
+            )
+        )
+
+    return DuplicateReviewResponse(pairs=out, model=_model_status(user.name_hash))
+
+
+@feed_router.post(
+    "/duplicate_verdict",
+    summary="Record whether two articles are the same story",
+    response_model=DuplicateVerdictResponse,
+)
+def post_duplicate_verdict(
+    feed_name_hash: str,
+    candidate_hash: str,
+    anchor_hash: str,
+    is_duplicate: bool,
+    user: User = Depends(authenticate),
+) -> DuplicateVerdictResponse:
+    # The feed is authenticated but not otherwise used: a verdict is about two
+    # articles, and item_duplicates is scoped per account, not per feed. Taking
+    # it anyway keeps the page honest about which feed it is working through
+    # and refuses a hash the user does not hold.
+    get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    if candidate_hash == anchor_hash:
+        raise HTTPException(
+            status_code=422, detail="An article cannot be a duplicate of itself."
+        )
+    outcome = apply_verdict(user.name_hash, candidate_hash, anchor_hash, is_duplicate)
+    return DuplicateVerdictResponse(
+        outcome=outcome, model=_model_status(user.name_hash)
     )
 
 
@@ -404,6 +655,195 @@ def get_item_duplicates(
                 item_is_shown=index == 0,
             )
             for index, row in enumerate(rows)
+        ],
+    )
+
+
+@feed_router.get(
+    "/related_items",
+    summary="The articles in this feed most like a given one",
+    response_model=RelatedItemsResponse,
+)
+def get_related_items(
+    feed_name_hash: str,
+    item_url_hash: str,
+    limit: int = Query(
+        5,
+        ge=1,
+        le=25,
+        description="How many related articles to return, most similar first.",
+    ),
+    user: User = Depends(authenticate),
+) -> RelatedItemsResponse:
+    """What else in this feed is about the same thing, read out of the
+    nearest-neighbour graph.
+
+    Other copies of the same story are left out: those are what the duplicate
+    badge stands for, and repeating them here would fill the rail with the
+    article the reader already has open.
+
+    An empty list is a normal answer, not an error -- an article ingested
+    minutes ago has not been linked into the graph yet, and one in a feed of
+    two articles has nothing much to be near.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    return RelatedItemsResponse(
+        item_hash=item_url_hash,
+        related=[
+            RelatedItemResponse.from_item(
+                item,
+                meta["similarity"],
+                source_name=meta["source_name"],
+                source_color=meta["source_color"],
+                user_score=meta["user_score"],
+                is_read=meta["is_read"],
+                in_list=meta["in_list"],
+                predicted_score=meta["predicted_score"],
+                predicted_confidence=meta["predicted_confidence"],
+                duplicate_count=meta["duplicate_count"],
+                duplicate_group=meta["duplicate_group"],
+            )
+            for item, meta in feed.related_items(item_url_hash, limit)
+        ],
+    )
+
+
+@feed_router.get(
+    "/item",
+    summary="One article of this feed, in full",
+    response_model=ItemResponse,
+)
+def get_feed_item(
+    feed_name_hash: str,
+    item_url_hash: str,
+    user: User = Depends(authenticate),
+) -> ItemResponse:
+    """One article, with its body, media and vote state.
+
+    The graph view is what wants this. Its nodes carry only what a dot and its
+    detail card need, so opening one for real -- with its pictures, its player
+    and its text -- means asking for the article itself. Exactly one, rather
+    than paging the feed to find it.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+    item, meta = feed.item(item_url_hash)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found in this feed")
+    return ItemResponse.from_db_model(item, **meta)
+
+
+@feed_router.get(
+    "/graph",
+    summary="The feed's articles and the similarity links between them",
+    response_model=FeedGraphResponse,
+)
+def get_feed_graph(
+    feed_name_hash: str,
+    limit: Optional[int] = Query(
+        300,
+        ge=10,
+        description="How many articles to draw. A picture of ten thousand "
+        "articles is a hairball, so the graph shows a window of the feed. "
+        "Omit for every article the filters leave, which is honest for a feed "
+        "of a few thousand and expensive for a very large one.",
+    ),
+    sort: str = Query(
+        "newest",
+        description="Which end of the feed a limited window keeps. The same "
+        "orders /feed/items takes: " + ", ".join(ITEM_SORTS),
+    ),
+    include_read: bool = True,
+    sources: Optional[str] = Query(
+        None, description="Comma-separated source name hashes to include"
+    ),
+    post_types: Optional[str] = Query(
+        None,
+        description="Comma-separated post types to keep: image, video, link, "
+        "text. Omit for all.",
+    ),
+    max_age: str = Query(
+        "all", description="Only items this recent: day, week, month, year, all"
+    ),
+    collapse_duplicates: Optional[bool] = Query(
+        None,
+        description="Draw one node per duplicate group rather than one per "
+        "copy. Omit for the server default.",
+    ),
+    only_duplicates: bool = Query(
+        False, description="Keep only articles that arrived more than once."
+    ),
+    user: User = Depends(authenticate),
+) -> FeedGraphResponse:
+    """Everything the graph view draws: the feed's articles under the filters
+    in force, and the stored links between the ones it returns.
+
+    Every filter /feed/items takes, this takes too, and applies through the
+    same code -- the graph is a picture of the list you were just looking at,
+    so the two must agree about what is hidden.
+
+    Edges with one end outside the window are left out rather than drawn
+    dangling, so what comes back is a true subgraph of the feed's own graph.
+
+    An article with no links yet is still a node -- it has been ingested and
+    not yet placed, and a feed mid-backfill should look like a graph filling in
+    rather than a graph with holes in it.
+    """
+    feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
+
+    if sort not in ITEM_SORTS:
+        raise HTTPException(status_code=422, detail=f"Unknown sort '{sort}'")
+    if max_age != "all" and max_age not in ITEM_AGE_WINDOWS:
+        raise HTTPException(status_code=422, detail=f"Unknown max_age '{max_age}'")
+
+    source_hashes = (
+        [s for s in sources.split(",") if s] if sources is not None else None
+    )
+    types = (
+        [t.strip() for t in post_types.split(",") if t.strip()]
+        if post_types is not None
+        else None
+    )
+    unknown = [t for t in types or [] if t not in POST_TYPES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown post type '{unknown[0]}'")
+
+    nodes, edges = feed.graph(
+        limit=limit,
+        sort=sort,
+        include_read=include_read,
+        source_hashes=source_hashes,
+        post_types=types,
+        max_age=None if max_age == "all" else max_age,
+        collapse_duplicates=collapse_duplicates,
+        only_duplicates=only_duplicates,
+    )
+    return FeedGraphResponse(
+        total_items=feed.stats()["feed_item_count"],
+        nodes=[
+            GraphNodeResponse(
+                item_hash=node["url_hash"],
+                item_url=node["url"],
+                item_title=node["title"],
+                item_date_published=node["date_published"],
+                item_source_name=node["source_name"],
+                item_source_color=node["source_color"],
+                item_image_url=node["image_url"],
+                item_media=node["media"],
+                item_predicted_score=node["predicted_score"],
+                item_predicted_confidence=node["predicted_confidence"],
+                item_user_score=node["user_score"],
+                item_is_read=node["is_read"],
+                item_duplicate_group=node["duplicate_group"],
+            )
+            for node in nodes
+        ],
+        edges=[
+            GraphEdgeResponse(
+                source=edge["source"],
+                target=edge["target"],
+                similarity=edge["similarity"],
+            )
+            for edge in edges
         ],
     )
 

@@ -19,8 +19,9 @@ proxy-reachable wheel drags in gigabytes of unused CUDA libraries, so we keep
 the image lean and let sklearn's MLP do the deep net on CPU.)
 
 All models consume `ItemFeatures`: the article's text embedding, a separate
-image (thumbnail) embedding, and scalar side information (source, author, post
-age, image/media presence). The text and image embeddings occupy distinct
+image (thumbnail) embedding, scalar side information (source, author, post age,
+image/media presence), and how the user voted on the articles nearest to it in
+the feed's neighbour graph. The text and image embeddings occupy distinct
 blocks in the design matrix, each with its own present/absent flag, so a
 picture is weighed independently of the words. When a deployment has no vision
 model configured the image block is simply zero-width and the has-image
@@ -71,6 +72,11 @@ class ItemFeatures:
     # not ours to decide.
     image_gone: bool = False
     has_media: bool = False
+    # This article's nearest neighbours in the feed, as (item hash, cosine
+    # similarity) pairs, best first — read from the stored graph rather than
+    # recomputed (see `neighbors.graph`). Only the ones the user actually voted
+    # on reach the model; see `_neighbor_vector`.
+    neighbors: Tuple[Tuple[str, float], ...] = ()
     label: Optional[float] = None  # user's vote, when known
     label_date: Optional[datetime] = None
 
@@ -111,6 +117,50 @@ def _aux_vector(item: ItemFeatures, now: datetime) -> np.ndarray:
     return vec
 
 
+# The neighbour block: a similarity-weighted average of the votes cast on this
+# article's nearest neighbours, the closest voted neighbour's similarity, and a
+# flag saying whether there was one at all.
+_NEIGHBOR_FEATURES = 3
+
+
+def _neighbor_vector(item: ItemFeatures, labels: Optional[dict]) -> np.ndarray:
+    """What the user thought of the articles most like this one.
+
+    Only *real votes* count. Feeding a neighbour's model-predicted score in
+    would have the model learn from its own output — the predictions it is
+    trained against would be the predictions it produced, and a confident
+    mistake would reinforce itself across a whole neighbourhood. An article
+    whose neighbours are all unvoted contributes zeros, and the flag is what
+    keeps that distinguishable from a neighbourhood that voted zero.
+
+    `labels` is the vote of every article the model was *fitted* on, and
+    nothing else. That restriction is the whole reason this is computed here
+    rather than loaded with the row: built from every vote in the feed, the
+    feature would carry a held-out article's own label into the fold that is
+    supposed to be predicting it, and cross-validation would report a score the
+    live feed could never reproduce.
+    """
+    vector = np.zeros(_NEIGHBOR_FEATURES)
+    if not labels:
+        return vector
+    voted = [
+        (sim, labels[neighbor_hash])
+        for neighbor_hash, sim in item.neighbors
+        if neighbor_hash in labels and neighbor_hash != item.url_hash
+    ]
+    # A neighbour on the far side of the sphere says nothing useful about this
+    # article, and weighting by a negative number would invert its vote.
+    voted = [(sim, label) for sim, label in voted if sim > 0.0]
+    if not voted:
+        return vector
+    weights = np.asarray([sim for sim, _ in voted], dtype=float)
+    votes = np.asarray([label for _, label in voted], dtype=float)
+    vector[0] = float(np.dot(weights, votes) / weights.sum())
+    vector[1] = float(weights.max())
+    vector[2] = 1.0
+    return vector
+
+
 def _unit_or_zeros(vector, dim: int) -> Tuple[np.ndarray, float]:
     """L2-normalize an embedding to a fixed length, or return zeros plus a
     "missing" flag when it's absent or the wrong size."""
@@ -137,19 +187,37 @@ def _embedding_dim(items: Sequence[ItemFeatures], attr: str) -> int:
 
 
 def _design_matrix(
-    items: Sequence[ItemFeatures], dim: int, image_dim: int, now: datetime
+    items: Sequence[ItemFeatures],
+    dim: int,
+    image_dim: int,
+    now: datetime,
+    neighbor_labels: Optional[dict] = None,
 ) -> np.ndarray:
     """Feature rows: [text embedding | has-text | image embedding | has-image |
-    scalar side features]. Text and image occupy separate blocks, each with its
-    own present/absent flag, so the model weighs the picture independently of
-    the words (and of the mere has-image flag in the side features)."""
+    scalar side features | neighbour votes]. Text and image occupy separate
+    blocks, each with its own present/absent flag, so the model weighs the
+    picture independently of the words (and of the mere has-image flag in the
+    side features).
+
+    The neighbour block is the votes on this article's nearest neighbours, and
+    it is a genuinely different kind of evidence from the rest: everything
+    before it describes the article, while this describes what the user made of
+    articles like it. `neighbor_labels` must be the labels of the fitted set
+    only — see `_neighbor_vector`."""
     rows = []
     for item in items:
         emb, has_emb = _embedding_or_zeros(item, dim)
         img_emb, has_img_emb = _unit_or_zeros(item.image_embedding, image_dim)
         rows.append(
             np.concatenate(
-                [emb, [has_emb], img_emb, [has_img_emb], _aux_vector(item, now)]
+                [
+                    emb,
+                    [has_emb],
+                    img_emb,
+                    [has_img_emb],
+                    _aux_vector(item, now),
+                    _neighbor_vector(item, neighbor_labels),
+                ]
             )
         )
     return np.asarray(rows)
@@ -323,7 +391,16 @@ class _SklearnModel(VoteModel):
         self.now = datetime.now(timezone.utc)
         self.dim = self._dim(items)
         self.image_dim = _embedding_dim(items, "image_embedding")
-        X = _design_matrix(items, self.dim, self.image_dim, self.now)
+        # Captured at fit time and reused when predicting, so the neighbour
+        # block sees exactly the votes this model was trained on -- during
+        # cross-validation that is the training fold alone, which is what keeps
+        # a held-out article's own label out of the features predicting it.
+        self.neighbor_labels = {
+            i.url_hash: float(i.label) for i in items if i.label is not None
+        }
+        X = _design_matrix(
+            items, self.dim, self.image_dim, self.now, self.neighbor_labels
+        )
         y = np.asarray([i.label for i in items], dtype=float)
         estimator = self._build_estimator()
         self.model = (
@@ -332,7 +409,9 @@ class _SklearnModel(VoteModel):
         self.model.fit(X, y)
 
     def predict(self, items):
-        X = _design_matrix(items, self.dim, self.image_dim, self.now)
+        X = _design_matrix(
+            items, self.dim, self.image_dim, self.now, self.neighbor_labels
+        )
         scores = np.clip(self.model.predict(X), -1.0, 1.0)
         confs = np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
         return scores, confs
