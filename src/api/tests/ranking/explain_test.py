@@ -1,6 +1,6 @@
-"""Pure-python tests for the mark normalization (no database)."""
+"""Pure-python tests for the mark normalization and previews (no database)."""
 
-from ranking.explain import _assign_marks
+from ranking.explain import _assign_marks, _preview_image_url
 
 
 def _levels(deltas):
@@ -43,3 +43,28 @@ def test_zero_level_iff_zero_sign():
     marks = _assign_marks([0.5, 0.001, -0.4, 0.0, -0.2, 0.05])
     for sign, level in marks:
         assert (level == 0) == (sign == 0)
+
+
+def test_preview_image_prefers_image_url():
+    row = {
+        "url": "https://example.com/post",
+        "image_url": "https://cdn.example.com/card.jpg",
+        "content": '<p><img src="https://cdn.example.com/body.jpg"></p>',
+    }
+    assert _preview_image_url(row) == "https://cdn.example.com/card.jpg"
+
+
+def test_preview_image_falls_back_to_content_image():
+    # what the card shows when there is no image_url, so the "why this
+    # article" panel shows the same picture instead of "no image"
+    row = {
+        "url": "https://example.com/post",
+        "image_url": None,
+        "content": '<p>hi</p><img src="//cdn.example.com/body.jpg">',
+    }
+    assert _preview_image_url(row) == "https://cdn.example.com/body.jpg"
+
+
+def test_preview_image_none_without_a_picture():
+    row = {"url": "https://example.com/post", "image_url": None, "content": "<p>hi</p>"}
+    assert _preview_image_url(row) is None

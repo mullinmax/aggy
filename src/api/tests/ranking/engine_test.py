@@ -41,3 +41,20 @@ def test_has_media_true_for_direct_video_file():
 def test_has_media_false_for_plain_article():
     feat = _row_to_features(_row(url="https://example.com/story", media=None))
     assert feat.has_media is False
+
+
+def test_has_image_from_image_url():
+    feat = _row_to_features(_row(image_url="https://example.com/a.jpg"))
+    assert feat.has_image is True
+
+
+def test_has_image_from_content_image_without_image_url():
+    # the card falls back to the first <img> in the content when there is no
+    # image_url, so training has to count that picture too
+    feat = _row_to_features(_row(image_url=None, has_preview_image=True))
+    assert feat.has_image is True
+
+
+def test_has_image_false_with_no_picture_anywhere():
+    feat = _row_to_features(_row(image_url=None, has_preview_image=False))
+    assert feat.has_image is False

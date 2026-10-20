@@ -502,6 +502,47 @@ def test_item_explanation_streams_the_previews_before_the_marks(
     }
 
 
+def test_item_explanation_shows_the_content_image_the_card_shows(
+    client, existing_user, existing_feed, existing_source, unique_item_strict, token
+):
+    """An article with no image_url but a picture in its body shows that
+    picture on its card, so the model scores it as having one and the "why
+    this article" panel previews it rather than saying there is no image."""
+    items = _make_items(existing_feed, existing_source, unique_item_strict)
+    for i, item in enumerate(items[:4]):
+        ItemState.set_state(
+            user_hash=existing_user.name_hash,
+            feed_hash=existing_feed.name_hash,
+            item_url_hash=item.url_hash,
+            score=1 if i % 2 == 0 else -1,
+            is_read=True,
+        )
+
+    pictured = unique_item_strict.model_copy()
+    pictured.url = HttpUrl("http://example.com/pictured/")
+    pictured.image_url = None
+    pictured.content = '<p>A caption.</p><img src="http://cdn.example.com/body.jpg">'
+    pictured.embeddings = {"test-model": [5.0, 0.0]}
+    pictured.create()
+    existing_source.add_items(pictured)
+    existing_feed.add_items(pictured)
+
+    args = build_api_request_args(
+        path="/feed/item_explanation",
+        params={
+            "feed_name_hash": existing_feed.name_hash,
+            "item_url_hash": pictured.url_hash,
+        },
+        token=token,
+    )
+    response = client.get(**args)
+    assert response.status_code == 200
+    fields = {f["field"]: f for f in response.json()["fields"]}
+    image_preview = fields["image"]["preview"]
+    assert image_preview["has_image"] is True
+    assert image_preview["image_url"] == "http://cdn.example.com/body.jpg"
+
+
 def test_the_previews_go_out_before_the_model_is_fitted(
     monkeypatch, existing_user, existing_feed, existing_source, unique_item_strict
 ):

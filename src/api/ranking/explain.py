@@ -29,6 +29,7 @@ from typing import Iterator, List, Optional
 
 from db.base import get_db_con
 from db.feed import Feed
+from db.item import embeddable_image_url
 from .engine import MIN_LABELS_TO_RANK, load_feed_features, load_item_features
 from .models import ItemFeatures, all_models, evaluate_models
 
@@ -243,9 +244,7 @@ def _assign_marks(deltas: List[float]) -> List[tuple]:
     used = sorted(m for m in magnitudes if m >= _USED_FLOOR)
     if used:
         mid = len(used) // 2
-        median = (
-            used[mid] if len(used) % 2 else (used[mid - 1] + used[mid]) / 2.0
-        )
+        median = used[mid] if len(used) % 2 else (used[mid - 1] + used[mid]) / 2.0
     else:
         median = 0.0
 
@@ -265,7 +264,7 @@ def _assign_marks(deltas: List[float]) -> List[tuple]:
 # Display data for the field previews; the ML features don't carry the title,
 # image URL or body text, so we pull them for the one item being explained.
 _ITEM_DISPLAY_SQL = (
-    "SELECT i.title, i.image_url, i.excerpt, i.content, ("
+    "SELECT i.title, i.url, i.image_url, i.excerpt, i.content, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"
     "  AND s.feed_hash = si.feed_hash AND s.name_hash = si.source_hash"
@@ -296,6 +295,17 @@ def _preview_text(row: dict) -> Optional[str]:
         body = _TAG_RE.sub(" ", row["content"])
         body = " ".join(body.split())[:500]
     return "\n\n".join(part for part in (title, body) if part) or None
+
+
+def _preview_image_url(row: dict) -> Optional[str]:
+    """The picture the image field scored: the same one the card shows and the
+    image embedder was handed. Many articles carry their picture only as an
+    <img> in the body, with no image_url -- the card falls back to it, and so
+    must this preview, or the panel says "no image" beside an article whose
+    picture is right there in the feed."""
+    return embeddable_image_url(
+        row.get("image_url"), row.get("content"), row.get("url")
+    ) or row.get("image_url")
 
 
 def explain_item_stream(feed: Feed, item_url_hash: str) -> Iterator[object]:
@@ -335,7 +345,7 @@ def explain_item_stream(feed: Feed, item_url_hash: str) -> Iterator[object]:
     row = _load_item_display(feed, item_url_hash)
     preview = FieldPreview(
         text=_preview_text(row),
-        image_url=row.get("image_url"),
+        image_url=_preview_image_url(row),
         source=row.get("source_name") or target.source,
         author=target.author,
         date_published=target.date_published,

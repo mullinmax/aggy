@@ -25,7 +25,7 @@ from typing import List, Optional
 from psycopg2.extras import execute_values
 
 from db.base import get_db_con
-from db.feed import Feed
+from db.feed import HAS_IMAGE_SQL, Feed
 from db.task_run import KIND_FEED_SCORING, KIND_FEED_TRAINING, task_run
 from neighbors.search import parse_embedding
 from utils import is_playable_media_url
@@ -73,7 +73,10 @@ def _row_to_features(row, neighbors: Optional[dict] = None) -> ItemFeatures:
         source=row.get("source_name"),
         author=row.get("author"),
         date_published=row.get("date_published"),
-        has_image=bool(row.get("image_url")),
+        # the preview image the card shows: image_url, or failing that the
+        # first <img> in the content (has_preview_image, computed in SQL so
+        # training doesn't pull every article's body just to look for one)
+        has_image=bool(row.get("image_url") or row.get("has_preview_image")),
         image_gone=bool(row.get("image_gone_at")),
         has_media=has_media,
         label=_effective_label(row.get("vote"), list_added_at),
@@ -87,7 +90,7 @@ def _row_to_features(row, neighbors: Optional[dict] = None) -> ItemFeatures:
 # feed. So an upvote cast in one feed trains every feed the item appears in.
 _FEED_ITEMS_SQL = (
     "SELECT i.url_hash, i.url, i.author, i.date_published, i.image_url, i.media, "
-    "i.image_gone_at, "
+    "i.image_gone_at, (" + HAS_IMAGE_SQL + ") AS has_preview_image, "
     "i.embeddings, i.image_embeddings, v.score AS vote, v.score_date AS vote_date, ("
     " SELECT s.name FROM source_items si"
     " JOIN sources s ON s.user_hash = si.user_hash"

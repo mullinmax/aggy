@@ -86,8 +86,9 @@ _PLAYABLE_URL_SQL = (
 
 # An item has a picture if it carries a card image, an image media entry, or
 # an <img> inside its (sanitized) content — many feeds only put pictures in
-# the content body.
-_HAS_IMAGE_SQL = "i.image_url IS NOT NULL OR i.content ~* '<img\\s'"
+# the content body. The <img> half is the card's own fallback (parseItemContent
+# in app.js), so the ranker reads it too: see ranking.engine.
+HAS_IMAGE_SQL = "i.image_url IS NOT NULL OR i.content ~* '<img\\s'"
 
 # Enough body text to be worth reading, rather than a bare pointer at another
 # page. Reddit link posts and video listings sit well under this; even a
@@ -122,7 +123,7 @@ def post_type_sql(post_type: str) -> Optional[str]:
     if post_type == "video":
         return f"({_media_has_type_sql(MEDIA_TYPES_VIDEO)} OR {_PLAYABLE_URL_SQL})"
     if post_type == "image":
-        return f"({_media_has_type_sql(MEDIA_TYPES_IMAGE)} OR {_HAS_IMAGE_SQL})"
+        return f"({_media_has_type_sql(MEDIA_TYPES_IMAGE)} OR {HAS_IMAGE_SQL})"
     if post_type == "link":
         # a link card, or a post that is nothing but a pointer: no picture, no
         # video, and no body of its own
