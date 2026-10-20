@@ -337,6 +337,26 @@ def link_item(
     return neighbors
 
 
+def mark_relink_needed(url_hash: str) -> None:
+    """Queue an article to be placed in the graph again.
+
+    Its links were computed from a vector it no longer has. A re-scrape that
+    turns up different text re-embeds the article, and every edge touching it
+    -- its own nearest, and the duplicate grouping read out of them -- was
+    measured against the old one. Nothing else notices: the re-walk cooldown
+    is about links going stale with age, not about the article underneath them
+    changing.
+
+    Every feed holding the article, because the graph is per (account, feed)
+    and the article is the same article in all of them.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE feed_items SET neighbors_stale = TRUE WHERE item_url_hash = %s",
+            (url_hash,),
+        )
+
+
 def neighbor_similarities(
     cur, user_hash: str, url_hash: str
 ) -> List[Tuple[str, float]]:

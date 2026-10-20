@@ -60,6 +60,63 @@ def test_rescrape_source_skips_unchanged_item(
     assert ranked == []
 
 
+def test_rescrape_item_reports_a_change_and_the_feeds_to_retrain(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    """Re-scraping one article writes back what changed and hands the stale
+    feeds to the caller rather than retraining them itself."""
+    longer_content = existing_item_strict.content + " with a lot more detail now"
+    monkeypatch.setattr(jobs, "ingest_reddit_item", lambda item: None)
+    monkeypatch.setattr(
+        jobs,
+        "ingest_open_graph_item",
+        lambda item: ItemLoose(url=item.url, content=longer_content),
+    )
+    monkeypatch.setattr(jobs, "ingest_mercury_item", lambda item: None)
+    monkeypatch.setattr(jobs.config, "get", lambda key, default=None: default)
+    monkeypatch.setattr(
+        "ranking.engine.rank_feed", lambda feed: pytest.fail("should not retrain")
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    assert stale == {(existing_item_state.user_hash, existing_item_state.feed_hash)}
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert longer_content in stored.content
+
+
+def test_rescrape_item_without_a_vote_still_reports_the_change(
+    monkeypatch, existing_source, existing_item_strict
+):
+    monkeypatch.setattr(jobs, "ingest_reddit_item", lambda item: None)
+    monkeypatch.setattr(
+        jobs,
+        "ingest_open_graph_item",
+        lambda item: ItemLoose(url=item.url, content=item.content + " and much more"),
+    )
+    monkeypatch.setattr(jobs, "ingest_mercury_item", lambda item: None)
+    monkeypatch.setattr(jobs.config, "get", lambda key, default=None: default)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    assert stale == set()
+
+
+def test_rescrape_item_with_nothing_new(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    for scraper in ("ingest_reddit_item", "ingest_open_graph_item", "ingest_mercury_item"):
+        monkeypatch.setattr(jobs, scraper, lambda item: None)
+    monkeypatch.setattr(jobs.config, "get", lambda key, default=None: default)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert jobs.rescrape_item(item, existing_source) == (False, set())
+
+
 def test_rescrape_source_persists_newly_added_image_embedding(
     monkeypatch, existing_source, existing_item_strict
 ):

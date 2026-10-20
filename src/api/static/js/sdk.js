@@ -205,6 +205,11 @@ class AggySDK {
     return this._request("GET", "/item/get_state", { query: { feed_hash, item_url_hash } });
   }
 
+  /** Re-scrape one article for content, media, and embeddings */
+  async itemRescrape({ item_url_hash, feed_hash }) {
+    return this._request("POST", "/item/rescrape", { query: { item_url_hash, feed_hash } });
+  }
+
   /** Set State */
   async itemSetState({ feed_hash, item_url_hash, score, is_read }) {
     return this._request("POST", "/item/set_state", { query: { feed_hash, item_url_hash, score, is_read } });

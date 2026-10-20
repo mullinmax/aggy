@@ -335,107 +335,105 @@ def _feeds_with_votes_on(url_hash: str) -> set:
         return {(row["user_hash"], row["feed_hash"]) for row in cur.fetchall()}
 
 
-def rescrape_source(source: Source) -> None:
-    """Re-scrape a source's existing items for content, images, and preview
-    media, and regenerate embeddings, WITHOUT re-fetching the RSS feed.
-
-    Each item's scrapers (reddit / open graph / mercury) are re-run and merged
-    over the stored item, so gaps get backfilled and better content/media wins
-    while nothing already stored is lost. When an item's re-collected data
-    actually changed and the item carries a vote, the affected feeds are
-    re-ranked so their models retrain on the fresh features.
+def _rescrape_item(item: ItemLoose, backend) -> tuple:
+    """Re-run one stored item's scrapers and re-embed it, persisting whatever
+    changed. Returns whether anything changed, and the (user_hash, feed_hash)
+    pairs whose models trained on the item's old features and should retrain.
     """
-    from ranking.engine import rank_feed  # local import avoids an import cycle
-
-    backend = get_backend(source.kind)
     embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
     image_embed_host = config.get("IMAGE_EMBED_HOST", None)
     image_embed_model = config.get("IMAGE_EMBED_MODEL")
-    feeds_to_rerank: set = set()
 
-    for item in source.query_items():
+    before = {f: getattr(item, f) for f in _RESCRAPE_FIELDS}
+
+    if backend.enrich:
+        merged = ItemLoose.merge_instances(
+            items=[
+                item,
+                ingest_reddit_item(item),
+                ingest_open_graph_item(item),
+                ingest_mercury_item(item),
+            ]
+        )
+    else:
+        # the generic scrapers have nothing to offer a backend that
+        # says so, and the sites it reaches refuse them anyway
+        merged = ItemLoose(**item.dict())
+    # merge_instances doesn't carry embeddings over; keep the existing
+    # ones so a re-scrape never drops them. Copied rather than shared:
+    # add_embedding mutates the dict in place, so handing `merged` the
+    # same object would also mutate `item` and leave the two comparing
+    # equal — a freshly computed embedding would then look like "no
+    # change" and never get written back.
+    merged.embeddings = dict(item.embeddings) if item.embeddings else None
+    merged.image_embeddings = (
+        dict(item.image_embeddings) if item.image_embeddings else None
+    )
+
+    # a re-collect is the one other time a backend gets to top an item
+    # up, which is how items stored before it could do so get their
+    # pictures
+    merged = backend.enrich_item(merged) or merged
+
+    after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
+    text_changed = any(after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS)
+    image_changed = after["image_url"] != before["image_url"]
+
+    embedding_changed = False
+    if text_changed and embedding_model is not None:
         try:
-            before = {f: getattr(item, f) for f in _RESCRAPE_FIELDS}
-
-            if backend.enrich:
-                merged = ItemLoose.merge_instances(
-                    items=[
-                        item,
-                        ingest_reddit_item(item),
-                        ingest_open_graph_item(item),
-                        ingest_mercury_item(item),
-                    ]
-                )
-            else:
-                # the generic scrapers have nothing to offer a backend that
-                # says so, and the sites it reaches refuse them anyway
-                merged = ItemLoose(**item.dict())
-            # merge_instances doesn't carry embeddings over; keep the existing
-            # ones so a re-scrape never drops them. Copied rather than shared:
-            # add_embedding mutates the dict in place, so handing `merged` the
-            # same object would also mutate `item` and leave the two comparing
-            # equal — a freshly computed embedding would then look like "no
-            # change" and never get written back.
-            merged.embeddings = dict(item.embeddings) if item.embeddings else None
-            merged.image_embeddings = (
-                dict(item.image_embeddings) if item.image_embeddings else None
-            )
-
-            # a re-collect is the one other time a backend gets to top an item
-            # up, which is how items stored before it could do so get their
-            # pictures
-            merged = backend.enrich_item(merged) or merged
-
-            after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
-            text_changed = any(after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS)
-            image_changed = after["image_url"] != before["image_url"]
-
-            embedding_changed = False
-            if text_changed and embedding_model is not None:
-                try:
-                    merged.add_embedding(model_name=embedding_model, force_refresh=True)
-                    embedding_changed = merged.embeddings != item.embeddings
-                except Exception as e:
-                    logging.error(f"Error re-embedding item {item.url}: {e}")
-
-            # a re-scrape that turns up a different picture clears the old
-            # one's failure history: those failures say nothing about the new
-            # URL, and an item that had exhausted its retries would otherwise
-            # stay out of the backfill queue forever
-            if image_changed:
-                reset_image_embed_attempts(item.url_hash)
-
-            # a re-scrape is also a chance to fill in an embedding that never
-            # landed (the image host was down, rate-limiting us, or refusing
-            # the request), which no amount of unchanged re-scraping would
-            # otherwise retry
-            image_missing = image_embed_model not in (merged.image_embeddings or {})
-            if (image_changed or image_missing) and image_embed_host is not None:
-                try:
-                    merged.add_image_embedding(
-                        model_name=image_embed_model, force_refresh=image_changed
-                    )
-                    embedding_changed = (
-                        embedding_changed
-                        or merged.image_embeddings != item.image_embeddings
-                    )
-                except Exception as e:
-                    logging.error(f"Error re-embedding image {item.url}: {e}")
-
-            if after == before and not embedding_changed:
-                continue  # nothing changed, leave the row untouched
-
-            merged.update()  # persist (overwrites the existing row)
-
-            # a changed, voted-on item means the models that trained on its old
-            # features are now stale — schedule those feeds to retrain
-            feeds_to_rerank |= _feeds_with_votes_on(item.url_hash)
-        except IngestError as e:
-            logging.warning(f"Re-scrape of {item.url}: {e}")
+            merged.add_embedding(model_name=embedding_model, force_refresh=True)
+            embedding_changed = merged.embeddings != item.embeddings
         except Exception as e:
-            logging.exception(f"Re-scrape of item {item.url} failed: {e}")
+            logging.error(f"Error re-embedding item {item.url}: {e}")
 
-    for user_hash, feed_hash in feeds_to_rerank:
+    # a re-scrape that turns up a different picture clears the old
+    # one's failure history: those failures say nothing about the new
+    # URL, and an item that had exhausted its retries would otherwise
+    # stay out of the backfill queue forever
+    if image_changed:
+        reset_image_embed_attempts(item.url_hash)
+
+    # a re-scrape is also a chance to fill in an embedding that never
+    # landed (the image host was down, rate-limiting us, or refusing
+    # the request), which no amount of unchanged re-scraping would
+    # otherwise retry
+    image_missing = image_embed_model not in (merged.image_embeddings or {})
+    if (image_changed or image_missing) and image_embed_host is not None:
+        try:
+            merged.add_image_embedding(
+                model_name=image_embed_model, force_refresh=image_changed
+            )
+            embedding_changed = (
+                embedding_changed or merged.image_embeddings != item.image_embeddings
+            )
+        except Exception as e:
+            logging.error(f"Error re-embedding image {item.url}: {e}")
+
+    if after == before and not embedding_changed:
+        return False, set()  # nothing changed, leave the row untouched
+
+    merged.update()  # persist (overwrites the existing row)
+
+    if embedding_changed:
+        # The similarity graph's links, and the duplicate grouping read out of
+        # them, were all measured against the vector this article just stopped
+        # having. Queue it to be placed again; the re-walk cooldown is about
+        # links going stale with age and would not notice this on its own.
+        from neighbors.graph import mark_relink_needed
+
+        mark_relink_needed(item.url_hash)
+
+    # a changed, voted-on item means the models that trained on its old
+    # features are now stale — those feeds should retrain
+    return True, _feeds_with_votes_on(item.url_hash)
+
+
+def rerank_feeds(feeds: set) -> None:
+    """Retrain the feeds a re-scrape left stale."""
+    from ranking.engine import rank_feed  # local import avoids an import cycle
+
+    for user_hash, feed_hash in feeds:
         feed = Feed.read(user_hash=user_hash, name_hash=feed_hash)
         if feed is None:
             continue
@@ -446,10 +444,51 @@ def rescrape_source(source: Source) -> None:
                 f"Re-ranking feed {feed.name} after re-scrape failed: {e}"
             )
 
+
+def rescrape_source(source: Source) -> None:
+    """Re-scrape a source's existing items for content, images, and preview
+    media, and regenerate embeddings, WITHOUT re-fetching the RSS feed.
+
+    Each item's scrapers (reddit / open graph / mercury) are re-run and merged
+    over the stored item, so gaps get backfilled and better content/media wins
+    while nothing already stored is lost. When an item's re-collected data
+    actually changed and the item carries a vote, the affected feeds are
+    re-ranked so their models retrain on the fresh features.
+    """
+    backend = get_backend(source.kind)
+    feeds_to_rerank: set = set()
+
+    for item in source.query_items():
+        try:
+            _, stale = _rescrape_item(item, backend)
+            feeds_to_rerank |= stale
+        except IngestError as e:
+            logging.warning(f"Re-scrape of {item.url}: {e}")
+        except Exception as e:
+            logging.exception(f"Re-scrape of item {item.url} failed: {e}")
+
+    rerank_feeds(feeds_to_rerank)
+
     logging.info(
         f"Re-scraped source '{source.name}': "
         f"{len(feeds_to_rerank)} feed(s) retrained"
     )
+
+
+def rescrape_item(item: ItemLoose, source: Source) -> tuple:
+    """Re-scrape one article now, the way its source's re-scrape would.
+
+    Returns whether anything about the article changed, and the feeds whose
+    models are now stale. Retraining is left to the caller: it takes far
+    longer than the scrape, and someone waiting on the answer only needs the
+    latter.
+    """
+    changed, stale = _rescrape_item(item, get_backend(source.kind))
+    logging.info(
+        f"Re-scraped {item.url}: "
+        + (f"changed, {len(stale)} feed(s) to retrain" if changed else "no change")
+    )
+    return changed, stale
 
 
 def download_embedding_model_job() -> None:

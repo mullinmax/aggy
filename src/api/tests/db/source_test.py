@@ -123,3 +123,33 @@ def test_count_items(unique_source, unique_item_strict):
     assert unique_source.count_items() == 0, "Should not count items in source"
     unique_source.add_items(unique_item_strict)
     assert unique_source.count_items() == 1, "Should count items in source"
+
+
+def test_for_item_prefers_the_feed_it_is_viewed_in(
+    existing_user, existing_feed, existing_source, existing_item_strict
+):
+    from db.feed import Feed
+
+    other_feed = Feed(user_hash=existing_user.name_hash, name="Other feed")
+    existing_user.add_feed(other_feed)
+    other_source = Source(
+        user_hash=existing_user.name_hash,
+        feed_hash=other_feed.name_hash,
+        name="Other source",
+        url="http://example.com/other.xml",
+    )
+    other_feed.add_source(other_source)
+    other_source.add_items(existing_item_strict)
+
+    for feed, source in (
+        (existing_feed, existing_source),
+        (other_feed, other_source),
+    ):
+        found = Source.for_item(
+            existing_user.name_hash, existing_item_strict.url_hash, feed.name_hash
+        )
+        assert found.name_hash == source.name_hash
+
+
+def test_for_item_of_an_item_the_user_does_not_have(existing_user, existing_source):
+    assert Source.for_item(existing_user.name_hash, "does-not-exist") is None

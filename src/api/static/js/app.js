@@ -2102,11 +2102,19 @@ function stopExplaining() {
   explainRun = null;
 }
 
-async function openExplanationModal(item) {
+// The article the explanation modal is showing, so a re-scrape that finishes
+// after it has moved on to another one doesn't paint over it. The stream has
+// its own guard in `explainRun`, which covers the explanation itself; this
+// one is about the re-scrape button beside it.
+let explainingItem = null;
+
+// Fetch the explanation and paint it as it arrives. Separate from opening the
+// modal because a re-scrape reloads it in place, against the article already
+// on screen.
+async function loadExplanation(item) {
   stopExplaining();
   const controller = new AbortController();
   explainRun = controller;
-  showModal('explainModal');
   render($('explainBody'), spinner());
 
   // The footer says which model this is and what it predicted, neither of
@@ -2158,6 +2166,58 @@ async function openExplanationModal(item) {
   } finally {
     if (explainRun === controller) explainRun = null;
   }
+}
+
+function openExplanationModal(item) {
+  explainingItem = item;
+  showModal('explainModal');
+  const btn = $('explainRescrapeBtn');
+  btn.disabled = false;
+  btn.textContent = 'Re-scrape article';
+  btn.onclick = () => rescrapeItem(item, btn);
+  loadExplanation(item);
+}
+
+// The fields a re-scrape can change. Everything else on the item (the vote,
+// the prediction, the source it's shown under) belongs to this feed and stays.
+const RESCRAPED_FIELDS = [
+  'item_title', 'item_author', 'item_date_published', 'item_domain',
+  'item_excerpt', 'item_content', 'item_image_url', 'item_media',
+];
+
+// Fetch the article from its site again, then show what the model makes of
+// the fresh copy: the explanation reloads, and the card behind it repaints.
+async function rescrapeItem(item, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Re-scraping…';
+  let result = null;
+  try {
+    result = await sdk.itemRescrape({
+      item_url_hash: item.item_hash,
+      feed_hash: currentFeed.feed_name_hash,
+    });
+  } catch (err) {
+    toast(err.message, 'alert-error');
+  }
+  if (explainingItem === item) {
+    btn.disabled = false;
+    btn.textContent = 'Re-scrape article';
+  }
+  if (!result) return;
+  if (!result.changed) {
+    toast('Re-scraped, but nothing new turned up', 'alert-info');
+    return;
+  }
+
+  RESCRAPED_FIELDS.forEach((field) => { item[field] = result.item[field]; });
+  voteRowsFor(item)
+    .map((row) => row.closest('.card'))
+    .filter(Boolean)
+    .forEach((card) => card.replaceWith(itemCard(item)));
+  toast(result.feeds_retraining
+    ? 'Article updated. Retraining on it in the background.'
+    : 'Article updated');
+  if (explainingItem === item) loadExplanation(item);
 }
 
 // ---------- duplicate review ----------
