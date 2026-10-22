@@ -442,8 +442,6 @@ def test_rescrape_resets_attempts_when_the_image_changes(
 ):
     """A re-scrape that turns up a different picture clears the old one's
     failures, so an item that had given up gets a fresh run at the new URL."""
-    # a stored image_url always wins the merge, so the item has to be missing
-    # one for a re-scrape to be able to change it
     existing_item_strict.update(image_url=None)
 
     with get_db_con() as cur:
@@ -469,6 +467,115 @@ def test_rescrape_resets_attempts_when_the_image_changes(
     state = _embed_state(existing_item_strict.url_hash)
     assert state["image_embed_attempts"] == 0
     assert state["image_embed_error"] is None
+
+
+def _scrapers_find(monkeypatch, reddit=None, open_graph=None):
+    """Have the re-scrape's scrapers return these (built from the item being
+    re-scraped), and nothing from the extractor."""
+    monkeypatch.setattr(
+        jobs, "ingest_reddit_item", lambda item: reddit and reddit(item)
+    )
+    monkeypatch.setattr(
+        jobs, "ingest_open_graph_item", lambda item: open_graph and open_graph(item)
+    )
+    monkeypatch.setattr(jobs, "ingest_mercury_item", lambda item: None)
+    monkeypatch.setattr(jobs.config, "get", lambda key, default=None: default)
+
+
+def test_rescrape_replaces_a_stale_picture_with_the_one_the_page_shows_now(
+    monkeypatch, existing_source, existing_item_strict
+):
+    _scrapers_find(
+        monkeypatch,
+        open_graph=lambda item: ItemLoose(
+            url=item.url, image_url="http://example.com/new.jpg"
+        ),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, _ = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url == "http://example.com/new.jpg"
+
+
+def test_rescrape_keeps_a_picture_nothing_could_vouch_against(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """Off reddit, a page that gave up no picture may simply not have been
+    readable, so the stored one stays."""
+    _scrapers_find(monkeypatch, open_graph=lambda item: ItemLoose(url=item.url))
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    jobs.rescrape_item(item, existing_source)
+
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url == existing_item_strict.image_url
+
+
+def test_rescrape_of_a_deleted_reddit_post_drops_its_old_picture(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    """The vote model should learn from a deleted post as it is now: no
+    picture, no media, reddit's notice for a body. The old preview lives on in
+    the feed-delivered body too, and the content fallback would show it, so
+    the body goes as well; the stored image vectors describe the old picture
+    and go with it; and the feed that voted on the post retrains."""
+    existing_item_strict.update(
+        content='<p>look at this</p><img src="http://example.com/thumb.jpg">',
+        media=[{"type": "image", "url": "http://example.com/full.jpg"}],
+        image_embeddings={"clip-model": [0.1]},
+    )
+    monkeypatch.setattr(jobs, "is_reddit_post", lambda url: True)
+    _scrapers_find(
+        monkeypatch,
+        reddit=lambda item: ItemLoose(
+            url=item.url, media=[], content="[deleted]", excerpt="[deleted]"
+        ),
+        # what the old page shows to anything that isn't reddit's API is no
+        # reason to keep the post's picture
+        open_graph=lambda item: ItemLoose(
+            url=item.url, image_url="http://example.com/og.jpg"
+        ),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    assert stale == {(existing_item_state.user_hash, existing_item_state.feed_hash)}
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url is None
+    assert stored.media == []
+    assert stored.content == "[deleted]"
+    assert stored.embeddable_image_url is None
+    assert not stored.image_embeddings
+
+
+def test_rescrape_of_a_reddit_post_clears_a_picture_reddit_no_longer_has(
+    monkeypatch, existing_source, existing_item_strict
+):
+    monkeypatch.setattr(jobs, "is_reddit_post", lambda url: True)
+    _scrapers_find(monkeypatch, reddit=lambda item: ItemLoose(url=item.url, media=[]))
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, _ = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url is None
+
+
+def test_rescrape_of_a_reddit_post_keeps_its_picture_when_reddit_is_unreachable(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """A rate-limited or blocked API says nothing about the post."""
+    monkeypatch.setattr(jobs, "is_reddit_post", lambda url: True)
+    _scrapers_find(monkeypatch)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert jobs.rescrape_item(item, existing_source) == (False, set())
 
 
 def test_rescrape_backfills_a_backends_own_metadata(

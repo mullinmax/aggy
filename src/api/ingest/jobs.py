@@ -1,6 +1,7 @@
 import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 from constants import SOURCE_READ_INTERVAL_MINUTES
 from db.base import get_db_con
@@ -40,7 +41,7 @@ from ingest.errors import IngestError
 from ingest.backends import UNSCHEDULED_KINDS, get_backend
 from ingest.host_circuit import HostUnavailable, source_host
 from ingest.source import ingest_source
-from ingest.item.reddit import ingest_reddit_item
+from ingest.item.reddit import REMOVAL_NOTICES, ingest_reddit_item, is_reddit_post
 from ingest.item.open_graph import ingest_open_graph_item
 from ingest.item.mercury import ingest_mercury_item
 from db.user import User
@@ -335,6 +336,55 @@ def _feeds_with_votes_on(url_hash: str) -> set:
         return {(row["user_hash"], row["feed_hash"]) for row in cur.fetchall()}
 
 
+def _replace_with_fresh_pictures(
+    merged: ItemLoose,
+    stored: ItemLoose,
+    reddit_item: Optional[ItemLoose],
+    scraped: list,
+) -> None:
+    """Make ``merged`` show what the re-scrape found rather than what was
+    stored.
+
+    merge_instances keeps the first non-empty value it sees, and the stored
+    item goes in first so that what only the feed itself delivered (and a
+    re-scrape cannot fetch again) survives. For the picture that is wrong: a
+    stored image_url would win over whatever the page shows today, and a post
+    that has since been deleted would keep its old preview for good. The vote
+    model has to see the article as it is now, so a fresh picture replaces the
+    stored one, and when the page that is authoritative for the picture
+    answered without one, the stored one is cleared rather than kept.
+
+    For a reddit post that page is the post's JSON. Anywhere else nothing can
+    yet tell "the page has no picture" from "the scraper could not read it",
+    so a stored picture is only ever replaced, never cleared.
+    """
+    fresh_image = next((s.image_url for s in scraped if s and s.image_url), None)
+
+    if not is_reddit_post(str(stored.url)):
+        merged.image_url = fresh_image or stored.image_url
+        return
+
+    if reddit_item is None:
+        # reddit didn't answer (rate limited, blocked, down): that says
+        # nothing about the post, so keep what we have unless something
+        # else turned up a picture
+        merged.image_url = fresh_image or stored.image_url
+        return
+
+    merged.media = reddit_item.media
+    if reddit_item.content in REMOVAL_NOTICES:
+        # The post is gone. Its picture lives on in the body the feed
+        # delivered too (the card and the recommender both fall back to the
+        # first image in it), so the notice replaces the body as well,
+        # otherwise the old preview would keep showing through.
+        merged.image_url = None
+        merged.content = reddit_item.content
+        merged.excerpt = reddit_item.excerpt
+        return
+
+    merged.image_url = fresh_image
+
+
 def _rescrape_item(item: ItemLoose, backend) -> tuple:
     """Re-run one stored item's scrapers and re-embed it, persisting whatever
     changed. Returns whether anything changed, and the (user_hash, feed_hash)
@@ -345,16 +395,17 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
     image_embed_model = config.get("IMAGE_EMBED_MODEL")
 
     before = {f: getattr(item, f) for f in _RESCRAPE_FIELDS}
+    picture_before = item.embeddable_image_url
 
     if backend.enrich:
-        merged = ItemLoose.merge_instances(
-            items=[
-                item,
-                ingest_reddit_item(item),
-                ingest_open_graph_item(item),
-                ingest_mercury_item(item),
-            ]
-        )
+        reddit_item = ingest_reddit_item(item)
+        scraped = [
+            reddit_item,
+            ingest_open_graph_item(item),
+            ingest_mercury_item(item),
+        ]
+        merged = ItemLoose.merge_instances(items=[item, *scraped])
+        _replace_with_fresh_pictures(merged, item, reddit_item, scraped)
     else:
         # the generic scrapers have nothing to offer a backend that
         # says so, and the sites it reaches refuse them anyway
@@ -377,7 +428,11 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
 
     after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
     text_changed = any(after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS)
-    image_changed = after["image_url"] != before["image_url"]
+    # Compared as the picture the item shows rather than as image_url: with
+    # no image_url the card and the recommender both fall back to the first
+    # image in the content, so a re-scrape that swaps the content out from
+    # under an unset image_url changes the picture just as much.
+    picture_changed = merged.embeddable_image_url != picture_before
 
     embedding_changed = False
     if text_changed and embedding_model is not None:
@@ -387,28 +442,33 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
         except Exception as e:
             logging.error(f"Error re-embedding item {item.url}: {e}")
 
-    # a re-scrape that turns up a different picture clears the old
-    # one's failure history: those failures say nothing about the new
-    # URL, and an item that had exhausted its retries would otherwise
-    # stay out of the backfill queue forever
-    if image_changed:
+    if picture_changed:
+        # a re-scrape that turns up a different picture clears the old
+        # one's failure history: those failures say nothing about the new
+        # URL, and an item that had exhausted its retries would otherwise
+        # stay out of the backfill queue forever
         reset_image_embed_attempts(item.url_hash)
+        # Every stored image vector describes the old picture. Keeping one
+        # would have the vote model go on scoring a picture the article no
+        # longer shows (a deleted post's, say), so they go; the new picture,
+        # if there is one, is embedded below or by the backfill.
+        merged.image_embeddings = None
 
     # a re-scrape is also a chance to fill in an embedding that never
     # landed (the image host was down, rate-limiting us, or refusing
     # the request), which no amount of unchanged re-scraping would
     # otherwise retry
     image_missing = image_embed_model not in (merged.image_embeddings or {})
-    if (image_changed or image_missing) and image_embed_host is not None:
+    if (picture_changed or image_missing) and image_embed_host is not None:
         try:
             merged.add_image_embedding(
-                model_name=image_embed_model, force_refresh=image_changed
-            )
-            embedding_changed = (
-                embedding_changed or merged.image_embeddings != item.image_embeddings
+                model_name=image_embed_model, force_refresh=picture_changed
             )
         except Exception as e:
             logging.error(f"Error re-embedding image {item.url}: {e}")
+    embedding_changed = (
+        embedding_changed or merged.image_embeddings != item.image_embeddings
+    )
 
     if after == before and not embedding_changed:
         return False, set()  # nothing changed, leave the row untouched
@@ -450,10 +510,11 @@ def rescrape_source(source: Source) -> None:
     media, and regenerate embeddings, WITHOUT re-fetching the RSS feed.
 
     Each item's scrapers (reddit / open graph / mercury) are re-run and merged
-    over the stored item, so gaps get backfilled and better content/media wins
-    while nothing already stored is lost. When an item's re-collected data
-    actually changed and the item carries a vote, the affected feeds are
-    re-ranked so their models retrain on the fresh features.
+    over the stored item, so gaps get backfilled and better content wins. The
+    picture follows the page as it is now (see _replace_with_fresh_pictures),
+    so a post that has been taken down stops showing its old preview. When an
+    item's re-collected data actually changed and the item carries a vote, the
+    affected feeds are re-ranked so their models retrain on the fresh features.
     """
     backend = get_backend(source.kind)
     feeds_to_rerank: set = set()
