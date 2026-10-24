@@ -1,4 +1,5 @@
 fastapi
 uvicorn[standard]
-pillow
+# Floor set to clear the Dependabot advisories against older releases.
+pillow>=13
 sentence-transformers
