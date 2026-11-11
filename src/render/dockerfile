@@ -5,6 +5,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Playwright's bundled Node driver links against libatomic, which the slim
+# base image does not ship. It has to be present before the driver can run
+# the install below, so --with-deps cannot pull it in for us.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Chromium plus the system libraries it needs. This is what makes the image
 # large (~1GB); nothing else here is heavy.
 RUN playwright install --with-deps chromium
