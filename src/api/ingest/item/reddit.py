@@ -109,6 +109,29 @@ def _external_link_media(post: dict) -> List[dict]:
     return [entry]
 
 
+# What reddit leaves in a post's body once it has been taken down: "[deleted]"
+# when its author removed it, "[removed]" when a moderator or reddit did.
+REMOVAL_NOTICES = ("[deleted]", "[removed]")
+
+
+def _removal_notice(post: dict) -> Optional[str]:
+    """The notice standing in for a post that has been taken down, or ``None``
+    for one that is still up.
+
+    A link or image post has no body to blank, so reddit's
+    ``removed_by_category`` is the only sign there; a self post carries the
+    notice in its ``selftext`` as well, which is also all that older posts
+    deleted by their author have.
+    """
+    selftext = (post.get("selftext") or "").strip()
+    if selftext in REMOVAL_NOTICES:
+        return selftext
+    category = post.get("removed_by_category")
+    if category:
+        return "[deleted]" if category == "deleted" else "[removed]"
+    return None
+
+
 def _post_media(post: dict) -> List[dict]:
     if post.get("is_gallery"):
         return _gallery_media(post)
@@ -198,6 +221,23 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
     except Exception as e:
         logging.warning(f"Could not fetch reddit post data for {url}: {e}")
         return None
+
+    notice = _removal_notice(post)
+    if notice:
+        # The post is gone, and what it used to show is exactly what the reader
+        # (and the vote model) should stop seeing: no picture, no media, and
+        # reddit's notice in place of the body the feed delivered. reddit can
+        # still hand back the old preview or link target for a removed post,
+        # so nothing is read from it.
+        return ItemLoose(
+            url=item.url,
+            title=post.get("title"),
+            author=f"u/{post['author']}" if post.get("author") else None,
+            media=[],
+            image_url=None,
+            content=notice,
+            excerpt=notice,
+        )
 
     media = _post_media(post)
     # no embeddable media, but the post links off-site: surface the

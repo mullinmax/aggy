@@ -4,6 +4,7 @@ from db.item import ItemLoose
 from ingest.item.reddit import (
     _external_link_media,
     _post_media,
+    _removal_notice,
     ingest_reddit_item,
     is_reddit_post,
 )
@@ -284,6 +285,47 @@ def test_ingest_reddit_item_adds_link_card_for_link_post(monkeypatch):
             "poster": "https://preview.redd.it/img.jpg",
         }
     ]
+
+
+def test_ingest_reddit_item_drops_what_a_removed_post_used_to_show(monkeypatch):
+    """reddit can still hand back a taken-down post's preview and link target;
+    none of it should outlive the post."""
+    post = {
+        "title": "A gif post",
+        "author": "[deleted]",
+        "selftext": "",
+        "removed_by_category": "moderator",
+        "url_overridden_by_dest": "https://i.redd.it/example.gif",
+        "preview": {"images": [{"source": {"url": "https://preview.redd.it/img.jpg"}}]},
+    }
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"data": {"children": [{"data": post}]}}]
+
+    monkeypatch.setattr(
+        "ingest.item.reddit.reddit_get", lambda url, **kwargs: FakeResponse()
+    )
+
+    item = ItemLoose(url="https://www.reddit.com/r/pics/comments/abc123/a_gif_post/")
+    result = ingest_reddit_item(item)
+
+    assert result.image_url is None
+    assert result.media == []
+    assert result.content == "[removed]"
+    assert result.excerpt == "[removed]"
+
+
+def test_removal_notice():
+    assert _removal_notice({"selftext": "[deleted]"}) == "[deleted]"
+    assert _removal_notice({"selftext": "[removed]"}) == "[removed]"
+    assert _removal_notice({"removed_by_category": "deleted"}) == "[deleted]"
+    assert _removal_notice({"removed_by_category": "reddit"}) == "[removed]"
+    assert _removal_notice({"selftext": "here", "removed_by_category": None}) is None
+    assert _removal_notice({}) is None
 
 
 def test_rss_link_media():
