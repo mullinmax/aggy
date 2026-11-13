@@ -4,6 +4,7 @@ from db.item import ItemLoose
 from ingest.item.reddit import (
     _external_link_media,
     _post_media,
+    _post_json_url,
     _removal_notice,
     ingest_reddit_item,
     is_reddit_post,
@@ -19,6 +20,31 @@ def test_is_reddit_post():
     assert not is_reddit_post("https://www.reddit.com/r/pics/")
     assert not is_reddit_post("https://example.com/r/pics/comments/abc123/")
     assert not is_reddit_post(None)
+
+
+def test_is_reddit_post_accepts_links_saved_from_a_browser_or_phone():
+    """Links saved through the extension or a share sheet reach the same post
+    under other hosts. Missing them meant a re-scrape never asked reddit
+    whether the post had been taken down."""
+    assert is_reddit_post("https://reddit.com/r/pics/comments/abc123/a_title/")
+    assert is_reddit_post("https://m.reddit.com/r/pics/comments/abc123/a_title/")
+    assert is_reddit_post("https://np.reddit.com/r/pics/comments/abc123/a_title/")
+    assert is_reddit_post("https://sh.reddit.com/r/pics/comments/abc123/a_title/")
+    assert not is_reddit_post("https://notreddit.com/r/pics/comments/abc123/")
+
+
+def test_post_json_url_drops_query_and_fragment():
+    assert (
+        _post_json_url(
+            "https://reddit.com/r/pics/comments/abc123/a_title/"
+            "?utm_source=share&utm_medium=web3x#comments"
+        )
+        == "https://www.reddit.com/r/pics/comments/abc123/a_title.json"
+    )
+    assert (
+        _post_json_url("https://old.reddit.com/r/pics/comments/abc123/a_title")
+        == "https://www.reddit.com/r/pics/comments/abc123/a_title.json"
+    )
 
 
 def test_post_media_gif_prefers_mp4_rendition():
@@ -317,6 +343,34 @@ def test_ingest_reddit_item_drops_what_a_removed_post_used_to_show(monkeypatch):
     assert result.media == []
     assert result.content == "[removed]"
     assert result.excerpt == "[removed]"
+
+
+def test_ingest_reddit_item_sees_a_removal_behind_a_shared_link(monkeypatch):
+    """A link carrying share-sheet parameters still reaches the post's JSON,
+    so its removal is noticed."""
+    requested = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            post = {"title": "t", "selftext": "[removed]"}
+            return [{"data": {"children": [{"data": post}]}}]
+
+    def fake_get(url, **kwargs):
+        requested.append(url)
+        return FakeResponse()
+
+    monkeypatch.setattr("ingest.item.reddit.reddit_get", fake_get)
+
+    item = ItemLoose(
+        url="https://reddit.com/r/pics/comments/abc123/t/?utm_source=share"
+    )
+    result = ingest_reddit_item(item)
+
+    assert requested == ["https://www.reddit.com/r/pics/comments/abc123/t.json"]
+    assert result.content == "[removed]"
 
 
 def test_removal_notice():

@@ -16,9 +16,13 @@ from db.item import ItemLoose
 from ingest.reddit_rate_limit import RedditBlocked, reddit_get
 
 # A reddit post's comments page, which is what reddit RSS uses as the entry
-# link, e.g. https://www.reddit.com/r/pics/comments/abc123/title/
+# link, e.g. https://www.reddit.com/r/pics/comments/abc123/title/. Links saved
+# from a browser or a phone's share sheet reach the same page under other
+# hosts (bare reddit.com, m., np., sh.), so those count too.
 _REDDIT_POST_RE = re.compile(
-    r"^https?://(?:www|old|new)\.reddit\.com/(?:r|user|u)/[^/]+/comments/", re.I
+    r"^https?://(?:(?:www|old|new|np|m|sh)\.)?reddit\.com"
+    r"/(?:r|user|u)/[^/]+/comments/",
+    re.I,
 )
 
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
@@ -30,6 +34,19 @@ _REDGIFS_RE = re.compile(r"^https?://(?:www\.)?redgifs\.com/watch/(\w+)", re.I)
 
 def is_reddit_post(url: Optional[str]) -> bool:
     return bool(url and _REDDIT_POST_RE.match(str(url)))
+
+
+def _post_json_url(url: str) -> str:
+    """The JSON endpoint for a reddit post link.
+
+    Appending ".json" only works on a bare path: a link copied from a browser
+    usually carries tracking parameters (``?utm_source=share...``) or a
+    fragment, and tacking ".json" onto those asks reddit for the HTML page,
+    which then fails to parse and reads as "reddit didn't answer". The host is
+    pinned to www.reddit.com so every variant goes through the same endpoint.
+    """
+    path = urlparse(url).path.rstrip("/")
+    return f"https://www.reddit.com{path}.json"
 
 
 def _media_entry(type: str, url: str, poster: Optional[str] = None) -> dict:
@@ -205,7 +222,7 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         # through the shared adaptive throttle so per-post media fetches share
         # reddit's rate budget with the feed fetches.
         response = reddit_get(
-            url.rstrip("/") + ".json",
+            _post_json_url(url),
             params={"raw_json": 1},
             timeout=15,
             headers=headers,
