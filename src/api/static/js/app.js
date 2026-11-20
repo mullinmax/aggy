@@ -2183,7 +2183,11 @@ function openExplanationModal(item) {
   const btn = $('explainRescrapeBtn');
   btn.disabled = false;
   btn.textContent = 'Re-scrape article';
-  btn.onclick = () => rescrapeItem(item, btn);
+  // never carried over from the last article: a wipe has to be asked for
+  const fresh = $('explainRescrapeFresh');
+  fresh.checked = false;
+  $('explainUnreachable').classList.add('hidden');
+  btn.onclick = () => rescrapeItem(item, btn, fresh.checked);
   loadExplanation(item);
 }
 
@@ -2196,14 +2200,19 @@ const RESCRAPED_FIELDS = [
 
 // Fetch the article from its site again, then show what the model makes of
 // the fresh copy: the explanation reloads, and the card behind it repaints.
-async function rescrapeItem(item, btn) {
+// `fresh` throws away what was stored instead of adding to it, so a post that
+// was taken down stops being scored on content it no longer has.
+async function rescrapeItem(item, btn, fresh = false, wipeIfUnreachable = false) {
   btn.disabled = true;
   btn.textContent = 'Re-scraping…';
+  $('explainUnreachable').classList.add('hidden');
   let result = null;
   try {
     result = await sdk.itemRescrape({
       item_url_hash: item.item_hash,
       feed_hash: currentFeed.feed_name_hash,
+      fresh,
+      wipe_if_unreachable: wipeIfUnreachable || null,
     });
   } catch (err) {
     toast(err.message, 'alert-error');
@@ -2213,6 +2222,12 @@ async function rescrapeItem(item, btn) {
     btn.textContent = 'Re-scrape article';
   }
   if (!result) return;
+  if (result.unreachable) {
+    // Nothing answered, which says nothing about whether the content is
+    // gone. Ask rather than guess.
+    if (explainingItem === item) askDeleteUnreachable(item, btn);
+    return;
+  }
   if (!result.changed) {
     toast('Re-scraped, but nothing new turned up', 'alert-info');
     return;
@@ -2223,10 +2238,31 @@ async function rescrapeItem(item, btn) {
     .map((row) => row.closest('.card'))
     .filter(Boolean)
     .forEach((card) => card.replaceWith(itemCard(item)));
-  toast(result.feeds_retraining
-    ? 'Article updated. Retraining on it in the background.'
-    : 'Article updated');
+  if (fresh) {
+    $('explainRescrapeFresh').checked = false;
+    toast(result.feeds_retraining
+      ? 'Article rebuilt from scratch. Rescoring it in the background.'
+      : 'Article rebuilt from scratch');
+  } else {
+    toast(result.feeds_retraining
+      ? 'Article updated. Retraining on it in the background.'
+      : 'Article updated');
+  }
   if (explainingItem === item) loadExplanation(item);
+}
+
+function askDeleteUnreachable(item, btn) {
+  const box = $('explainUnreachable');
+  box.classList.remove('hidden');
+  $('explainUnreachableKeep').onclick = () => {
+    box.classList.add('hidden');
+    $('explainRescrapeFresh').checked = false;
+    toast('Kept the existing article', 'alert-info');
+  };
+  $('explainUnreachableDelete').onclick = () => {
+    box.classList.add('hidden');
+    rescrapeItem(item, btn, true, true);
+  };
 }
 
 // ---------- duplicate review ----------

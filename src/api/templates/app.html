@@ -512,8 +512,25 @@
       Tap a field to see exactly what was evaluated.
     </p>
     <div id="explainBody"></div>
+    <!-- Shown when starting fresh couldn't reach the article: whether the
+         content is gone is the reader's call, not something to guess. -->
+    <div id="explainUnreachable" class="alert alert-warning mt-4 hidden" role="alert">
+      <div class="flex flex-col gap-2 w-full">
+        <p class="text-sm">Couldn't reach this article, so nothing was changed. Delete what's stored about it (keeping only the link) and rescore it, or keep the existing article?</p>
+        <div class="flex gap-2 justify-end">
+          <button type="button" class="btn btn-sm" id="explainUnreachableKeep">Keep existing</button>
+          <button type="button" class="btn btn-sm btn-error" id="explainUnreachableDelete">Delete content</button>
+        </div>
+      </div>
+    </div>
     <div class="modal-action items-center">
       <p class="text-xs text-base-content/50 mr-auto">Missing text or a picture? Fetch the article again.</p>
+      <!-- Off every time the modal opens: starting fresh deletes what was
+           stored about the article and can't be undone. -->
+      <label class="label cursor-pointer gap-1.5 py-0" title="Delete everything stored about this article, rebuild it from what the site shows now, and rescore it in every feed. Use it when a post was removed.">
+        <input type="checkbox" class="checkbox checkbox-xs checkbox-primary" id="explainRescrapeFresh">
+        <span class="label-text text-xs">Start fresh</span>
+      </label>
       <button type="button" class="btn btn-outline btn-sm" id="explainRescrapeBtn">Re-scrape article</button>
     </div>
   </div>

@@ -8,6 +8,7 @@ items and turns it into the item's ``media`` list.
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -16,9 +17,13 @@ from db.item import ItemLoose
 from ingest.reddit_rate_limit import RedditBlocked, reddit_get
 
 # A reddit post's comments page, which is what reddit RSS uses as the entry
-# link, e.g. https://www.reddit.com/r/pics/comments/abc123/title/
+# link, e.g. https://www.reddit.com/r/pics/comments/abc123/title/. Links saved
+# from a browser or a phone's share sheet reach the same page under other
+# hosts (bare reddit.com, m., np., sh.), so those count too.
 _REDDIT_POST_RE = re.compile(
-    r"^https?://(?:www|old|new)\.reddit\.com/(?:r|user|u)/[^/]+/comments/", re.I
+    r"^https?://(?:(?:www|old|new|np|m|sh)\.)?reddit\.com"
+    r"/(?:r|user|u)/[^/]+/comments/",
+    re.I,
 )
 
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
@@ -30,6 +35,19 @@ _REDGIFS_RE = re.compile(r"^https?://(?:www\.)?redgifs\.com/watch/(\w+)", re.I)
 
 def is_reddit_post(url: Optional[str]) -> bool:
     return bool(url and _REDDIT_POST_RE.match(str(url)))
+
+
+def _post_json_url(url: str) -> str:
+    """The JSON endpoint for a reddit post link.
+
+    Appending ".json" only works on a bare path: a link copied from a browser
+    usually carries tracking parameters (``?utm_source=share...``) or a
+    fragment, and tacking ".json" onto those asks reddit for the HTML page,
+    which then fails to parse and reads as "reddit didn't answer". The host is
+    pinned to www.reddit.com so every variant goes through the same endpoint.
+    """
+    path = urlparse(url).path.rstrip("/")
+    return f"https://www.reddit.com{path}.json"
 
 
 def _media_entry(type: str, url: str, poster: Optional[str] = None) -> dict:
@@ -132,6 +150,26 @@ def _removal_notice(post: dict) -> Optional[str]:
     return None
 
 
+def _author(post: dict) -> Optional[str]:
+    """The poster, or ``None`` once reddit has blanked them to "[deleted]"."""
+    author = post.get("author")
+    if not author or author in REMOVAL_NOTICES:
+        return None
+    return f"u/{author}"
+
+
+def _created_at(post: dict) -> Optional[datetime]:
+    """When the post went up. A taken-down post keeps this too, and a
+    re-scrape that starts fresh has nothing else to date the article by."""
+    created = post.get("created_utc")
+    if created is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(created), tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 def _post_media(post: dict) -> List[dict]:
     if post.get("is_gallery"):
         return _gallery_media(post)
@@ -205,7 +243,7 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         # through the shared adaptive throttle so per-post media fetches share
         # reddit's rate budget with the feed fetches.
         response = reddit_get(
-            url.rstrip("/") + ".json",
+            _post_json_url(url),
             params={"raw_json": 1},
             timeout=15,
             headers=headers,
@@ -232,7 +270,8 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         return ItemLoose(
             url=item.url,
             title=post.get("title"),
-            author=f"u/{post['author']}" if post.get("author") else None,
+            author=_author(post),
+            date_published=_created_at(post),
             media=[],
             image_url=None,
             content=notice,
@@ -255,7 +294,8 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
     return ItemLoose(
         url=item.url,
         title=post.get("title"),
-        author=f"u/{post['author']}" if post.get("author") else None,
+        author=_author(post),
+        date_published=_created_at(post),
         # an empty list still means "post scraped, no media found", which
         # stops re-scrape attempts on later ingest cycles
         media=media,

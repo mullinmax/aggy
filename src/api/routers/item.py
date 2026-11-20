@@ -23,7 +23,7 @@ from db.source import Source
 from db.user import User
 from ingest.backends import ytdlp
 from ingest.errors import IngestError
-from ingest.jobs import rerank_feeds, rescrape_item
+from ingest.jobs import ArticleUnreachable, rerank_feeds, rescrape_item
 from route_models.acknowledge import AcknowledgeResponse
 from route_models.experiment import ItemOpenResponse
 from route_models.item import ItemRescrapeResponse, ItemResponse
@@ -177,6 +177,8 @@ def rescrape(
     item_url_hash: str,
     background_tasks: BackgroundTasks,
     feed_hash: Optional[str] = None,
+    fresh: bool = False,
+    wipe_if_unreachable: bool = False,
     user: User = Depends(authenticate),
 ) -> ItemRescrapeResponse:
     """Re-collect one article from its site right now, the way a source
@@ -187,6 +189,13 @@ def rescrape(
     longer, so that happens in the background. `feed_hash` is the feed the
     article is being viewed in: when several of the user's sources carry it,
     the one in that feed decides how it's scraped.
+
+    `fresh` throws the stored copy away instead of adding to it: the article
+    is rebuilt only from what its site answers with now (a post a moderator
+    took down loses everything it used to show), re-embedded, and every feed
+    carrying it is re-ranked. If the site doesn't answer at all, nothing is
+    wiped and the response says `unreachable`, so the reader can decide;
+    asking again with `wipe_if_unreachable` then keeps only the link.
     """
     source = Source.for_item(user.name_hash, item_url_hash, feed_hash)
     item = ItemLoose.read(url_hash=item_url_hash) if source else None
@@ -194,7 +203,18 @@ def rescrape(
         raise HTTPException(status_code=404, detail="Item not found")
 
     try:
-        changed, stale_feeds = rescrape_item(item, source)
+        changed, stale_feeds = rescrape_item(
+            item, source, fresh=fresh, wipe_if_unreachable=wipe_if_unreachable
+        )
+    except ArticleUnreachable:
+        # not a failure to report but a question for the reader: is the
+        # content gone, or should the stored copy stay?
+        return ItemRescrapeResponse(
+            changed=False,
+            feeds_retraining=0,
+            unreachable=True,
+            item=ItemResponse.from_db_model(item),
+        )
     except IngestError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
