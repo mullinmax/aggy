@@ -34,12 +34,16 @@ KIND_SOURCE_RESCRAPE = "source_rescrape"
 KIND_DUPLICATE_DETECTION = "duplicate_detection"
 KIND_IMAGE_EMBED_BACKFILL = "image_embed_backfill"
 KIND_NEIGHBOR_GRAPH = "neighbor_graph"
+# A prediction experiment: a replay of vote history against every candidate
+# method (ranking/experiments). Asked for by hand, never scheduled.
+KIND_PREDICTION_EXPERIMENT = "prediction_experiment"
 
 # Ordered for display: the ones an account owns first, then the system-wide
 # passes it only observes.
 TASK_KINDS = (
     KIND_FEED_TRAINING,
     KIND_FEED_SCORING,
+    KIND_PREDICTION_EXPERIMENT,
     KIND_SOURCE_INGEST,
     KIND_SOURCE_RESCRAPE,
     KIND_DUPLICATE_DETECTION,
