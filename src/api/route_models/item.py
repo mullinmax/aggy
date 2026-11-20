@@ -143,5 +143,9 @@ class ItemRescrapeResponse(BaseRouteModel):
     # How many feeds that voted on the article are retraining on its new
     # features, in the background.
     feeds_retraining: int
+    # Set when starting fresh found nothing to rebuild from (the site or
+    # reddit didn't answer at all). Nothing was changed; the reader decides
+    # whether to wipe the article anyway or keep it.
+    unreachable: bool = False
     # The article as it's stored now, so a card can repaint without a refetch.
     item: ItemResponse

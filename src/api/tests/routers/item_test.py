@@ -175,3 +175,64 @@ def test_rescrape_item_not_in_any_of_the_users_sources(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Item not found"}
+
+
+def _fresh_args(item_url_hash, feed_hash, token, **extra):
+    return build_api_request_args(
+        path="/item/rescrape",
+        token=token,
+        params={
+            "item_url_hash": item_url_hash,
+            "feed_hash": feed_hash,
+            "fresh": "true",
+            **extra,
+        },
+    )
+
+
+def test_rescrape_item_fresh_asks_about_an_unreachable_article(
+    monkeypatch, client, existing_feed, existing_item_strict, token
+):
+    """Nothing answering is a question for the reader, not an error: the
+    article is left alone and the response says so."""
+    from ingest import jobs
+
+    for scraper in ("ingest_reddit_item", "ingest_open_graph_item", "ingest_mercury_item"):
+        monkeypatch.setattr(jobs, scraper, lambda item: None)
+
+    response = client.post(
+        **_fresh_args(existing_item_strict.url_hash, existing_feed.name_hash, token)
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["unreachable"] is True
+    assert body["changed"] is False
+    assert ItemLoose.read(url_hash=existing_item_strict.url_hash).content == (
+        existing_item_strict.content
+    )
+
+
+def test_rescrape_item_fresh_wipes_an_unreachable_article_when_told_to(
+    monkeypatch, client, existing_feed, existing_item_strict, token
+):
+    from ingest import jobs
+
+    for scraper in ("ingest_reddit_item", "ingest_open_graph_item", "ingest_mercury_item"):
+        monkeypatch.setattr(jobs, scraper, lambda item: None)
+    monkeypatch.setattr("routers.item.rerank_feeds", lambda feeds: None)
+
+    response = client.post(
+        **_fresh_args(
+            existing_item_strict.url_hash,
+            existing_feed.name_hash,
+            token,
+            wipe_if_unreachable="true",
+        )
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["unreachable"] is False
+    assert body["changed"] is True
+    assert ItemLoose.read(url_hash=existing_item_strict.url_hash).content == ""
