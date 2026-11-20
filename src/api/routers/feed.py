@@ -317,10 +317,11 @@ def rerank_feed(
     to follow it, and re-read `/ranking_stats` once it reports done. Asking
     again while a run is in flight simply joins the existing one.
 
-    This deliberately bypasses `feeds_needing_training`: the scheduled job
-    only retrains a feed whose votes moved, and asking for a retrain anyway
-    — to see the bake-off re-run, or after changing the model zoo — is now
-    the whole point of this endpoint.
+    This deliberately bypasses `feeds_needing_training`, and it is the only
+    place the bake-off still runs: the scheduled job retrains a feed whose
+    votes moved by fitting the one live model, while asking here re-runs the
+    whole comparison so the stats screen has fresh error figures. The
+    comparison is for reading; the live rule still picks the model.
     """
     feed = get_feed_by_name_hash(user.name_hash, feed_name_hash)
 
@@ -331,13 +332,13 @@ def rerank_feed(
 
     def run() -> None:
         try:
-            run_training(feed)
+            run_training(feed, bakeoff=True)
         except Exception as e:
             logging.exception(f"Ranking feed {feed.name} failed: {e}")
 
     # The run is claimed here rather than on the thread, so the response
     # already reports it as running however fast the thread gets going.
-    if start_training(feed):
+    if start_training(feed, bakeoff=True):
         threading.Thread(target=run, name="feed-rerank", daemon=True).start()
 
     return RankingStatsResponse(**fields, training=_training_progress(feed))

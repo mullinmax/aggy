@@ -18,7 +18,7 @@ a title, a URL, a source name or a vector.
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -36,9 +36,11 @@ from ranking.models import (
     RandomModel,
     RidgeModel,
     SourceMeanModel,
+    LIVE_MODEL_LADDER,
     SVRModel,
     VoteModel,
     evaluate_models,
+    live_model_name,
 )
 
 from . import metrics
@@ -49,15 +51,27 @@ LIVE_PICKER = "live_picker"
 TIME_PICKER = "time_picker"
 BLEND_TOP3 = "blend_top3"
 BLEND_CORE = "blend_core"
-COMBINED = (LIVE_PICKER, TIME_PICKER, BLEND_TOP3, BLEND_CORE)
+LIVE_RULE = "live_rule"
+BLEND_SVR_PRIOR = "blend_svr_prior"
+BLEND_STRONG = "blend_strong"
+COMBINED = (
+    LIVE_PICKER,
+    TIME_PICKER,
+    BLEND_TOP3,
+    BLEND_CORE,
+    LIVE_RULE,
+    BLEND_SVR_PRIOR,
+    BLEND_STRONG,
+)
 
-# What every other method is compared against: the model the app would have
-# been ranking the feed with at that moment.
+# What every other method is compared against: the model the app's old rule
+# (lowest error on randomly held-out votes) would have been ranking the feed
+# with at that moment. The app now ranks with `live_rule`, which is replayed
+# alongside so the switch itself is checked against what it replaced.
 BASELINE = LIVE_PICKER
 
 # Live models slow enough to leave out of a quick run.
 _HEAVY_LIVE = {
-    "svr",
     "random_forest",
     "gradient_boost",
     "neural_net",
@@ -65,6 +79,8 @@ _HEAVY_LIVE = {
 }
 
 _BLEND_CORE_MEMBERS = ("knn_embedding", "logistic", "taste_profile", "source_prior_knn")
+_BLEND_SVR_PRIOR_MEMBERS = ("svr", "source_prior_knn")
+_BLEND_STRONG_MEMBERS = ("svr", "source_prior_knn", "random_forest")
 
 # Training-set size bands a block is reported under, so the result shows
 # which method suits a young feed and which a mature one.
@@ -97,6 +113,14 @@ class ReplayConfig:
     max_rest_seconds: float = 5.0
     # an open only counts as "left unvoted" once this long has passed
     open_grace: timedelta = timedelta(days=1)
+    # An article's age is a feature, and a voted article's age is measured at
+    # the moment of the vote. Handing that to a method for the very articles
+    # it is predicting tells it something the feed could not have known: how
+    # long each one would sit before being voted on. So the articles being
+    # predicted are aged as of the start of their block instead, which is the
+    # last moment the feed could have been sorted for them. A method that sets
+    # `sees_vote_time` is exempt, to measure how much the difference matters.
+    age_as_of_block_start: bool = True
 
 
 @dataclass
@@ -106,10 +130,16 @@ class Block:
     labels: np.ndarray
     predictions: Dict[str, np.ndarray] = field(default_factory=dict)
     seconds: Dict[str, float] = field(default_factory=dict)
+    # the model the old lowest-error rule had picked when this block was
+    # predicted, and the one the fixed rule picks: counted in the result
+    live_choice: Optional[str] = None
+    rule_choice: Optional[str] = None
 
 
 def live_models(quick: bool = False) -> List[VoteModel]:
-    """The zoo the app ranks with today, built so it cannot take every core."""
+    """The zoo the app's old picker chose from, built so it cannot take every
+    core. Kept as it was when the picker ranked feeds, so `live_picker` stays
+    the same yardstick from one round of experiments to the next."""
     models: List[VoteModel] = [
         RandomModel(),
         GlobalMeanModel(),
@@ -190,8 +220,29 @@ def _combine(
     if not available:
         return
 
+    block.live_choice = live_choice
     if live_choice in block.predictions:
         block.predictions[LIVE_PICKER] = block.predictions[live_choice]
+
+    # The rule the app ranks with now: a fixed model for the number of votes,
+    # handing over to the next rung when that model could not be fitted.
+    first = live_model_name(block.train_n)
+    if first is not None:
+        rungs = LIVE_MODEL_LADDER[LIVE_MODEL_LADDER.index(first) :]
+        block.rule_choice = next((name for name in rungs if name in available), None)
+        if block.rule_choice is not None:
+            block.predictions[LIVE_RULE] = block.predictions[block.rule_choice]
+
+    for combined, members in (
+        (BLEND_SVR_PRIOR, _BLEND_SVR_PRIOR_MEMBERS),
+        (BLEND_STRONG, _BLEND_STRONG_MEMBERS),
+    ):
+        # all of its members or nothing: a blend missing one is a different
+        # method, and averaging the two under one name would muddy both
+        if all(name in available for name in members):
+            block.predictions[combined] = np.mean(
+                [_standardise(block.predictions[name]) for name in members], axis=0
+            )
 
     history = _prior_auc(earlier, available)
     ranked = sorted(history, key=history.get, reverse=True)
@@ -270,6 +321,11 @@ def replay_feed(
         cutoff = _utc(test[0].label_date)
         test_hashes = {i.url_hash for i in test}
         train_hashes = {i.url_hash for i in train}
+        test_blind = (
+            [replace(i, label_date=cutoff) for i in test]
+            if config.age_as_of_block_start
+            else test
+        )
         block = Block(
             feed=feed_index,
             train_n=len(train),
@@ -313,7 +369,8 @@ def replay_feed(
             began = time.monotonic()
             try:
                 model.fit(fit_on)
-                scores, _ = model.predict(test)
+                shown = test if getattr(model, "sees_vote_time", False) else test_blind
+                scores, _ = model.predict(shown)
                 scores = np.asarray(scores, dtype=float)
             except Exception:
                 continue

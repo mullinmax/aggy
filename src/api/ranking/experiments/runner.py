@@ -18,6 +18,7 @@ predictions the feed is sorted by, or the model it was last trained with.
 
 import logging
 import os
+from collections import Counter
 import threading
 import time
 from datetime import datetime, timezone
@@ -33,7 +34,7 @@ from db.task_run import KIND_PREDICTION_EXPERIMENT, task_run
 from ranking import engine
 from ranking.models import ItemFeatures
 
-from . import replay
+from . import diagnostics, replay
 from .llm_judge import LLMJudgeModel
 
 STATUS_QUEUED = "queued"
@@ -49,7 +50,7 @@ MODES = (MODE_QUICK, MODE_FULL)
 
 # Bumped when the shape of a stored result changes, so a result pasted out of
 # an old run can be told apart from a new one.
-RESULT_FORMAT = 1
+RESULT_FORMAT = 2
 
 # An account may have this many experiments waiting or running. They are
 # worked one at a time, so a longer queue is only a longer wait.
@@ -78,12 +79,22 @@ _NOTES = [
     "ndcg10: graded ranking quality over the top 10 (upvote 2, neutral 1, downvote 0).",
     "three_way_accuracy and mae are only given for methods whose scores are on "
     "the vote scale.",
-    "vs_baseline compares a method with live_picker (the model the app would "
-    "have been using) on exactly the same predictions. Ranges are 95% over "
-    "resampled blocks.",
-    "live_picker: the app's current rule, lowest error on randomly held-out "
-    "votes. time_picker: best ranking on the feed's earlier blocks. "
-    "blend_top3 / blend_core: averages of several methods' rankings.",
+    "vs_baseline compares a method with live_picker on exactly the same "
+    "predictions. Ranges are 95% over resampled blocks.",
+    "live_picker: the app's old rule, lowest error on randomly held-out votes. "
+    "live_rule: the rule the app ranks with now (svr from 12 votes, "
+    "source_prior_knn from 6, knn_embedding below). picker_choices counts the "
+    "blocks each rule ranked with each model.",
+    "time_picker: best ranking on the feed's earlier blocks. blend_*: averages "
+    "of several methods' rankings.",
+    "From format 2, the articles being predicted are aged as of the start of "
+    "their block, not as of their own vote, which the feed could not have "
+    "known. svr_vote_time_age is the svr given the vote-time age anyway: the "
+    "gap between it and svr is how much that difference is worth, and how far "
+    "format 1 scores were flattered by it.",
+    "feeds[].diagnostics describes each feed's votes in counts and shares "
+    "only. similar_votes.nearest_agrees against agreement_by_chance says "
+    "whether similar articles get similar votes at all.",
 ]
 
 
@@ -256,6 +267,44 @@ def _load_labeled(feed: Feed) -> List[ItemFeatures]:
     return _newest([f for f in labeled if f.label is not None], MAX_LABELS_PER_FEED)
 
 
+def _load_origins(feed: Feed) -> Dict[str, dict]:
+    """How each of the feed's labels came about: a vote, a list, or both.
+    The features only carry the label the two fold into."""
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT c.item_url_hash, v.score AS vote, EXISTS ("
+            " SELECT 1 FROM list_items li WHERE li.user_hash = c.user_hash"
+            "  AND li.item_url_hash = c.item_url_hash) AS listed "
+            "FROM feed_items c "
+            "LEFT JOIN user_item_votes v ON v.user_hash = c.user_hash "
+            " AND v.item_url_hash = c.item_url_hash "
+            "WHERE c.user_hash = %s AND c.feed_hash = %s" + engine._LABELED_ONLY_SQL,
+            (feed.user_hash, feed.name_hash),
+        )
+        return {
+            row["item_url_hash"]: {"vote": row["vote"], "listed": bool(row["listed"])}
+            for row in cur.fetchall()
+        }
+
+
+def _diagnose(feed: Feed, labeled: List[ItemFeatures]) -> Optional[dict]:
+    """The feed's diagnostics, or a note that they failed. They explain a
+    result; they are not worth losing one over."""
+    try:
+        return diagnostics.diagnose(labeled, _load_origins(feed))
+    except Exception as e:
+        logging.exception(f"Experiment diagnostics failed: {e}")
+        return {"error": "diagnostics could not be computed"}
+
+
+def _picker_choices(blocks) -> dict:
+    """How many blocks each rule ranked with each model."""
+    return {
+        "live_picker": dict(Counter(b.live_choice or "none" for b in blocks)),
+        "live_rule": dict(Counter(b.rule_choice or "none" for b in blocks)),
+    }
+
+
 def _load_opened(feed: Feed) -> List[ItemFeatures]:
     """The articles opened in this feed, as features dated by their first open
     and labelled neutral: what the opens-as-neutral methods are handed."""
@@ -347,7 +396,7 @@ class _Progress:
         return self._stopped
 
 
-def _feed_summary(index: int, labeled, blocks, rows) -> dict:
+def _feed_summary(index: int, labeled, blocks, rows, diagnosis=None) -> dict:
     labels = [float(i.label) for i in labeled]
     by_method = {r["method"]: r["auc"] for r in rows}
     summary = {
@@ -359,6 +408,8 @@ def _feed_summary(index: int, labeled, blocks, rows) -> dict:
         "downvotes": sum(1 for v in labels if v < 0),
         "blocks": len(blocks),
         "auc_by_method": by_method,
+        "picker_choices": _picker_choices(blocks),
+        "diagnostics": diagnosis,
     }
     if not blocks:
         summary["skipped"] = "too few dated votes to replay"
@@ -427,7 +478,11 @@ def run_experiment(
         all_blocks.extend(blocks)
         feeds_out.append(
             _feed_summary(
-                index, labeled, blocks, replay.summarize(blocks, calibrated, n_boot=0)
+                index,
+                labeled,
+                blocks,
+                replay.summarize(blocks, calibrated, n_boot=0),
+                _diagnose(feed, labeled),
             )
         )
 
@@ -446,6 +501,7 @@ def run_experiment(
         "predictions": int(sum(len(b.labels) for b in all_blocks)),
         "methods": methods_out,
         "not_run": sorted(name for name in calibrated if name not in ran),
+        "picker_choices": _picker_choices(all_blocks),
         "feeds": feeds_out,
         "engagement": engagement_summary(
             user_hash, None if feed_hash is None else [feed_hash]

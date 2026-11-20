@@ -368,6 +368,99 @@ class KNNEmbeddingModel(VoteModel):
         return np.asarray(scores), np.asarray(confs)
 
 
+def _unit_rows(
+    items: Sequence[ItemFeatures], dim: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Unit text embeddings as rows, and a mask of which rows have one."""
+    rows = np.zeros((len(items), dim))
+    present = np.zeros(len(items), dtype=bool)
+    for index, item in enumerate(items):
+        vector, ok = _unit_or_zeros(item.embedding, dim)
+        rows[index] = vector
+        present[index] = bool(ok)
+    return rows, present
+
+
+class SourcePriorKNNModel(VoteModel):
+    """What you think of the source and the author, corrected by content.
+
+    Starts from an average vote per source, shrunk toward the overall average
+    when a source has few votes, then does the same for the author with what
+    the source left unexplained. Whatever is still unexplained is predicted
+    from the nearest voted articles. The matrix models see source and author
+    only as hashed buckets, which collide once a feed has more than a few of
+    them.
+
+    In a replay of real votes (ranking/experiments) this ranked upvotes above
+    the model the old lowest-error bake-off picked, at a few milliseconds a
+    fit, and it works from a handful of votes. It ranks a feed until there are
+    enough votes for the SVR (see `live_model_name`)."""
+
+    name = "source_prior_knn"
+    min_labels = 6
+
+    def __init__(self, shrink: float = 5.0, k: int = 10):
+        self.shrink = shrink
+        self.k = k
+
+    def _shrunk(self, keys, values) -> dict:
+        grouped: dict = {}
+        for key, value in zip(keys, values):
+            if key:
+                grouped.setdefault(key, []).append(value)
+        return {
+            key: float(np.sum(v) / (len(v) + self.shrink)) for key, v in grouped.items()
+        }
+
+    def _prior(self, items) -> np.ndarray:
+        return np.asarray(
+            [
+                self.mean
+                + self.by_source.get(i.source, 0.0)
+                + self.by_author.get(i.author, 0.0)
+                for i in items
+            ]
+        )
+
+    def fit(self, items):
+        labels = np.asarray([float(i.label) for i in items], dtype=float)
+        self.mean = float(labels.mean()) if len(labels) else 0.0
+        self.by_source = self._shrunk([i.source for i in items], labels - self.mean)
+        after_source = labels - np.asarray(
+            [self.mean + self.by_source.get(i.source, 0.0) for i in items]
+        )
+        self.by_author = self._shrunk([i.author for i in items], after_source)
+        residual = labels - self._prior(items)
+        self.dim = _embedding_dim(items, "embedding")
+        self.matrix = None
+        if self.dim:
+            rows, present = _unit_rows(items, self.dim)
+            if present.any():
+                self.matrix = rows[present]
+                self.residual = residual[present]
+
+    def predict(self, items):
+        scores = self._prior(items)
+        if self.matrix is not None:
+            rows, present = _unit_rows(items, self.dim)
+            k = min(self.k, len(self.residual))
+            for index in np.flatnonzero(present):
+                sims = self.matrix @ rows[index]
+                top = np.argpartition(sims, -k)[-k:]
+                weights = np.clip(sims[top], 0.0, None)
+                total = weights.sum()
+                if total <= 1e-9:
+                    continue
+                # trust the correction more the closer and more numerous the
+                # neighbours it came from
+                trust = total / (total + 1.0)
+                scores[index] += (
+                    trust * float(np.dot(weights, self.residual[top])) / total
+                )
+        scores = np.clip(scores, -1.0, 1.0)
+        return scores, np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
+
+
 class _SklearnModel(VoteModel):
     """Adapter: build the design matrix, fit a scikit-learn regressor (behind a
     StandardScaler when the estimator is scale-sensitive), and turn its output
@@ -635,6 +728,7 @@ def all_models() -> List[VoteModel]:
         GlobalMeanModel(),
         SourceMeanModel(),
         KNNEmbeddingModel(),
+        SourcePriorKNNModel(),
         RidgeModel(),
         LogisticVoteModel(),
         SVRModel(),
@@ -643,6 +737,30 @@ def all_models() -> List[VoteModel]:
         MLPModel(),
         DeepMLPModel(),
     ]
+
+
+# Which model ranks a feed.
+#
+# This used to be whichever model had the lowest error on randomly held-out
+# votes (`evaluate_models`, which still reports that comparison). A replay of
+# real votes in the order they were cast (ranking/experiments) showed that rule
+# picking worse than several fixed choices: it lets a model learn from votes
+# cast after the one it predicts, and it rewards a low average error rather
+# than getting the upvotes to the top. The SVR ranked best there on every feed
+# with a taste to find, at a fraction of a second a fit, so it is simply used.
+# Below the votes it needs, the source-and-author prior takes over, and below
+# that the nearest voted article is all the evidence there is.
+LIVE_MODEL_LADDER = ("svr", "source_prior_knn", "knn_embedding")
+
+
+def live_model_name(n_labels: int) -> Optional[str]:
+    """The model that ranks a feed with this many votes, or None when there
+    are too few to rank on at all."""
+    by_name = {m.name: m for m in all_models()}
+    for name in LIVE_MODEL_LADDER:
+        if n_labels >= max(by_name[name].min_labels, 2):
+            return name
+    return None
 
 
 @dataclass

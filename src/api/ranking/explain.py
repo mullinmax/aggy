@@ -31,7 +31,7 @@ from db.base import get_db_con
 from db.feed import Feed
 from db.item import embeddable_image_url
 from .engine import MIN_LABELS_TO_RANK, load_feed_features, load_item_features
-from .models import ItemFeatures, all_models, evaluate_models
+from .models import ItemFeatures, all_models, live_model_name
 
 # Marks rank the fields against each other rather than against a fixed Δ scale,
 # so one field can't run away with a huge number while the rest read as nothing.
@@ -206,7 +206,8 @@ class FieldScored:
 
 def _winner_model(feed: Feed, labeled: List[ItemFeatures]):
     """The model currently ranking this feed, so the explanation matches the
-    score the user sees. Prefer the persisted choice; fall back to evaluating."""
+    score the user sees. Prefer the persisted choice; fall back to the live
+    rule, which is what the next retrain would pick."""
     chosen = None
     with get_db_con() as cur:
         cur.execute(
@@ -218,8 +219,7 @@ def _winner_model(feed: Feed, labeled: List[ItemFeatures]):
         if row:
             chosen = row["model_name"]
     if chosen is None:
-        stats = evaluate_models(labeled)
-        chosen = next((s.model_name for s in stats if s.chosen), None)
+        chosen = live_model_name(len(labeled))
     if chosen is None:
         return None
     return next((m for m in all_models() if m.name == chosen), None)

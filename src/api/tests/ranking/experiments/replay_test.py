@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pytest
 
-from ranking.experiments import metrics, replay
+from ranking.experiments import diagnostics, metrics, replay
 from ranking.experiments.methods import (
     ExperimentModel,
     OpensAsNeutralModel,
@@ -177,8 +177,10 @@ def test_every_method_survives_a_replay_and_reports_a_score():
     rows = _summary(blocks, methods)
     expected = {m.name for m in methods if not getattr(m, "uses_opens", False)}
     assert expected <= set(rows)
-    assert set(replay.COMBINED) <= set(rows)
-    for name in expected - {"random", "global_mean", "newest_first"}:
+    # the strong blend needs the random forest, which a quick run leaves out
+    assert set(replay.COMBINED) - {replay.BLEND_STRONG} <= set(rows)
+    baselines = {"random", "global_mean", "newest_first", "oldest_first"}
+    for name in expected - baselines:
         assert rows[name]["auc"] > 0.6, name
 
 
@@ -310,3 +312,140 @@ def test_an_unreachable_llm_is_dropped_rather_than_scored():
     methods = [LLMJudgeModel({}, ask=ask)]
     blocks = replay.replay_feed(planted_feed(), methods, replay.ReplayConfig(**NO_REST))
     assert all("llm_judge" not in b.predictions for b in blocks)
+
+
+# --- round 2: the fixed rule, the blends and what a method may know ---------
+
+
+def _live_trio():
+    return [
+        m
+        for m in replay.build_methods(quick=True)
+        if m.name in ("knn_embedding", "source_prior_knn", "svr")
+    ]
+
+
+def test_the_live_rule_ranks_with_the_model_its_ladder_names():
+    blocks = replay.replay_feed(
+        planted_feed(n=60),
+        _live_trio(),
+        replay.ReplayConfig(warmup=4, max_blocks=10, min_block=2, **NO_REST),
+    )
+    assert {b.rule_choice for b in blocks if b.train_n < 6} == {"knn_embedding"}
+    assert {b.rule_choice for b in blocks if 6 <= b.train_n < 12} == {
+        "source_prior_knn"
+    }
+    assert {b.rule_choice for b in blocks if b.train_n >= 12} == {"svr"}
+    for block in blocks:
+        assert np.array_equal(
+            block.predictions[replay.LIVE_RULE], block.predictions[block.rule_choice]
+        )
+
+
+def test_the_live_rule_steps_down_when_its_model_could_not_be_fitted():
+    methods = [m for m in _live_trio() if m.name != "svr"]
+    blocks = replay.replay_feed(
+        planted_feed(n=60), methods, replay.ReplayConfig(**NO_REST)
+    )
+    assert {b.rule_choice for b in blocks} == {"source_prior_knn"}
+
+
+def test_a_blend_needs_every_one_of_its_members():
+    blocks = replay.replay_feed(
+        planted_feed(n=60), _live_trio(), replay.ReplayConfig(**NO_REST)
+    )
+    rows = _summary(blocks, _live_trio())
+    assert rows[replay.BLEND_SVR_PRIOR]["auc"] > 0.9
+    # no random forest was fitted, so there is no strong blend to report
+    assert replay.BLEND_STRONG not in rows
+
+
+class _RecordsVoteTimes(ExperimentModel):
+    name = "records_vote_times"
+
+    def __init__(self):
+        self.seen = []
+
+    def fit(self, items):
+        pass
+
+    def predict(self, items):
+        self.seen.append([i.label_date for i in items])
+        return np.zeros(len(items)), np.zeros(len(items))
+
+
+class _ToldVoteTimes(_RecordsVoteTimes):
+    name = "told_vote_times"
+    sees_vote_time = True
+
+
+def test_a_method_is_not_told_when_the_articles_it_ranks_were_voted_on():
+    """An article's age is measured at its vote. For the articles being
+    predicted that is knowledge from the future, so they are all aged as of
+    the start of their block."""
+    blind, told = _RecordsVoteTimes(), _ToldVoteTimes()
+    feed = planted_feed()
+    blocks = replay.replay_feed(feed, [blind, told], replay.ReplayConfig(**NO_REST))
+    assert blocks
+    for dates in blind.seen:
+        assert len(set(dates)) == 1
+    assert any(len(set(dates)) > 1 for dates in told.seen)
+    # and the feed's own articles were not changed to do it
+    assert len({i.label_date for i in feed}) == len(feed)
+
+
+# --- diagnostics -----------------------------------------------------------
+
+
+def test_diagnostics_see_a_taste_the_embeddings_carry():
+    found = diagnostics.diagnose(planted_feed(n=200))
+    similar = found["similar_votes"]
+    assert similar["compared"] == 200
+    assert similar["nearest_agrees"] > 0.95
+    assert similar["agreement_by_chance"] == pytest.approx(0.5, abs=0.05)
+    assert found["coverage"]["text_embedding"] == 1.0
+    assert found["coverage"]["stored_neighbors"] == 0.0
+    assert found["sources"]["distinct"] == 2
+    assert found["sources"]["upvote_rate_spread"] == pytest.approx(0.5)
+
+
+def test_diagnostics_see_votes_that_ignore_the_embeddings():
+    feed = planted_feed(n=300)
+    rng = np.random.default_rng(1)
+    for item in feed:
+        item.label = 1.0 if rng.random() < 0.5 else -1.0
+    similar = diagnostics.diagnose(feed)["similar_votes"]
+    assert abs(similar["nearest_agrees"] - similar["agreement_by_chance"]) < 0.1
+
+
+def test_diagnostics_spot_votes_cast_in_bulk():
+    feed = planted_feed(n=80)
+    for item in feed[:20]:
+        item.label_date = START  # twenty votes in the same instant
+    timing = diagnostics.diagnose(feed)["timing"]
+    assert timing["in_one_minute_bursts"] == pytest.approx(20 / 80)
+    assert timing["largest_burst_share"] == pytest.approx(20 / 80)
+    assert len(timing["upvote_rate_by_quarter"]) == 4
+    assert timing["days_with_votes"] >= 3
+
+
+def test_diagnostics_say_how_the_labels_came_about():
+    feed = planted_feed(n=40)
+    origins = {
+        item.url_hash: {
+            "vote": None if index < 10 else 1,
+            "listed": index < 20,
+        }
+        for index, item in enumerate(feed)
+    }
+    origin = diagnostics.diagnose(feed, origins)["label_origin"]
+    assert origin == {"list_only": 0.25, "vote_and_list": 0.25, "vote_only": 0.5}
+
+
+def test_diagnostics_name_no_source():
+    text = str(diagnostics.diagnose(planted_feed()))
+    assert "source-0" not in text and "item-0" not in text
+
+
+def test_diagnostics_of_an_empty_feed_are_absent():
+    assert diagnostics.diagnose([]) is None

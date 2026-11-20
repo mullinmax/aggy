@@ -1,14 +1,18 @@
-"""Train/evaluate vote-prediction models for a feed and cache predictions.
+"""Train vote-prediction models for a feed and cache predictions.
 
-Two operations, deliberately separate, because they cost wildly different
+Three operations, deliberately separate, because they cost wildly different
 amounts:
 
-`rank_feed` is the full run. It cross-validates every model on the feed's
-votes, persists the per-model stats (for the stats UI), then trains the best
-model on all labels and writes a predicted score + confidence to every item
-in the feed. Cross-validating the zoo is by far the slowest thing the API
-does, so this only happens when the votes it learns from have actually
-changed -- or when the user asks for it.
+`rank_feed` is a retrain. It fits the model the live rule names for this many
+votes (`ranking.models.live_model_name`) on all labels and writes a predicted
+score + confidence to every item in the feed. That is one fit, and it runs
+whenever the votes it learns from have changed.
+
+`rank_feed(bakeoff=True)` does the same after cross-validating every model on
+the feed's votes and persisting the per-model stats for the stats UI. The
+comparison no longer decides which model ranks the feed, and cross-validating
+the zoo is by far the slowest thing the API does, so it only happens when the
+user asks for it.
 
 `score_feed` is the cheap pass. It re-fits the model the stats table already
 chose and scores only the articles that have never been scored. Ingesting a
@@ -31,8 +35,10 @@ from neighbors.search import parse_embedding
 from utils import is_playable_media_url
 from . import progress
 from .models import (
+    LIVE_MODEL_LADDER,
     ItemFeatures,
     ModelStats,
+    VoteModel,
     all_models,
     evaluate_models,
 )
@@ -243,6 +249,39 @@ def save_model_stats(feed: Feed, stats: List[ModelStats]) -> None:
             )
 
 
+def save_live_choice(feed: Feed, model_name: Optional[str], n_labels: int) -> None:
+    """Record which model now ranks the feed, without a bake-off.
+
+    The per-model error figures from the last bake-off stay as they were (they
+    are still the most recent comparison there is); only the `chosen` flag
+    moves, and the chosen row's label count and time say when the live model
+    was last rebuilt and on how many votes. With no model to choose, the rows
+    that exist are stamped anyway so the feed stops reading as needing a
+    retrain for votes it has already been shown.
+    """
+    with get_db_con() as cur:
+        cur.execute(
+            "UPDATE ranking_model_stats SET chosen = FALSE "
+            "WHERE user_hash = %s AND feed_hash = %s AND chosen",
+            (feed.user_hash, feed.name_hash),
+        )
+        if model_name is None:
+            cur.execute(
+                "UPDATE ranking_model_stats SET computed_at = NOW() "
+                "WHERE user_hash = %s AND feed_hash = %s",
+                (feed.user_hash, feed.name_hash),
+            )
+            return
+        cur.execute(
+            "INSERT INTO ranking_model_stats (user_hash, feed_hash, model_name, "
+            "n_labels, chosen, computed_at) VALUES (%s, %s, %s, %s, TRUE, NOW()) "
+            "ON CONFLICT (user_hash, feed_hash, model_name) DO UPDATE SET "
+            "n_labels = EXCLUDED.n_labels, chosen = TRUE, "
+            "computed_at = EXCLUDED.computed_at",
+            (feed.user_hash, feed.name_hash, model_name, n_labels),
+        )
+
+
 def load_model_stats(feed: Feed) -> List[dict]:
     with get_db_con() as cur:
         cur.execute(
@@ -264,7 +303,12 @@ def training_summary(feed: Feed) -> dict:
     """
     with get_db_con() as cur:
         cur.execute(
-            "SELECT MAX(computed_at) AS last_trained_at, MAX(n_labels) AS n_labels, "
+            # the label count comes from the newest row: a retrain without a
+            # bake-off only rewrites the chosen model's row, and the older
+            # rows still carry the count from the last comparison
+            "SELECT MAX(computed_at) AS last_trained_at, "
+            "(ARRAY_AGG(n_labels ORDER BY computed_at DESC, chosen DESC))[1] "
+            "AS n_labels, "
             "MAX(model_name) FILTER (WHERE chosen) AS chosen_model "
             "FROM ranking_model_stats WHERE user_hash = %s AND feed_hash = %s",
             (feed.user_hash, feed.name_hash),
@@ -335,10 +379,11 @@ def _write_predictions(
         )
 
 
-def training_steps() -> int:
-    """Steps a full training run reports: reading the votes, one per model
-    cross-validated, fitting the winner, then scoring the feed with it."""
-    return len(all_models()) + 3
+def training_steps(bakeoff: bool = False) -> int:
+    """Steps a training run reports: reading the votes, fitting the live
+    model, then scoring the feed with it. A bake-off adds one step per model
+    cross-validated in between."""
+    return 3 + (len(all_models()) if bakeoff else 0)
 
 
 def _evaluation_step(model_index: int) -> int:
@@ -346,13 +391,40 @@ def _evaluation_step(model_index: int) -> int:
     return model_index + 1
 
 
-def rank_feed(feed: Feed) -> List[ModelStats]:
-    """Evaluate all models on this feed's votes, persist their stats, then
-    predict a vote for every item with the winner. Returns the stats.
+def _fit_live_model(labeled: List[ItemFeatures]) -> Optional[VoteModel]:
+    """Fit the model the live rule names for this many votes.
 
-    Only the winner ever scores the feed, and the feed's articles are only
-    read once there is a winner to score them with: cross-validation learns
-    from the labeled rows alone, which is a few dozen out of thousands.
+    Walks `LIVE_MODEL_LADDER` from the rule's pick downwards, so a model that
+    cannot be fit on these particular votes hands over to the next rung
+    instead of leaving the feed unranked.
+    """
+    by_name = {m.name: m for m in all_models()}
+    for name in LIVE_MODEL_LADDER:
+        model = by_name[name]
+        if len(labeled) < max(model.min_labels, 2):
+            continue
+        try:
+            model.fit(labeled)
+        except Exception as e:
+            logging.exception(f"Fitting '{name}' failed, trying the next: {e}")
+            continue
+        return model
+    return None
+
+
+def rank_feed(feed: Feed, bakeoff: bool = False) -> List[ModelStats]:
+    """Fit the live model on this feed's votes and predict a vote for every
+    item with it. Returns the stats rows it saved.
+
+    Which model that is comes from a fixed rule on the number of votes (see
+    `ranking.models.live_model_name`), so an ordinary retrain is a single fit.
+    With `bakeoff`, every model is cross-validated first and the per-model
+    error figures are saved for the stats screen; the comparison is reported,
+    it does not pick the model.
+
+    The feed's articles are only read once there is a model to score them
+    with: fitting learns from the labeled rows alone, which is a few dozen
+    out of thousands.
 
     Progress is reported to `ranking.progress` as it goes; that is a no-op
     unless a run was registered for this feed (see `train_feed`), so calling
@@ -378,29 +450,40 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
             note=f"fold {folds_done} of {fold_count}" if fold_count > 1 else None,
         )
 
-    stats = evaluate_models(labeled, on_progress=on_progress)
-    save_model_stats(feed, stats)
+    stats: List[ModelStats] = []
+    if bakeoff:
+        stats = evaluate_models(labeled, on_progress=on_progress)
+    train_step = _evaluation_step(len(all_models())) if bakeoff else 1
 
-    if len(labeled) < MIN_LABELS_TO_RANK:
+    winner = None
+    if len(labeled) >= MIN_LABELS_TO_RANK:
+        report(
+            progress.PHASE_TRAINING,
+            train_step,
+            note=f"on all {len(labeled)} votes",
+        )
+        winner = _fit_live_model(labeled)
+    winner_name = winner.name if winner is not None else None
+
+    if bakeoff:
+        # the bake-off marks its lowest-error model; the live rule overrides it
+        for s in stats:
+            s.chosen = s.model_name == winner_name
+        save_model_stats(feed, stats)
+    else:
+        save_live_choice(feed, winner_name, len(labeled))
+        if winner_name is not None:
+            stats = [
+                ModelStats(model_name=winner_name, n_labels=len(labeled), chosen=True)
+            ]
+
+    if winner is None:
         return stats
-
-    winner_name = next((s.model_name for s in stats if s.chosen), None)
-    if winner_name is None:
-        return stats
-    winner = next(m for m in all_models() if m.name == winner_name)
-
-    report(
-        progress.PHASE_TRAINING,
-        _evaluation_step(len(all_models())),
-        model_name=winner_name,
-        note=f"on all {len(labeled)} votes",
-    )
-    winner.fit(labeled)
 
     # Only now is the whole feed worth reading: the winner scores every
     # article, the labeled ones included, so the "include voted" view still
     # sorts sensibly.
-    predict_step = _evaluation_step(len(all_models())) + 1
+    predict_step = train_step + 1
     report(
         progress.PHASE_PREDICTING,
         predict_step,
@@ -434,7 +517,7 @@ def rank_feed(feed: Feed) -> List[ModelStats]:
 
 
 def chosen_model_name(feed: Feed) -> Optional[str]:
-    """The model the last full run picked for this feed, if any."""
+    """The model the last retrain ranked this feed with, if any."""
     with get_db_con() as cur:
         cur.execute(
             "SELECT model_name FROM ranking_model_stats "
@@ -448,12 +531,11 @@ def chosen_model_name(feed: Feed) -> Optional[str]:
 def score_feed(feed: Feed) -> int:
     """Predict for this feed's unscored items using the already-chosen model.
 
-    Returns the number of items scored. No cross-validation, no stats write:
-    the model the stats table already picked is re-fit on the current labels
-    and applied to the rows that have never been scored. That is one `fit`
-    against N models over K folds, which is the whole point — a feed whose
-    votes have not changed does not need a new model, only a score for the
-    articles that have just arrived.
+    Returns the number of items scored. No stats write and nothing but the
+    new rows read: the model the last retrain used is re-fit on the current
+    labels and applied to the articles that have never been scored. A feed
+    whose votes have not changed does not need its whole ranking rewritten,
+    only a score for the articles that have just arrived.
 
     The re-fit is needed because fitted models are not persisted anywhere;
     storing the winner would remove even that, at the cost of having model
@@ -518,17 +600,17 @@ def _reporter(feed: Feed):
     return report
 
 
-def start_training(feed: Feed) -> bool:
+def start_training(feed: Feed, bakeoff: bool = False) -> bool:
     """Claim this feed for a training run, so the UI can show it as running
     the moment it is asked for. False when one is already in flight — a second
     click, or the scheduler reaching a feed the user just asked to retrain.
 
     The caller must then call `run_training`, on this thread or another.
     """
-    return progress.start(feed.user_hash, feed.name_hash, training_steps())
+    return progress.start(feed.user_hash, feed.name_hash, training_steps(bakeoff))
 
 
-def run_training(feed: Feed) -> List[ModelStats]:
+def run_training(feed: Feed, bakeoff: bool = False) -> List[ModelStats]:
     """Do the training claimed by `start_training`, reporting its progress.
 
     `ranking.progress` drives the live progress bar and forgets the run once
@@ -537,25 +619,29 @@ def run_training(feed: Feed) -> List[ModelStats]:
     """
     with task_run(KIND_FEED_TRAINING, feed.user_hash, feed.name) as run:
         try:
-            stats = rank_feed(feed)
+            stats = rank_feed(feed, bakeoff=bakeoff)
         except Exception as e:
             progress.finish(feed.user_hash, feed.name_hash, error=str(e))
             raise
         progress.finish(feed.user_hash, feed.name_hash)
         chosen = next((s.model_name for s in stats if s.chosen), None)
         labels = max((s.n_labels for s in stats), default=0)
-        run.detail = f"{len(stats)} model(s) cross-validated on {labels} label(s)" + (
-            f", chose '{chosen}'" if chosen else ", none eligible yet"
-        )
+        if bakeoff:
+            run.detail = f"{len(stats)} model(s) cross-validated on {labels} label(s)"
+            run.detail += f", ranked by '{chosen}'" if chosen else ", none eligible yet"
+        elif chosen:
+            run.detail = f"'{chosen}' trained on {labels} label(s)"
+        else:
+            run.detail = "not enough votes to rank yet"
     return stats
 
 
-def train_feed(feed: Feed) -> Optional[List[ModelStats]]:
+def train_feed(feed: Feed, bakeoff: bool = False) -> Optional[List[ModelStats]]:
     """`rank_feed` with progress tracking, for anything the UI can watch.
     Returns None when a run for this feed is already in flight."""
-    if not start_training(feed):
+    if not start_training(feed, bakeoff):
         return None
-    return run_training(feed)
+    return run_training(feed, bakeoff)
 
 
 # Every label this feed learns from, as a timestamp: the newest vote cast on
@@ -598,15 +684,25 @@ _LABEL_COUNT_SQL = (
 )
 
 
+# Whether the feed is ranked by a model the live rule never picks: one chosen
+# by the old lowest-error bake-off before the rule existed. Such a feed is
+# retrained once, which moves it onto the ladder.
+_OFF_LADDER_SQL = (
+    " EXISTS (SELECT 1 FROM ranking_model_stats s"
+    "  WHERE s.user_hash = f.user_hash AND s.feed_hash = f.name_hash"
+    "   AND s.chosen AND s.model_name <> ALL(%s))"
+)
+
+
 def feeds_needing_training() -> List[Feed]:
     """Feeds whose newest label is newer than their newest model stats, plus
-    feeds that have never been trained but now have labels.
+    feeds that have never been trained but now have labels, plus feeds still
+    ranked by a model the live rule does not use.
 
-    This is the gate that stops the model bake-off from running for nothing.
-    Ingesting an article used to make a feed eligible for a full retrain, which
-    cross-validates the whole zoo — the most expensive thing the API does — to
-    learn from exactly the votes it had already learned from. A new article is
-    not new evidence; only a vote (or a list add, which counts as one) is.
+    This is the gate that stops a retrain from running for nothing. Ingesting
+    an article used to make a feed eligible for one, to learn from exactly the
+    votes it had already learned from. A new article is not new evidence;
+    only a vote (or a list add, which counts as one) is.
 
     Votes are shared: a label counts if the user voted on an item *in this
     feed* from any feed (via user_item_votes), so voting in one feed schedules
@@ -619,10 +715,11 @@ def feeds_needing_training() -> List[Feed]:
     with get_db_con() as cur:
         cur.execute(
             "SELECT f.user_hash, f.name FROM feeds f WHERE"
-            f"{_NEWEST_LABEL_SQL} > COALESCE({_LAST_TRAINED_SQL}, 'epoch')"
-            f" AND ({_LAST_TRAINED_SQL} IS NOT NULL"
-            f"  OR {_LABEL_COUNT_SQL} >= %s)",
-            (MIN_LABELS_TO_RANK,),
+            f" ({_NEWEST_LABEL_SQL} > COALESCE({_LAST_TRAINED_SQL}, 'epoch')"
+            f"  AND ({_LAST_TRAINED_SQL} IS NOT NULL"
+            f"   OR {_LABEL_COUNT_SQL} >= %s))"
+            f" OR {_OFF_LADDER_SQL}",
+            (MIN_LABELS_TO_RANK, list(LIVE_MODEL_LADDER)),
         )
         rows = cur.fetchall()
     return [Feed(user_hash=row["user_hash"], name=row["name"]) for row in rows]
