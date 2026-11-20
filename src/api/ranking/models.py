@@ -459,11 +459,19 @@ class RandomForestModel(_SklearnModel):
     use_scaler = False
 
     def __init__(
-        self, n_trees: int = 200, max_depth: Optional[int] = None, seed: int = 0
+        self,
+        n_trees: int = 200,
+        max_depth: Optional[int] = None,
+        seed: int = 0,
+        n_jobs: int = -1,
     ):
         self.n_trees = n_trees
         self.max_depth = max_depth
         self.seed = seed
+        # Every core by default (see below). The prediction experiments pass 1:
+        # they are a background curiosity, not something the feed is waiting
+        # on, and must not take the whole machine.
+        self.n_jobs = n_jobs
 
     def _build_estimator(self):
         return RandomForestRegressor(
@@ -476,7 +484,7 @@ class RandomForestModel(_SklearnModel):
             # OPENBLAS/OMP thread pinning the container sets — and it is the
             # difference between ~13s and ~4s per cross-validation pass on a
             # four-core box, for bit-identical predictions.
-            n_jobs=-1,
+            n_jobs=self.n_jobs,
         )
 
 

@@ -70,6 +70,31 @@ class AggySDK {
     return this._request("GET", "/auth/user_info");
   }
 
+  /** Stop a waiting or running experiment */
+  async experimentsCancel({ experiment_id }) {
+    return this._request("POST", "/experiments/cancel", { query: { experiment_id } });
+  }
+
+  /** Delete a finished experiment and its result */
+  async experimentsDelete({ experiment_id }) {
+    return this._request("POST", "/experiments/delete", { query: { experiment_id } });
+  }
+
+  /** One prediction experiment, with its result */
+  async experimentsGet({ experiment_id }) {
+    return this._request("GET", "/experiments/get", { query: { experiment_id } });
+  }
+
+  /** Your prediction experiments, newest first */
+  async experimentsList({ limit }) {
+    return this._request("GET", "/experiments/list", { query: { limit } });
+  }
+
+  /** Queue a prediction experiment */
+  async experimentsStart({ feed_name_hash, mode, llm_judge }) {
+    return this._request("POST", "/experiments/start", { query: { feed_name_hash, mode, llm_judge } });
+  }
+
   /** Create the source behind a recommended option */
   async extensionCreateSource({ body }) {
     return this._request("POST", "/extension/create_source", { body });
@@ -203,6 +228,16 @@ class AggySDK {
   /** Get State */
   async itemGetState({ feed_hash, item_url_hash }) {
     return this._request("GET", "/item/get_state", { query: { feed_hash, item_url_hash } });
+  }
+
+  /** Report how long an opened article has been on screen */
+  async itemOpenSeconds({ open_id, seconds }) {
+    return this._request("POST", "/item/open_seconds", { query: { open_id, seconds } });
+  }
+
+  /** Record that an article was opened */
+  async itemOpened({ feed_hash, item_url_hash, surface }) {
+    return this._request("POST", "/item/opened", { query: { feed_hash, item_url_hash, surface } });
   }
 
   /** Re-scrape one article for content, media, and embeddings */

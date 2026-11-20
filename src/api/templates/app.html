@@ -490,6 +490,7 @@
       this and keep browsing.
     </p>
     <div id="statsBody"></div>
+    <div id="experimentsPanel"></div>
     <div class="modal-action">
       <button type="button" class="btn btn-ghost btn-sm" data-close-modal>Close</button>
       <button class="btn btn-primary btn-sm" id="rerankBtn">Retrain now</button>
@@ -788,6 +789,7 @@
 {% block scripts %}
 <script src="{{ static_url('vendor/plyr.min.js') }}"></script>
 <script src="{{ static_url('js/app.js') }}"></script>
+<script src="{{ static_url('js/experiments.js') }}"></script>
 <script src="{{ static_url('js/stats.js') }}"></script>
 <script src="{{ static_url('js/tasks.js') }}"></script>
 <script src="{{ static_url('js/graph.js') }}"></script>

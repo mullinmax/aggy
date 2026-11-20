@@ -38,6 +38,10 @@ const TASK_KIND_META = {
     label: 'Article scoring',
     help: 'Applying the chosen model to articles it has not scored yet',
   },
+  prediction_experiment: {
+    label: 'Prediction experiment',
+    help: 'Replaying past votes against every candidate method to see which ranks upvotes first',
+  },
   source_ingest: {
     label: 'Source ingest',
     help: 'Fetching a source and storing what it returned',

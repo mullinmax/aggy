@@ -131,6 +131,7 @@ function bindControls() {
   // player first (halts audio, clears its timers), then empty the media host
   // to unload any <video>/iframe
   $('readerModal').addEventListener('close', () => {
+    finishReaderOpen();
     destroyPlayersIn($('readerMedia'));
     render($('readerMedia'));
     render($('readerVotes'));
@@ -800,6 +801,9 @@ async function loadStats() {
 async function openStatsModal() {
   showModal('statsModal');
   render($('statsBody'), spinner());
+  // the experiments panel is the account's, not the feed's, and reads its
+  // own endpoint: neither waits on the other
+  loadExperiments();
   await loadStats();
 }
 
@@ -1198,11 +1202,16 @@ function openInNewTabIcon() {
 }
 
 // "Open original" button, shown next to titles.
-function openLinkButton(url, cls = 'btn btn-ghost btn-xs btn-square text-base-content/60') {
+// `itemHash`, when given, records the click as an open of that article: going
+// out to the original is as much "looked at it" as opening the reader is.
+function openLinkButton(url, cls = 'btn btn-ghost btn-xs btn-square text-base-content/60', itemHash = null) {
   if (!url) return null;
   return h('a', {
     class: cls, href: url, target: '_blank', rel: 'noopener', title: 'Open original',
-    onclick: (e) => e.stopPropagation(),
+    onclick: (e) => {
+      e.stopPropagation();
+      if (itemHash) recordItemOpen(itemHash, 'link');
+    },
   }, openInNewTabIcon());
 }
 
@@ -1952,7 +1961,7 @@ function itemCard(item, { listMode = false, review = false } = {}) {
           class: `font-semibold leading-snug flex-1 min-w-0 ${review ? '' : 'line-clamp-2'}`,
         }, item.item_title || 'Untitled'),
         listMode || review ? null : explainButton(item),
-        openLinkButton(item.item_url)),
+        openLinkButton(item.item_url, undefined, item.item_hash)),
       (review || !mediaBlock) && excerpt
         && h('p', {
           class: `text-xs text-base-content/50 mt-1 ${review ? '' : 'line-clamp-2'}`,
@@ -2691,6 +2700,7 @@ function openReader(item) {
   const parsed = parseItemContent(item);
 
   $('readerOpenLink').href = item.item_url;
+  $('readerOpenLink').onclick = () => { recordItemOpen(item.item_hash, 'link'); };
 
   render($('readerMeta'),
     sourceBadge(item.item_source_name, item.item_source_color),
@@ -2754,7 +2764,74 @@ function openReader(item) {
       is_read: true,
     }).catch(() => {});
   }
+  startReaderOpen(item);
 }
+
+// ---------- opens ----------
+// A vote says what you thought of an article; most articles never get one.
+// Recording that one was opened, and for how long it was actually on screen,
+// is the only evidence there is about the rest. Nothing ranks on it yet: the
+// prediction experiments use it to find out what goes with an upvote.
+//
+// All of it is best effort. A failed report is dropped silently, because
+// nothing the reader does may depend on bookkeeping.
+let readerOpen = null; // { id: Promise<number|null>, visibleMs, since }
+
+const openFeedHash = () => (currentFeed && !currentList ? currentFeed.feed_name_hash : null);
+
+function recordItemOpen(itemHash, surface) {
+  const feedHash = openFeedHash();
+  if (!feedHash || !itemHash) return Promise.resolve(null);
+  return sdk.itemOpened({ feed_hash: feedHash, item_url_hash: itemHash, surface })
+    .then((r) => r.open_id)
+    .catch(() => null);
+}
+
+function startReaderOpen(item) {
+  finishReaderOpen();
+  if (!openFeedHash()) return;
+  readerOpen = {
+    id: recordItemOpen(item.item_hash, 'reader'),
+    visibleMs: 0,
+    since: document.hidden ? null : performance.now(),
+  };
+}
+
+// Time on screen, not time since opening: a reader left in a background tab
+// is not being read.
+function readerOpenSeconds(open) {
+  const running = open.since == null ? 0 : performance.now() - open.since;
+  return (open.visibleMs + running) / 1000;
+}
+
+function reportReaderOpen(open) {
+  const seconds = readerOpenSeconds(open);
+  open.id.then((id) => {
+    if (id != null) sdk.itemOpenSeconds({ open_id: id, seconds }).catch(() => {});
+  });
+}
+
+function finishReaderOpen() {
+  if (!readerOpen) return;
+  reportReaderOpen(readerOpen);
+  readerOpen = null;
+}
+
+// Hiding the tab is often the last thing a page gets to see (a phone switching
+// apps never fires an unload), so the time so far is reported then too. The
+// server keeps the longest figure, so reporting again later is harmless.
+document.addEventListener('visibilitychange', () => {
+  if (!readerOpen) return;
+  if (document.hidden) {
+    if (readerOpen.since != null) {
+      readerOpen.visibleMs += performance.now() - readerOpen.since;
+      readerOpen.since = null;
+    }
+    reportReaderOpen(readerOpen);
+  } else {
+    readerOpen.since = performance.now();
+  }
+});
 
 // ---------- sources ----------
 async function loadSources() {

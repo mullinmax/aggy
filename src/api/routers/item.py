@@ -16,6 +16,7 @@ from typing import Optional
 
 from routers.auth import authenticate
 from db.item import ItemLoose
+from db.item_open import SURFACES, record_open, record_seconds
 from db.item_state import ItemState
 from db.feed import Feed
 from db.source import Source
@@ -23,6 +24,8 @@ from db.user import User
 from ingest.backends import ytdlp
 from ingest.errors import IngestError
 from ingest.jobs import rerank_feeds, rescrape_item
+from route_models.acknowledge import AcknowledgeResponse
+from route_models.experiment import ItemOpenResponse
 from route_models.item import ItemRescrapeResponse, ItemResponse
 from route_models.stream import StreamUrlResponse
 from route_models.thumbnail import ThumbnailResponse
@@ -82,6 +85,54 @@ def set_state(
         score=score,
         is_read=is_read,
     )
+
+
+@item_router.post(
+    "/opened",
+    summary="Record that an article was opened",
+    response_model=ItemOpenResponse,
+)
+def item_opened(
+    feed_hash: str,
+    item_url_hash: str,
+    surface: str = "reader",
+    user: User = Depends(authenticate),
+) -> ItemOpenResponse:
+    """Note an open: in the reader, or by following the link to the original.
+
+    Most articles that are looked at never get a vote, and this is the only
+    record of them. Nothing ranks on it yet; the prediction experiments use it
+    to find out which signals go with an upvote. Returns an id the reader then
+    reports its time on screen against (`/item/open_seconds`).
+    """
+    if surface not in SURFACES:
+        raise HTTPException(
+            status_code=422, detail=f"surface must be one of {', '.join(SURFACES)}"
+        )
+    if not Feed.read(user_hash=user.name_hash, name_hash=feed_hash):
+        raise HTTPException(status_code=404, detail="Feed not found")
+    if not ItemLoose.read(item_url_hash):
+        raise HTTPException(status_code=404, detail="Item not found")
+    return ItemOpenResponse(
+        open_id=record_open(user.name_hash, feed_hash, item_url_hash, surface)
+    )
+
+
+@item_router.post(
+    "/open_seconds",
+    summary="Report how long an opened article has been on screen",
+    response_model=AcknowledgeResponse,
+)
+def item_open_seconds(
+    open_id: int,
+    seconds: confloat(ge=0),
+    user: User = Depends(authenticate),
+) -> AcknowledgeResponse:
+    """Sent when the reader closes, and when its tab is hidden in case it
+    never gets the chance to. The longest figure reported is the one kept."""
+    if not record_seconds(user.name_hash, open_id, seconds):
+        raise HTTPException(status_code=404, detail="Open not found")
+    return AcknowledgeResponse()
 
 
 @item_router.get("/get_state")

@@ -36,6 +36,7 @@ from routers.item import item_router
 from routers.list import list_router
 from routers.stats import stats_router
 from routers.task import task_router
+from routers.experiment import experiment_router
 from routers.web import web_router
 from bridge.jobs import rss_bridge_get_templates_job
 from bridge.rsshub import rsshub_get_templates_job
@@ -48,6 +49,7 @@ from ingest.jobs import (
     prune_ingest_attempts_job,
 )
 from ranking.engine import feed_ranking_job
+from ranking.experiments.runner import experiment_job, requeue_interrupted
 from neighbors.graph import neighbor_graph_job
 from db.task_run import abandon_running_runs
 
@@ -94,6 +96,9 @@ async def app_lifespan(app: FastAPI):
     # nothing will ever finish it. Left alone it would show the tasks page a
     # pass that has apparently been going since before the restart.
     abandon_running_runs()
+    # An experiment a restart cut short goes back in the queue instead: asking
+    # for one is fire-and-forget, and a deploy should not lose it.
+    requeue_interrupted()
 
     scheduler.add_job(
         func=source_ingestion_scheduling_job,
@@ -209,6 +214,21 @@ async def app_lifespan(app: FastAPI):
         coalesce=True,
     )
 
+    # Work the queue of prediction experiments, one at a time. The job does
+    # nothing when the queue is empty, so the short interval only decides how
+    # soon a newly asked-for experiment starts; a run that outlasts it is
+    # skipped over rather than doubled up.
+    scheduler.add_job(
+        func=experiment_job,
+        trigger="interval",
+        seconds=20,
+        id="prediction_experiment_job",
+        replace_existing=False,
+        next_run_time=datetime.now(),
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
 
     yield
@@ -258,6 +278,9 @@ app.include_router(extension_router, prefix="/extension", tags=["Browser Extensi
 app.include_router(list_router, prefix="/list", tags=["Lists"])
 app.include_router(stats_router, prefix="/stats", tags=["Stats"])
 app.include_router(task_router, prefix="/tasks", tags=["Background Tasks"])
+app.include_router(
+    experiment_router, prefix="/experiments", tags=["Prediction Experiments"]
+)
 app.include_router(web_router)
 
 

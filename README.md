@@ -47,6 +47,7 @@ Aggy uses **content embeddings** to understand the types of content you enjoy. A
 - **URL remapping** (e.g., YouTube to [Invidious](https://invidious.io/))
 - **Embedding generation for images**
 - **User feedback-based model training** (Aggy gets smarter with your input)
+- **Prediction experiments**: replay your past votes against two dozen prediction methods to see which would have put your upvotes first. Runs in the background one at a time, never changes the live ranking, and reports scores only so the result can be shared
 - **Alternate sorting options** (Best, Worst, Newest, Oldest)
 - **Recommendation transparency** (Learn why a piece of content was recommended to you)
 - **Semantic filters** (E.g., hide political content)
