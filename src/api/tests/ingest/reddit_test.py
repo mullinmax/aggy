@@ -421,3 +421,29 @@ def test_ingest_reddit_item_still_warns_on_other_failures(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         assert ingest_reddit_item(item) is None
     assert any("connection reset" in r.message for r in caplog.records)
+
+
+def test_ingest_reddit_item_dates_the_post_and_drops_a_deleted_author(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            post = {
+                "title": "t",
+                "author": "[deleted]",
+                "selftext": "[deleted]",
+                "created_utc": 1700000000.0,
+            }
+            return [{"data": {"children": [{"data": post}]}}]
+
+    monkeypatch.setattr(
+        "ingest.item.reddit.reddit_get", lambda url, **kwargs: FakeResponse()
+    )
+
+    result = ingest_reddit_item(
+        ItemLoose(url="https://www.reddit.com/r/pics/comments/abc123/t/")
+    )
+
+    assert result.author is None
+    assert result.date_published.timestamp() == 1700000000.0

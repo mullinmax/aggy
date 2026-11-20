@@ -206,8 +206,8 @@ class AggySDK {
   }
 
   /** Re-scrape one article for content, media, and embeddings */
-  async itemRescrape({ item_url_hash, feed_hash }) {
-    return this._request("POST", "/item/rescrape", { query: { item_url_hash, feed_hash } });
+  async itemRescrape({ item_url_hash, feed_hash, fresh, wipe_if_unreachable }) {
+    return this._request("POST", "/item/rescrape", { query: { item_url_hash, feed_hash, fresh, wipe_if_unreachable } });
   }
 
   /** Set State */

@@ -2,6 +2,7 @@ import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import urlparse
 
 from constants import SOURCE_READ_INTERVAL_MINUTES
 from db.base import get_db_con
@@ -385,10 +386,82 @@ def _replace_with_fresh_pictures(
     merged.image_url = fresh_image
 
 
-def _rescrape_item(item: ItemLoose, backend) -> tuple:
+def _feeds_carrying(url_hash: str) -> set:
+    """Every (user_hash, feed_hash) the item shows up in, voted on or not."""
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT DISTINCT user_hash, feed_hash FROM feed_items "
+            "WHERE item_url_hash = %s",
+            (url_hash,),
+        )
+        return {(row["user_hash"], row["feed_hash"]) for row in cur.fetchall()}
+
+
+class ArticleUnreachable(IngestError):
+    """Starting fresh found nothing to rebuild the article from."""
+
+
+_UNREACHABLE = (
+    "Couldn't reach the article to start fresh, so it was left as it was."
+)
+
+
+def _collect_fresh(
+    item: ItemLoose, backend, wipe_if_unreachable: bool = False
+) -> ItemLoose:
+    """The article built only from what its site answers with right now.
+
+    Nothing of the stored copy is merged back in, so whatever a removed post
+    used to show is gone for good. Only the link is kept. When nothing
+    answers at all (reddit refusing the API, the page unreachable) that says
+    nothing about the article, so ArticleUnreachable is raised and the stored
+    copy stays as it was, unless ``wipe_if_unreachable`` says the reader has
+    already decided the content is gone: then only the link is kept.
+    """
+    blank = ItemLoose(url=item.url)
+    if backend.enrich:
+        reddit_item = ingest_reddit_item(item)
+        scraped = [
+            reddit_item,
+            ingest_open_graph_item(item),
+            ingest_mercury_item(item),
+        ]
+        if any(scraped):
+            fresh = ItemLoose.merge_instances(items=[s for s in scraped if s])
+            _replace_with_fresh_pictures(fresh, blank, reddit_item, scraped)
+        elif wipe_if_unreachable:
+            fresh = blank
+        else:
+            raise ArticleUnreachable(_UNREACHABLE)
+    else:
+        fresh = backend.enrich_item(blank)
+        if fresh is None:
+            if not wipe_if_unreachable:
+                raise ArticleUnreachable(_UNREACHABLE)
+            fresh = blank
+    # the hostname is what every backend files an article under, and it comes
+    # from the link, which is kept
+    fresh.domain = urlparse(str(item.url)).netloc or fresh.domain
+    # The model's sanitizer turns a missing body into the text "None", which
+    # a card would then show as the article. An empty body is what is meant.
+    if fresh.content in (None, "None"):
+        fresh.content = ""
+    fresh.embeddings = None
+    fresh.image_embeddings = None
+    return fresh
+
+
+def _rescrape_item(
+    item: ItemLoose, backend, fresh: bool = False, wipe_if_unreachable: bool = False
+) -> tuple:
     """Re-run one stored item's scrapers and re-embed it, persisting whatever
     changed. Returns whether anything changed, and the (user_hash, feed_hash)
     pairs whose models trained on the item's old features and should retrain.
+
+    With ``fresh`` the stored copy is thrown away rather than added to: the
+    article is rebuilt only from what the scrapers find now (see
+    _collect_fresh), every embedding is recomputed, and every feed carrying
+    the article is returned for re-ranking, not only the ones that voted.
     """
     embedding_model = config.get("OLLAMA_EMBEDDING_MODEL", None)
     image_embed_host = config.get("IMAGE_EMBED_HOST", None)
@@ -397,7 +470,9 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
     before = {f: getattr(item, f) for f in _RESCRAPE_FIELDS}
     picture_before = item.embeddable_image_url
 
-    if backend.enrich:
+    if fresh:
+        merged = _collect_fresh(item, backend, wipe_if_unreachable)
+    elif backend.enrich:
         reddit_item = ingest_reddit_item(item)
         scraped = [
             reddit_item,
@@ -410,21 +485,23 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
         # the generic scrapers have nothing to offer a backend that
         # says so, and the sites it reaches refuse them anyway
         merged = ItemLoose(**item.dict())
-    # merge_instances doesn't carry embeddings over; keep the existing
-    # ones so a re-scrape never drops them. Copied rather than shared:
-    # add_embedding mutates the dict in place, so handing `merged` the
-    # same object would also mutate `item` and leave the two comparing
-    # equal — a freshly computed embedding would then look like "no
-    # change" and never get written back.
-    merged.embeddings = dict(item.embeddings) if item.embeddings else None
-    merged.image_embeddings = (
-        dict(item.image_embeddings) if item.image_embeddings else None
-    )
 
-    # a re-collect is the one other time a backend gets to top an item
-    # up, which is how items stored before it could do so get their
-    # pictures
-    merged = backend.enrich_item(merged) or merged
+    if not fresh:
+        # merge_instances doesn't carry embeddings over; keep the existing
+        # ones so a re-scrape never drops them. Copied rather than shared:
+        # add_embedding mutates the dict in place, so handing `merged` the
+        # same object would also mutate `item` and leave the two comparing
+        # equal — a freshly computed embedding would then look like "no
+        # change" and never get written back.
+        merged.embeddings = dict(item.embeddings) if item.embeddings else None
+        merged.image_embeddings = (
+            dict(item.image_embeddings) if item.image_embeddings else None
+        )
+
+        # a re-collect is the one other time a backend gets to top an item
+        # up, which is how items stored before it could do so get their
+        # pictures
+        merged = backend.enrich_item(merged) or merged
 
     after = {f: getattr(merged, f) for f in _RESCRAPE_FIELDS}
     text_changed = any(after[f] != before[f] for f in _EMBEDDING_TEXT_FIELDS)
@@ -432,13 +509,15 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
     # no image_url the card and the recommender both fall back to the first
     # image in the content, so a re-scrape that swaps the content out from
     # under an unset image_url changes the picture just as much.
-    picture_changed = merged.embeddable_image_url != picture_before
+    # Starting fresh counts as a new picture even when the URL is the same:
+    # the old vectors and retry history are exactly what is being thrown out.
+    picture_changed = fresh or merged.embeddable_image_url != picture_before
 
     embedding_changed = False
-    if text_changed and embedding_model is not None:
+    if (text_changed or fresh) and embedding_model is not None:
         try:
             merged.add_embedding(model_name=embedding_model, force_refresh=True)
-            embedding_changed = merged.embeddings != item.embeddings
+            embedding_changed = fresh or merged.embeddings != item.embeddings
         except Exception as e:
             logging.error(f"Error re-embedding item {item.url}: {e}")
 
@@ -470,7 +549,11 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
         embedding_changed or merged.image_embeddings != item.image_embeddings
     )
 
-    if after == before and not embedding_changed:
+    if fresh:
+        # whatever the old row held is being wiped, so it is always written
+        # back, and the similarity graph re-places it below
+        embedding_changed = True
+    elif after == before and not embedding_changed:
         return False, set()  # nothing changed, leave the row untouched
 
     merged.update()  # persist (overwrites the existing row)
@@ -483,6 +566,11 @@ def _rescrape_item(item: ItemLoose, backend) -> tuple:
         from neighbors.graph import mark_relink_needed
 
         mark_relink_needed(item.url_hash)
+
+    if fresh:
+        # every feed's score for the article was worked out from what it
+        # used to say, voted on or not
+        return True, _feeds_carrying(item.url_hash)
 
     # a changed, voted-on item means the models that trained on its old
     # features are now stale — those feeds should retrain
@@ -536,15 +624,27 @@ def rescrape_source(source: Source) -> None:
     )
 
 
-def rescrape_item(item: ItemLoose, source: Source) -> tuple:
+def rescrape_item(
+    item: ItemLoose,
+    source: Source,
+    fresh: bool = False,
+    wipe_if_unreachable: bool = False,
+) -> tuple:
     """Re-scrape one article now, the way its source's re-scrape would.
 
     Returns whether anything about the article changed, and the feeds whose
     models are now stale. Retraining is left to the caller: it takes far
     longer than the scrape, and someone waiting on the answer only needs the
-    latter.
+    latter. ``fresh`` wipes the stored copy and rebuilds it from the site
+    instead of adding to it (see _rescrape_item), and raises
+    ArticleUnreachable when nothing answers unless ``wipe_if_unreachable``.
     """
-    changed, stale = _rescrape_item(item, get_backend(source.kind))
+    changed, stale = _rescrape_item(
+        item,
+        get_backend(source.kind),
+        fresh=fresh,
+        wipe_if_unreachable=wipe_if_unreachable,
+    )
     logging.info(
         f"Re-scraped {item.url}: "
         + (f"changed, {len(stale)} feed(s) to retrain" if changed else "no change")

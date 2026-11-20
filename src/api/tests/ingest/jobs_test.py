@@ -856,3 +856,121 @@ def test_a_picture_that_comes_back_is_not_held_against_the_item(
     stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
     assert stored.image_embeddings == {"clip-model": [0.1, 0.2]}
     assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is None
+
+
+def _feeds_carrying_item(item):
+    with get_db_con() as cur:
+        cur.execute(
+            "SELECT DISTINCT user_hash, feed_hash FROM feed_items "
+            "WHERE item_url_hash = %s",
+            (item.url_hash,),
+        )
+        return {(row["user_hash"], row["feed_hash"]) for row in cur.fetchall()}
+
+
+def test_fresh_rescrape_of_a_removed_reddit_post_wipes_what_it_used_to_say(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    """A moderator-removed post kept its old body and preview, so it went on
+    being scored on content nobody can see any more. Starting fresh throws
+    the stored copy away: only what reddit shows now survives."""
+    existing_item_strict.update(
+        author="u/original_poster",
+        content='<p>the whole story</p><img src="http://example.com/thumb.jpg">',
+        media=[{"type": "image", "url": "http://example.com/full.jpg"}],
+        image_url="http://example.com/full.jpg",
+        embeddings={"text-model": [0.1]},
+        image_embeddings={"clip-model": [0.1]},
+    )
+    monkeypatch.setattr(jobs, "is_reddit_post", lambda url: True)
+    _scrapers_find(
+        monkeypatch,
+        reddit=lambda item: ItemLoose(
+            url=item.url,
+            title="A title reddit still shows",
+            media=[],
+            content="[removed]",
+            excerpt="[removed]",
+        ),
+        open_graph=lambda item: ItemLoose(
+            url=item.url, image_url="http://example.com/og.jpg"
+        ),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(item, existing_source, fresh=True)
+
+    assert changed
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.title == "A title reddit still shows"
+    assert stored.content == "[removed]"
+    assert stored.excerpt == "[removed]"
+    assert stored.author is None
+    assert stored.image_url is None
+    assert stored.media == []
+    assert stored.embeddable_image_url is None
+    assert not stored.embeddings
+    assert not stored.image_embeddings
+    # every feed carrying the article rescores it, voted on or not
+    assert (existing_item_state.user_hash, existing_item_state.feed_hash) in stale
+    assert stale == _feeds_carrying_item(existing_item_strict)
+
+
+def test_fresh_rescrape_keeps_nothing_the_site_no_longer_shows(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """Outside reddit too, the old copy isn't merged back in: a field the page
+    no longer has comes back empty rather than as it was."""
+    _scrapers_find(
+        monkeypatch,
+        open_graph=lambda item: ItemLoose(url=item.url, title="Still here"),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, _ = jobs.rescrape_item(item, existing_source, fresh=True)
+
+    assert changed
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.title == "Still here"
+    assert not stored.content
+    assert stored.image_url is None
+    assert str(stored.url) == str(existing_item_strict.url)
+
+
+def test_fresh_rescrape_leaves_the_article_alone_when_nothing_answers(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """No answer at all (reddit refusing the API, the site down) says nothing
+    about the article, so it isn't wiped to a blank card."""
+    _scrapers_find(monkeypatch)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    with pytest.raises(jobs.ArticleUnreachable):
+        jobs.rescrape_item(item, existing_source, fresh=True)
+
+    stored = ItemStrict.read(url_hash=existing_item_strict.url_hash)
+    assert stored.title == existing_item_strict.title
+    assert stored.content == existing_item_strict.content
+
+
+def test_fresh_rescrape_wipes_an_unreachable_article_when_asked_to(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    """Once the reader says the content is gone, nothing answering is no
+    reason to keep it: only the link survives, and the feeds rescore it."""
+    existing_item_strict.update(embeddings={"text-model": [0.1]})
+    _scrapers_find(monkeypatch)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(
+        item, existing_source, fresh=True, wipe_if_unreachable=True
+    )
+
+    assert changed
+    assert (existing_item_state.user_hash, existing_item_state.feed_hash) in stale
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert str(stored.url) == str(existing_item_strict.url)
+    assert stored.title is None
+    assert stored.content == ""
+    assert stored.image_url is None
+    assert not stored.embeddings

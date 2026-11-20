@@ -8,6 +8,7 @@ items and turns it into the item's ``media`` list.
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -149,6 +150,26 @@ def _removal_notice(post: dict) -> Optional[str]:
     return None
 
 
+def _author(post: dict) -> Optional[str]:
+    """The poster, or ``None`` once reddit has blanked them to "[deleted]"."""
+    author = post.get("author")
+    if not author or author in REMOVAL_NOTICES:
+        return None
+    return f"u/{author}"
+
+
+def _created_at(post: dict) -> Optional[datetime]:
+    """When the post went up. A taken-down post keeps this too, and a
+    re-scrape that starts fresh has nothing else to date the article by."""
+    created = post.get("created_utc")
+    if created is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(created), tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 def _post_media(post: dict) -> List[dict]:
     if post.get("is_gallery"):
         return _gallery_media(post)
@@ -249,7 +270,8 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
         return ItemLoose(
             url=item.url,
             title=post.get("title"),
-            author=f"u/{post['author']}" if post.get("author") else None,
+            author=_author(post),
+            date_published=_created_at(post),
             media=[],
             image_url=None,
             content=notice,
@@ -272,7 +294,8 @@ def ingest_reddit_item(item: ItemLoose) -> Optional[ItemLoose]:
     return ItemLoose(
         url=item.url,
         title=post.get("title"),
-        author=f"u/{post['author']}" if post.get("author") else None,
+        author=_author(post),
+        date_published=_created_at(post),
         # an empty list still means "post scraped, no media found", which
         # stops re-scrape attempts on later ingest cycles
         media=media,
