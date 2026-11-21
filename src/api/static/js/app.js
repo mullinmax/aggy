@@ -604,6 +604,7 @@ const MODEL_LABELS = {
   global_mean: 'Global mean (baseline)',
   source_mean: 'Source average',
   knn_embedding: 'Similar posts (kNN)',
+  source_prior_knn: 'Source and author prior',
   ridge: 'Linear model (ridge)',
   logistic: 'Logistic regression',
   svr: 'Support vector regression',
@@ -619,7 +620,7 @@ const modelLabel = (name) => MODEL_LABELS[name] || name || '';
 const TRAINING_PHASES = {
   loading: 'Reading your votes',
   evaluating: 'Testing models against your votes',
-  training: 'Training the winning model',
+  training: 'Training the model',
   predicting: 'Scoring the articles in this feed',
 };
 
@@ -715,8 +716,9 @@ function renderTrainingPanel(status) {
         `${pending} new vote${pending === 1 ? '' : 's'} since — retrain to use ${pending === 1 ? 'it' : 'them'}`)
     : h('span', { class: 'text-success' }, 'Up to date with your votes');
 
-  // Progress is reported in steps — reading the votes, one per model
-  // cross-validated, the winner's fit, then the scoring pass — and the step
+  // Progress is reported in steps: reading the votes, one per model
+  // cross-validated (only when a comparison was asked for), the live model's
+  // fit, then the scoring pass. The step
   // is fractional within a model, so the bar keeps moving through the slow
   // ones instead of sitting still for half a minute.
   const step = Math.min(Math.floor(run ? run.step : 0) + 1, run ? run.total_steps : 1);
@@ -779,7 +781,10 @@ function renderStats(stats) {
                 h('th', { class: 'text-right', title: 'Mean absolute error (lower is better)' }, 'MAE'),
                 h('th', { class: 'text-right', title: 'Root mean squared error (lower is better)' }, 'RMSE'),
                 h('th', { class: 'text-right', title: 'How often the predicted vote direction matches yours' }, 'Direction'))),
-            h('tbody', {}, stats.models.map(row))))
+            h('tbody', {}, stats.models.map(row))),
+          h('p', { class: 'text-xs text-base-content/50 mt-2' },
+            'Error figures are from the last time "Retrain now" compared the models. '
+            + 'A blank row has not been compared yet.'))
       : h('p', { class: 'text-sm text-base-content/50' },
           'No model stats yet — vote on a few articles, then hit "Retrain now".'));
 

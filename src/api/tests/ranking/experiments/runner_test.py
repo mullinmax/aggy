@@ -83,6 +83,39 @@ def test_an_experiment_runs_from_the_queue_and_stores_its_result(
     assert result["feeds"][0]["labels"] == 24
 
 
+def test_a_result_explains_its_feeds_and_counts_what_each_rule_picked(
+    existing_user, existing_feed, fast
+):
+    items = _voted_feed(existing_user, existing_feed)
+    # one article is on a list as well as voted on
+    with get_db_con() as cur:
+        cur.execute(
+            "INSERT INTO lists (user_hash, name_hash, name) VALUES (%s, %s, %s)",
+            (existing_user.name_hash, "list-hash", "A list"),
+        )
+        cur.execute(
+            "INSERT INTO list_items (user_hash, list_hash, item_url_hash) "
+            "VALUES (%s, %s, %s)",
+            (existing_user.name_hash, "list-hash", items[0].url_hash),
+        )
+    experiment_id = runner.enqueue(existing_user.name_hash)
+    runner.experiment_job()
+    result = runner.get_experiment(existing_user.name_hash, experiment_id)["result"]
+
+    assert result["format"] == 2
+    methods = {m["method"] for m in result["methods"]}
+    assert {"live_rule", "blend_svr_prior", "svr_vote_time_age"} <= methods
+    blocks = result["blocks"]
+    assert sum(result["picker_choices"]["live_rule"].values()) == blocks
+    assert sum(result["picker_choices"]["live_picker"].values()) == blocks
+
+    found = result["feeds"][0]["diagnostics"]
+    assert found["coverage"]["text_embedding"] == 1.0
+    assert found["similar_votes"]["nearest_agrees"] == 1.0
+    assert found["label_origin"]["vote_and_list"] == pytest.approx(1 / 24, abs=1e-4)
+    assert found["label_origin"]["list_only"] == 0.0
+
+
 def test_a_result_names_no_article_source_or_feed(existing_user, existing_feed, fast):
     """The result is built to be copied out of the app. Whatever else it
     holds, it must not hold anything that identifies what was read."""

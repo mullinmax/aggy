@@ -28,13 +28,17 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC, SVR
 
 from ranking.models import (
     ItemFeatures,
     KNNEmbeddingModel,
     LogisticVoteModel,
     RidgeModel,
+    SourcePriorKNNModel,
+    SVRModel,
     VoteModel,
+    _aux_vector,
     _design_matrix,
     _embedding_dim,
     _unit_or_zeros,
@@ -114,6 +118,19 @@ class NewestFirstModel(ExperimentModel):
         worst = (max(known) if known else 0.0) + 1.0
         scores = -np.asarray([worst if a is None else a for a in ages], dtype=float)
         return scores, np.full(len(items), 0.05)
+
+
+class OldestFirstModel(NewestFirstModel):
+    """The mirror image: the older the article, the higher it ranks.
+
+    Newest-first came out well below chance on some feeds, which means the
+    upvotes there lean old. This puts a number on how far age alone goes."""
+
+    name = "oldest_first"
+
+    def predict(self, items):
+        scores, confs = super().predict(items)
+        return -scores, confs
 
 
 # ---------------------------------------------------------------------------
@@ -493,84 +510,6 @@ class PairwiseRankerModel(_MatrixModel):
 
 
 # ---------------------------------------------------------------------------
-# priors
-
-
-class SourcePriorKNNModel(ExperimentModel):
-    """What you think of the source and the author, corrected by content.
-
-    Starts from an average vote per source, shrunk toward the overall average
-    when a source has few votes, then does the same for the author with what
-    the source left unexplained. Whatever is still unexplained is predicted
-    from the nearest voted articles. The live models see source and author only
-    as hashed buckets, which collide once a feed has more than a few of them."""
-
-    name = "source_prior_knn"
-    min_labels = 6
-
-    def __init__(self, shrink: float = 5.0, k: int = 10):
-        self.shrink = shrink
-        self.k = k
-
-    def _shrunk(self, keys, values) -> dict:
-        grouped: dict = {}
-        for key, value in zip(keys, values):
-            if key:
-                grouped.setdefault(key, []).append(value)
-        return {
-            key: float(np.sum(v) / (len(v) + self.shrink)) for key, v in grouped.items()
-        }
-
-    def _prior(self, items) -> np.ndarray:
-        return np.asarray(
-            [
-                self.mean
-                + self.by_source.get(i.source, 0.0)
-                + self.by_author.get(i.author, 0.0)
-                for i in items
-            ]
-        )
-
-    def fit(self, items):
-        labels = _labels(items)
-        self.mean = float(labels.mean()) if len(labels) else 0.0
-        self.by_source = self._shrunk([i.source for i in items], labels - self.mean)
-        after_source = labels - np.asarray(
-            [self.mean + self.by_source.get(i.source, 0.0) for i in items]
-        )
-        self.by_author = self._shrunk([i.author for i in items], after_source)
-        residual = labels - self._prior(items)
-        self.dim = _embedding_dim(items, "embedding")
-        self.matrix = None
-        if self.dim:
-            rows, present = _unit_embeddings(items, self.dim)
-            if present.any():
-                self.matrix = rows[present]
-                self.residual = residual[present]
-
-    def predict(self, items):
-        scores = self._prior(items)
-        if self.matrix is not None:
-            rows, present = _unit_embeddings(items, self.dim)
-            k = min(self.k, len(self.residual))
-            for index in np.flatnonzero(present):
-                sims = self.matrix @ rows[index]
-                top = np.argpartition(sims, -k)[-k:]
-                weights = np.clip(sims[top], 0.0, None)
-                total = weights.sum()
-                if total <= 1e-9:
-                    continue
-                # trust the correction more the closer and more numerous the
-                # neighbours it came from
-                trust = total / (total + 1.0)
-                scores[index] += (
-                    trust * float(np.dot(weights, self.residual[top])) / total
-                )
-        scores = np.clip(scores, -1.0, 1.0)
-        return scores, np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
-
-
-# ---------------------------------------------------------------------------
 # tuning
 
 
@@ -642,6 +581,113 @@ class TunedRidgeModel(_TunedModel):
         return RidgeModel(alpha=float(value))
 
 
+class TunedSVRModel(_TunedModel):
+    """The live SVR with its one stiffness setting chosen per feed."""
+
+    name = "svr_tuned"
+    min_labels = 24
+    candidates = (0.1, 0.3, 1.0, 3.0, 10.0)
+
+    def _make(self, value):
+        return SVRModel(C=float(value))
+
+
+# ---------------------------------------------------------------------------
+# taking the SVR apart: which of the things it reads is doing the work
+
+
+class SVRTextOnlyModel(ExperimentModel):
+    """The SVR on the article's text embedding and nothing else: no age, no
+    source, no author, no picture, no neighbours' votes."""
+
+    name = "svr_text_only"
+    min_labels = 12
+
+    def fit(self, items):
+        self.dim = _embedding_dim(items, "embedding")
+        X, _ = _unit_embeddings(items, self.dim)
+        self.scaler = StandardScaler().fit(X)
+        self.model = SVR(kernel="rbf").fit(self.scaler.transform(X), _labels(items))
+
+    def predict(self, items):
+        X, _ = _unit_embeddings(items, self.dim)
+        scores = np.clip(self.model.predict(self.scaler.transform(X)), -1.0, 1.0)
+        return scores, np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
+
+
+class SVRNoNeighborsModel(_MatrixModel):
+    """The SVR without the votes cast on an article's nearest neighbours."""
+
+    name = "svr_no_neighbors"
+    min_labels = 12
+    use_neighbors = False
+
+    def fit(self, items):
+        X = self._prepare(items)
+        self.scaler = StandardScaler().fit(X)
+        self.model = SVR(kernel="rbf").fit(self.scaler.transform(X), _labels(items))
+
+    def predict(self, items):
+        raw = self.model.predict(self.scaler.transform(self._matrix(items)))
+        scores = np.clip(raw, -1.0, 1.0)
+        return scores, np.clip(0.1 + 0.8 * np.abs(scores), 0.0, 1.0)
+
+
+class SVRVoteTimeAgeModel(SVRModel):
+    """The SVR, told how old each article was at the moment it was voted on.
+
+    The feed can never know that ahead of time, so this is not a candidate. It
+    is a measurement: the gap between this and `svr` is how much of a score an
+    article's age at vote time can account for on its own, and so how far to
+    trust any earlier result that was computed this way."""
+
+    name = "svr_vote_time_age"
+    rankable = False
+    sees_vote_time = True
+
+
+class SideFeaturesModel(_UpvoteClassifier):
+    """Everything but the content: age, source, author and whether there is a
+    picture or media. If this does as well as the models that read the
+    article, the embeddings are not what is being learned from."""
+
+    name = "side_features_only"
+    min_labels = 8
+    use_neighbors = False
+
+    def _matrix(self, items):
+        return np.asarray([_aux_vector(i, self.now) for i in items])
+
+    def _build(self):
+        return LogisticRegression(C=1.0, max_iter=1000)
+
+
+class SVCUpvoteModel(_MatrixModel):
+    """A support-vector classifier on "will this be upvoted?", ranked by its
+    margin. The SVR's kernel, pointed at the question actually being asked."""
+
+    name = "svc_upvote"
+    min_labels = 12
+    calibrated = False
+
+    def fit(self, items):
+        X = self._prepare(items)
+        y = metrics.is_upvote(_labels(items)).astype(int)
+        self.clf = None
+        if len(np.unique(y)) < 2:
+            return
+        self.scaler = StandardScaler().fit(X)
+        self.clf = SVC(kernel="rbf", class_weight="balanced").fit(
+            self.scaler.transform(X), y
+        )
+
+    def predict(self, items):
+        if self.clf is None:
+            return np.zeros(len(items)), np.full(len(items), 0.05)
+        margin = self.clf.decision_function(self.scaler.transform(self._matrix(items)))
+        return margin, np.clip(0.1 + 0.4 * np.abs(margin), 0.0, 1.0)
+
+
 # ---------------------------------------------------------------------------
 # account-wide: the same models, fitted on the votes of every feed you have
 
@@ -701,6 +747,7 @@ def experiment_models() -> List[VoteModel]:
     (the pickers and the blends)."""
     return [
         NewestFirstModel(),
+        OldestFirstModel(),
         TasteProfileModel(),
         MultiInterestModel(),
         RecentKNNModel(30.0),
@@ -714,6 +761,12 @@ def experiment_models() -> List[VoteModel]:
         SourcePriorKNNModel(),
         TunedKNNModel(),
         TunedRidgeModel(),
+        TunedSVRModel(),
+        SVRTextOnlyModel(),
+        SVRNoNeighborsModel(),
+        SVRVoteTimeAgeModel(),
+        SideFeaturesModel(),
+        SVCUpvoteModel(),
         AccountKNNModel(),
         AccountRidgeModel(),
         AccountLogisticModel(),

@@ -100,8 +100,8 @@ def test_predictions_are_written_per_article(existing_user, existing_feed):
 
 
 def test_run_reports_every_phase(existing_user, existing_feed):
-    """The progress a run reports has to actually move: reading the votes,
-    each model as it is cross-validated, then scoring the feed."""
+    """The progress a comparison run reports has to actually move: reading
+    the votes, each model as it is cross-validated, then scoring the feed."""
     progress.reset()
     items = [
         _add_item(
@@ -130,7 +130,7 @@ def test_run_reports_every_phase(existing_user, existing_feed):
     progress.update = record
     try:
         progress.start(existing_user.name_hash, existing_feed.name_hash, 1)
-        rank_feed(existing_feed)
+        rank_feed(existing_feed, bakeoff=True)
     finally:
         progress.update = real_update
 
@@ -143,6 +143,6 @@ def test_run_reports_every_phase(existing_user, existing_feed):
     # steps only ever move forward, and never past the budget
     steps = [entry["step"] for entry in seen if entry.get("step") is not None]
     assert steps == sorted(steps)
-    assert max(steps) <= training_steps()
+    assert max(steps) <= training_steps(bakeoff=True)
     # and the run says what it is doing, not just which step it is on
     assert any(entry.get("note") for entry in seen)

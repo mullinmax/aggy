@@ -485,9 +485,10 @@
     <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button></form>
     <h3 class="text-lg font-bold mb-1">Model Training</h3>
     <p class="text-xs text-base-content/60 mb-4">
-      Aggy cross-validates several models on your votes and ranks this feed with the best one.
-      Vote more to unlock the smarter models. Training runs in the background — you can close
-      this and keep browsing.
+      Aggy ranks this feed with the model that put your upvotes first most reliably when your past
+      votes were replayed, and retrains it whenever you vote. "Retrain now" also compares every
+      model on your votes and fills in the table below. That comparison is for reading only, and
+      it runs in the background, so you can close this and keep browsing.
     </p>
     <div id="statsBody"></div>
     <div id="experimentsPanel"></div>

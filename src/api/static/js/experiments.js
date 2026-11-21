@@ -12,7 +12,17 @@ const EXPERIMENT_POLL_MS = 3000;
 const EXPERIMENT_LIST_LIMIT = 10;
 
 const EXPERIMENT_METHOD_LABELS = {
-  live_picker: 'What the app uses today',
+  live_picker: 'Old rule: lowest test error',
+  live_rule: 'What the app uses today',
+  blend_svr_prior: 'Blend: SVR + source prior',
+  blend_strong: 'Blend: SVR + source prior + forest',
+  oldest_first: 'Oldest first (baseline)',
+  svr_tuned: 'SVR, tuned',
+  svr_text_only: 'SVR, text only',
+  svr_no_neighbors: 'SVR, no neighbour votes',
+  svr_vote_time_age: 'SVR, told the age at vote (check)',
+  side_features_only: 'Age, source and author only',
+  svc_upvote: 'Support vector upvote classifier',
   time_picker: 'Pick by recent ranking',
   blend_top3: 'Blend of the best 3',
   blend_core: 'Blend of 4 simple methods',
@@ -248,7 +258,7 @@ function experimentResultView(result) {
             }, 'Top 5'),
             h('th', {
               class: 'text-right',
-              title: 'Ranking score compared with what the app uses today, on the same votes',
+              title: 'Ranking score compared with the old rule (lowest test error), on the same votes',
             }, 'vs today'),
             h('th', { class: 'text-right', title: 'Average time to train once' }, 'Fit'))),
         h('tbody', {}, result.methods.map(row)))),
