@@ -506,7 +506,9 @@ class ItemBase(AggyBaseModel):
             )
         return base64.b64encode(raw).decode("ascii")
 
-    def add_image_embedding(self, model_name: str, force_refresh=False) -> None:
+    def add_image_embedding(
+        self, model_name: str, force_refresh=False
+    ) -> Optional["ImageEmbedError"]:
         """Embed the item's preview image via the CLIP image-embedding service
         (src/image_embed) so the recommender can score the picture itself rather
         than only whether one exists.
@@ -515,10 +517,11 @@ class ItemBase(AggyBaseModel):
         in ``image_embeddings`` (keyed by model name), kept separate from the
         text ``embeddings`` so the two pieces are never blended into one signal.
 
-        A failure here is swallowed (logged, embedding left absent) because the
-        callers are ingest paths where an unfetchable thumbnail must not cost
-        the article itself. The backfill calls :func:`embed_image` directly so
-        it can record *why* an item failed.
+        A failure here is never raised (it is logged, and the embedding left
+        absent) because the callers are ingest paths where an unfetchable
+        thumbnail must not cost the article itself. It is returned instead, so
+        a caller that cares *why* (a re-scrape learning the picture was
+        deleted) can act on it; the others just ignore the return value.
         """
         image_url = self.embeddable_image_url
         if not image_url:
@@ -537,10 +540,11 @@ class ItemBase(AggyBaseModel):
             embedding = embed_image(image_url)
         except ImageEmbedError as e:
             logging.warning(f"No image embedding for {self.url}: {e}")
-            return
+            return e
 
         if embedding:
             self.image_embeddings[model_name] = embedding
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +677,35 @@ def embeddable_image_url(
     return usable_image_url(img["src"], base_url)
 
 
+def fetch_image_base64(image_url: str) -> str:
+    """The picture at ``image_url``, base64-encoded, from whichever of its
+    candidate URLs answers first.
+
+    Raises :class:`ImageEmbedError` when none does, carrying each candidate's
+    HTTP status so a caller can tell a deleted picture from a bad day.
+    """
+    # a data: URI is the picture, not an address to fetch it from
+    image_base64 = data_image_base64(image_url)
+    if image_base64 is not None:
+        return image_base64
+
+    candidates = ItemBase._image_fetch_urls(image_url)
+    if not candidates:
+        raise ImageEmbedError(f"not a usable image url: {image_url[:100]}")
+
+    failures = []
+    statuses = []
+    for candidate in candidates:
+        try:
+            return ItemBase._fetch_image_base64(candidate)
+        except Exception as e:
+            failures.append(f"{candidate} ({_fetch_error_detail(e)})")
+            if isinstance(e, httpx.HTTPStatusError):
+                statuses.append(e.response.status_code)
+
+    raise ImageEmbedError(f"could not fetch image: {'; '.join(failures)}", statuses)
+
+
 def embed_image(image_url: str) -> List[float]:
     """Download a preview image and return its CLIP embedding vector.
 
@@ -680,29 +713,7 @@ def embed_image(image_url: str) -> List[float]:
     the item — when the picture can't be fetched from any candidate URL or the
     embedding service won't produce a vector for it.
     """
-    # a data: URI is the picture, not an address to fetch it from
-    image_base64 = data_image_base64(image_url)
-
-    if image_base64 is None:
-        candidates = ItemBase._image_fetch_urls(image_url)
-        if not candidates:
-            raise ImageEmbedError(f"not a usable image url: {image_url[:100]}")
-
-        failures = []
-        statuses = []
-        for candidate in candidates:
-            try:
-                image_base64 = ItemBase._fetch_image_base64(candidate)
-                break
-            except Exception as e:
-                failures.append(f"{candidate} ({_fetch_error_detail(e)})")
-                if isinstance(e, httpx.HTTPStatusError):
-                    statuses.append(e.response.status_code)
-
-        if image_base64 is None:
-            raise ImageEmbedError(
-                f"could not fetch image: {'; '.join(failures)}", statuses
-            )
+    image_base64 = fetch_image_base64(image_url)
 
     host = config.get("IMAGE_EMBED_HOST", None)
     port = config.get_int("IMAGE_EMBED_PORT")
@@ -781,30 +792,71 @@ def image_embed_backfill_candidates(
         return [dict(row) for row in cur.fetchall()]
 
 
+# The backfill reads a batch of rows, then spends minutes fetching and
+# embedding their pictures. A re-scrape can change or remove an article's
+# picture in the meantime, and a result written back then would describe a
+# picture the article no longer shows (or bring back a vector the re-scrape
+# just dropped). So a result only lands while the row still holds the image_url
+# and content it was worked out from; otherwise it is thrown away, and the
+# next pass picks the article up as it is now.
+_STILL_SHOWS_SQL = (
+    " AND image_url IS NOT DISTINCT FROM %(image_url)s"
+    " AND content IS NOT DISTINCT FROM %(content)s"
+)
+
+_UNCHANGED = object()
+
+
+def _still_shows(image_url, content) -> Tuple[str, dict]:
+    if image_url is _UNCHANGED:
+        return "", {}
+    return _STILL_SHOWS_SQL, {"image_url": image_url, "content": content}
+
+
 def save_image_embedding(
-    url_hash: str, model_name: str, embedding: List[float]
-) -> None:
+    url_hash: str,
+    model_name: str,
+    embedding: List[float],
+    image_url=_UNCHANGED,
+    content=None,
+) -> bool:
     """Merge one image embedding into an item, touching nothing else.
 
     The attempt counter is cleared: the item is healthy again, so a later model
     change starts it from a full retry budget rather than from whatever failures
     it accumulated under the old one.
+
+    Given the ``image_url`` and ``content`` the picture was found in, the write
+    only happens while the row still holds both (see ``_STILL_SHOWS_SQL``).
+    Returns whether it happened.
     """
+    guard, guard_params = _still_shows(image_url, content)
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET "
             "image_embeddings = COALESCE(image_embeddings, '{}'::jsonb) "
-            "  || jsonb_build_object(%s, %s::jsonb), "
+            "  || jsonb_build_object(%(model)s, %(embedding)s::jsonb), "
             "image_embed_attempts = 0, "
             "image_embed_failed_at = NULL, "
             "image_embed_error = NULL "
-            "WHERE url_hash = %s",
-            (model_name, json.dumps(embedding), url_hash),
+            "WHERE url_hash = %(url_hash)s" + guard,
+            {
+                "model": model_name,
+                "embedding": json.dumps(embedding),
+                "url_hash": url_hash,
+                **guard_params,
+            },
         )
+        return cur.rowcount > 0
 
 
 def record_image_embed_failure(
-    url_hash: str, error: str, image_gone: bool = False, image_missing: bool = False
+    url_hash: str,
+    error: str,
+    image_gone: bool = False,
+    image_missing: bool = False,
+    image_url=_UNCHANGED,
+    content=None,
 ) -> None:
     """Count a failed image-embedding attempt so the item backs off.
 
@@ -819,23 +871,29 @@ def record_image_embed_failure(
     with the attempts, because the manual retry resets the attempts -- which
     left a 404 permanently on "strike one" for anyone who used the button, and
     fetched forever. Only a re-scrape finding a different picture clears it.
+
+    ``image_url``/``content`` guard the write the same way as in
+    :func:`save_image_embedding`: a failure fetching a picture the article no
+    longer shows says nothing about the one it shows now.
     """
+    guard, guard_params = _still_shows(image_url, content)
     with get_db_con() as cur:
         cur.execute(
             "UPDATE items SET "
             "image_embed_attempts = image_embed_attempts + 1, "
             "image_embed_failed_at = NOW(), "
-            "image_embed_error = %s, "
-            "image_gone_at = CASE WHEN %s THEN NOW() ELSE image_gone_at END, "
-            "image_missing_at = CASE WHEN %s THEN COALESCE(image_missing_at, NOW()) "
-            "ELSE image_missing_at END "
-            "WHERE url_hash = %s",
-            (
-                error[:_MAX_STORED_IMAGE_EMBED_ERROR],
-                image_gone,
-                image_missing,
-                url_hash,
-            ),
+            "image_embed_error = %(error)s, "
+            "image_gone_at = CASE WHEN %(gone)s THEN NOW() ELSE image_gone_at END, "
+            "image_missing_at = CASE WHEN %(missing)s "
+            "THEN COALESCE(image_missing_at, NOW()) ELSE image_missing_at END "
+            "WHERE url_hash = %(url_hash)s" + guard,
+            {
+                "error": error[:_MAX_STORED_IMAGE_EMBED_ERROR],
+                "gone": image_gone,
+                "missing": image_missing,
+                "url_hash": url_hash,
+                **guard_params,
+            },
         )
 
 

@@ -974,3 +974,192 @@ def test_fresh_rescrape_wipes_an_unreachable_article_when_asked_to(
     assert stored.content == ""
     assert stored.image_url is None
     assert not stored.embeddings
+
+
+def _host_answers(monkeypatch, *statuses):
+    """Have every fetch of a picture fail with these HTTP statuses."""
+
+    def fail(image_url):
+        raise ImageEmbedError(f"could not fetch image: HTTP {statuses}", list(statuses))
+
+    monkeypatch.setattr(jobs, "fetch_image_base64", fail)
+
+
+def _image_embed_on(monkeypatch):
+    """The re-scrape helpers stub config.get; this puts the image service back
+    on top of that stub."""
+    settings = {"IMAGE_EMBED_HOST": "image-embed", "IMAGE_EMBED_MODEL": "clip-model"}
+    monkeypatch.setattr(
+        jobs.config, "get", lambda key, default=None: settings.get(key, default)
+    )
+
+
+def test_rescrape_drops_the_vector_of_a_picture_deleted_at_its_host(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    """The post still links the same picture, but its host now answers 404:
+    the link staying put says nothing about the picture behind it. The old
+    vector describes a picture nobody can see any more, so it goes, every
+    feed carrying the article rescores, and the backfill is told."""
+    existing_item_strict.update(image_embeddings={"clip-model": [0.1]})
+    _scrapers_find(monkeypatch)
+    _image_embed_on(monkeypatch)
+    _host_answers(monkeypatch, 404)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    assert stale == _feeds_carrying_item(existing_item_strict)
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url == existing_item_strict.image_url
+    assert not stored.image_embeddings
+    state = _embed_state(existing_item_strict.url_hash)
+    assert state["image_missing_at"] is not None
+    assert state["image_embed_attempts"] == 1
+
+
+def test_rescrape_marks_a_picture_the_host_says_is_gone(
+    monkeypatch, existing_source, existing_item_strict
+):
+    existing_item_strict.update(image_embeddings={"clip-model": [0.1]})
+    _scrapers_find(monkeypatch)
+    _image_embed_on(monkeypatch)
+    _host_answers(monkeypatch, 410)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    jobs.rescrape_item(item, existing_source)
+
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert not stored.image_embeddings
+    assert _embed_state(existing_item_strict.url_hash)["image_gone_at"] is not None
+
+
+def test_rescrape_keeps_the_vector_when_the_host_is_only_having_a_bad_day(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """A 403 or a timeout fixes itself; it is no reason to forget the picture."""
+    existing_item_strict.update(image_embeddings={"clip-model": [0.1]})
+    _scrapers_find(monkeypatch)
+    _image_embed_on(monkeypatch)
+    _host_answers(monkeypatch, 403)
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, _ = jobs.rescrape_item(item, existing_source)
+
+    assert not changed
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_embeddings == {"clip-model": [0.1]}
+    assert _embed_state(existing_item_strict.url_hash)["image_embed_attempts"] == 0
+
+
+def test_rescrape_keeps_the_vector_of_a_picture_that_is_still_there(
+    monkeypatch, existing_source, existing_item_strict
+):
+    existing_item_strict.update(image_embeddings={"clip-model": [0.1]})
+    _scrapers_find(monkeypatch)
+    _image_embed_on(monkeypatch)
+    monkeypatch.setattr(jobs, "fetch_image_base64", lambda url: "aGk=")
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, _ = jobs.rescrape_item(item, existing_source)
+
+    assert not changed
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_embeddings == {"clip-model": [0.1]}
+
+
+def test_fresh_rescrape_does_not_keep_a_vector_for_a_deleted_picture(
+    monkeypatch, existing_source, existing_item_strict, existing_item_state
+):
+    """Starting fresh on a post that still links a picture its host has
+    deleted: the old vector is thrown out, the new fetch fails, and the
+    article ends up with no image vector at all rather than the old one."""
+    existing_item_strict.update(image_embeddings={"clip-model": [0.1]})
+    _scrapers_find(
+        monkeypatch,
+        open_graph=lambda item: ItemLoose(
+            url=item.url, title="Still here", image_url=existing_item_strict.image_url
+        ),
+    )
+    _image_embed_on(monkeypatch)
+    monkeypatch.setattr(
+        "db.item.embed_image",
+        lambda url: (_ for _ in ()).throw(
+            ImageEmbedError("could not fetch image: HTTP 404", [404])
+        ),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, stale = jobs.rescrape_item(item, existing_source, fresh=True)
+
+    assert changed
+    assert stale == _feeds_carrying_item(existing_item_strict)
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url == existing_item_strict.image_url
+    assert not stored.image_embeddings
+    assert _embed_state(existing_item_strict.url_hash)["image_missing_at"] is not None
+
+
+def test_rescrape_drops_text_vectors_that_describe_the_old_text(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """A vector from an earlier embedding model would otherwise outlive the
+    text it was made from, and the recommender reads whichever comes first."""
+    existing_item_strict.update(embeddings={"old-text-model": [0.1]})
+    _scrapers_find(
+        monkeypatch,
+        open_graph=lambda item: ItemLoose(url=item.url, content="Entirely new words"),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    changed, _ = jobs.rescrape_item(item, existing_source)
+
+    assert changed
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert not stored.embeddings
+
+
+def test_backfill_discards_a_vector_for_a_picture_a_rescrape_replaced(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    """The backfill read the row, then a re-scrape swapped the picture out
+    while the old one was being embedded. Writing the result back would bring
+    the old picture's vector back onto the article."""
+
+    def rescrape_meanwhile(image_url):
+        with get_db_con() as cur:
+            cur.execute(
+                "UPDATE items SET image_url = 'http://example.com/new.jpg' "
+                "WHERE url_hash = %s",
+                (existing_item_strict.url_hash,),
+            )
+        return [0.5]
+
+    monkeypatch.setattr(jobs, "embed_image", rescrape_meanwhile)
+
+    jobs.backfill_image_embeddings_job()
+
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert not stored.image_embeddings
+
+
+def test_backfill_does_not_file_a_failure_against_a_replaced_picture(
+    monkeypatch, existing_item_strict, image_embed_configured
+):
+    def rescrape_meanwhile(image_url):
+        with get_db_con() as cur:
+            cur.execute(
+                "UPDATE items SET image_url = 'http://example.com/new.jpg' "
+                "WHERE url_hash = %s",
+                (existing_item_strict.url_hash,),
+            )
+        raise _gone_error(410)
+
+    monkeypatch.setattr(jobs, "embed_image", rescrape_meanwhile)
+
+    jobs.backfill_image_embeddings_job()
+
+    state = _embed_state(existing_item_strict.url_hash)
+    assert state["image_gone_at"] is None
+    assert state["image_embed_attempts"] == 0

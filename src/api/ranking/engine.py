@@ -71,19 +71,31 @@ def _row_to_features(row, neighbors: Optional[dict] = None) -> ItemFeatures:
     # YouTube links and direct video files play inline in the UI without a
     # stored media entry, so count them as media for scoring too.
     has_media = bool(media) or is_playable_media_url(row.get("url"))
+    # the preview image the card shows: image_url, or failing that the
+    # first <img> in the content (has_preview_image, computed in SQL so
+    # training doesn't pull every article's body just to look for one)
+    has_image = bool(row.get("image_url") or row.get("has_preview_image"))
+    image_gone = bool(row.get("image_gone_at"))
+    # An image vector only counts while it describes a picture the article
+    # still shows. One left on a row whose picture was removed, or whose
+    # host has said the picture is gone, would have the model go on scoring
+    # pixels nobody can see; the has-image and image-gone flags already say
+    # everything that is still true about the picture.
+    image_embedding = (
+        parse_embedding(row.get("image_embeddings"))
+        if has_image and not image_gone
+        else None
+    )
     return ItemFeatures(
         url_hash=row["url_hash"],
         embedding=parse_embedding(row.get("embeddings")),
-        image_embedding=parse_embedding(row.get("image_embeddings")),
+        image_embedding=image_embedding,
         neighbors=tuple((neighbors or {}).get(row["url_hash"], ())),
         source=row.get("source_name"),
         author=row.get("author"),
         date_published=row.get("date_published"),
-        # the preview image the card shows: image_url, or failing that the
-        # first <img> in the content (has_preview_image, computed in SQL so
-        # training doesn't pull every article's body just to look for one)
-        has_image=bool(row.get("image_url") or row.get("has_preview_image")),
-        image_gone=bool(row.get("image_gone_at")),
+        has_image=has_image,
+        image_gone=image_gone,
         has_media=has_media,
         label=_effective_label(row.get("vote"), list_added_at),
         # an unvoted-but-listed item is labelled as of when it was listed

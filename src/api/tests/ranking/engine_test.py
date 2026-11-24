@@ -58,3 +58,33 @@ def test_has_image_from_content_image_without_image_url():
 def test_has_image_false_with_no_picture_anywhere():
     feat = _row_to_features(_row(image_url=None, has_preview_image=False))
     assert feat.has_image is False
+
+
+def test_image_vector_is_used_while_the_picture_is_shown():
+    feat = _row_to_features(
+        _row(image_url="https://example.com/a.jpg", image_embeddings={"clip": [1.0]})
+    )
+    assert feat.image_embedding is not None
+
+
+def test_image_vector_is_ignored_once_the_article_shows_no_picture():
+    """A vector left behind on an article whose picture was removed describes
+    pixels nobody can see, so the model must not score them."""
+    feat = _row_to_features(
+        _row(image_url=None, has_preview_image=False, image_embeddings={"clip": [1.0]})
+    )
+    assert feat.image_embedding is None
+
+
+def test_image_vector_is_ignored_once_the_host_says_the_picture_is_gone():
+    feat = _row_to_features(
+        _row(
+            image_url="https://example.com/a.jpg",
+            image_gone_at="2026-11-24T00:00:00Z",
+            image_embeddings={"clip": [1.0]},
+        )
+    )
+    assert feat.image_embedding is None
+    # what is still true about the picture is kept
+    assert feat.has_image is True
+    assert feat.image_gone is True
