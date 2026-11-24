@@ -1163,3 +1163,33 @@ def test_backfill_does_not_file_a_failure_against_a_replaced_picture(
     state = _embed_state(existing_item_strict.url_hash)
     assert state["image_gone_at"] is None
     assert state["image_embed_attempts"] == 0
+
+
+def test_fresh_rescrape_of_a_reddit_post_needs_reddit_to_answer(
+    monkeypatch, existing_source, existing_item_strict
+):
+    """reddit not answering says nothing about whether the post was deleted,
+    and the page alone still offers its old preview. Rebuilding from that
+    would bring a deleted post's picture back, so the reader is asked
+    instead, as when nothing answers at all."""
+    existing_item_strict.update(image_embeddings={"clip-model": [0.1]})
+    monkeypatch.setattr(jobs, "is_reddit_post", lambda url: True)
+    _scrapers_find(
+        monkeypatch,
+        open_graph=lambda item: ItemLoose(
+            url=item.url, image_url="http://example.com/old-preview.jpg"
+        ),
+    )
+
+    item = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    with pytest.raises(jobs.ArticleUnreachable):
+        jobs.rescrape_item(item, existing_source, fresh=True)
+
+    # and once the reader says the post is gone, nothing of it survives
+    changed, _ = jobs.rescrape_item(
+        item, existing_source, fresh=True, wipe_if_unreachable=True
+    )
+    assert changed
+    stored = ItemLoose.read(url_hash=existing_item_strict.url_hash)
+    assert stored.image_url is None
+    assert not stored.image_embeddings

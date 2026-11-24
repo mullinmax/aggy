@@ -427,7 +427,17 @@ def _collect_fresh(
             ingest_open_graph_item(item),
             ingest_mercury_item(item),
         ]
-        if any(scraped):
+        # For a reddit post only reddit's own answer can say whether the post
+        # (and its picture) still exists: the page itself goes on offering
+        # the old preview to anything that isn't the API. Rebuilding from that
+        # alone would bring a deleted post's picture straight back, so when
+        # reddit doesn't answer, that counts as nothing answering.
+        answered = (
+            reddit_item is not None
+            if is_reddit_post(str(item.url))
+            else any(scraped)
+        )
+        if answered:
             fresh = ItemLoose.merge_instances(items=[s for s in scraped if s])
             _replace_with_fresh_pictures(fresh, blank, reddit_item, scraped)
         elif wipe_if_unreachable:
