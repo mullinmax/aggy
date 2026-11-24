@@ -12,6 +12,7 @@ from db.item import (
     ItemLoose,
     embed_image,
     embeddable_image_url,
+    fetch_image_base64,
     image_embed_backfill_candidates,
     record_image_embed_failure,
     reset_image_embed_attempts,
@@ -513,11 +514,19 @@ def _rescrape_item(
     # the old vectors and retry history are exactly what is being thrown out.
     picture_changed = fresh or merged.embeddable_image_url != picture_before
 
-    embedding_changed = False
+    if text_changed:
+        # Every stored text vector describes the old text, including any left
+        # over from an earlier embedding model: the recommender reads whichever
+        # vector comes first, so a stale one would go on standing in for the
+        # article. They go, and the current model's is recomputed below. If
+        # that fails the article has no text vector until the next ingest pass
+        # fills it in, which is better than being scored on words it no
+        # longer says.
+        merged.embeddings = None
+
     if (text_changed or fresh) and embedding_model is not None:
         try:
             merged.add_embedding(model_name=embedding_model, force_refresh=True)
-            embedding_changed = fresh or merged.embeddings != item.embeddings
         except Exception as e:
             logging.error(f"Error re-embedding item {item.url}: {e}")
 
@@ -533,20 +542,20 @@ def _rescrape_item(
         # if there is one, is embedded below or by the backfill.
         merged.image_embeddings = None
 
-    # a re-scrape is also a chance to fill in an embedding that never
-    # landed (the image host was down, rate-limiting us, or refusing
-    # the request), which no amount of unchanged re-scraping would
-    # otherwise retry
-    image_missing = image_embed_model not in (merged.image_embeddings or {})
-    if (picture_changed or image_missing) and image_embed_host is not None:
-        try:
-            merged.add_image_embedding(
-                model_name=image_embed_model, force_refresh=picture_changed
-            )
-        except Exception as e:
-            logging.error(f"Error re-embedding image {item.url}: {e}")
+    picture = merged.embeddable_image_url
+    if picture is None:
+        # no picture, so no image vector of any model applies
+        merged.image_embeddings = None
+
+    image_failure = None
+    if picture is not None and image_embed_host is not None:
+        image_failure = _refresh_image_embedding(
+            merged, picture, image_embed_model, picture_changed
+        )
+
     embedding_changed = (
-        embedding_changed or merged.image_embeddings != item.image_embeddings
+        merged.embeddings != item.embeddings
+        or merged.image_embeddings != item.image_embeddings
     )
 
     if fresh:
@@ -554,9 +563,16 @@ def _rescrape_item(
         # back, and the similarity graph re-places it below
         embedding_changed = True
     elif after == before and not embedding_changed:
+        if image_failure is not None:
+            _record_rescrape_image_failure(item.url_hash, image_failure)
         return False, set()  # nothing changed, leave the row untouched
 
     merged.update()  # persist (overwrites the existing row)
+
+    if image_failure is not None:
+        # after the write, so the failure is filed against the row as it now
+        # stands rather than overwritten by it
+        _record_rescrape_image_failure(item.url_hash, image_failure)
 
     if embedding_changed:
         # The similarity graph's links, and the duplicate grouping read out of
@@ -567,14 +583,76 @@ def _rescrape_item(
 
         mark_relink_needed(item.url_hash)
 
-    if fresh:
-        # every feed's score for the article was worked out from what it
-        # used to say, voted on or not
+        # Every feed's score for the article was worked out from the vectors
+        # it just lost, voted on or not, so every feed carrying it rescores.
         return True, _feeds_carrying(item.url_hash)
 
     # a changed, voted-on item means the models that trained on its old
     # features are now stale — those feeds should retrain
     return True, _feeds_with_votes_on(item.url_hash)
+
+
+def _refresh_image_embedding(
+    merged: ItemLoose, picture: str, model_name: str, picture_changed: bool
+) -> Optional[ImageEmbedError]:
+    """Bring ``merged``'s image vector in line with the picture it shows now.
+
+    A new picture, or one that never got a vector (the image host was down,
+    rate-limiting us, or refusing the request), is embedded; a re-scrape is
+    the one chance to retry that which no amount of unchanged re-scraping
+    would otherwise get.
+
+    A picture that is the same as before and already embedded is fetched
+    once to check it is still there. The link staying put says nothing about
+    the picture behind it: an upload its author deleted keeps its URL and
+    answers 404. When every candidate URL says it is gone, the old vector is
+    dropped, since it describes a picture nobody can see any more. Anything
+    else (a 403, a timeout) is the kind of thing that fixes itself, so the
+    vector stays.
+
+    Returns the failure, if any, for the caller to record once the row is
+    written.
+    """
+    embedded = model_name in (merged.image_embeddings or {})
+    if picture_changed or not embedded:
+        # copied first: the dict may still be the stored item's, and filling
+        # it in place would make the two compare equal
+        merged.image_embeddings = dict(merged.image_embeddings or {})
+        try:
+            failure = merged.add_image_embedding(
+                model_name=model_name, force_refresh=picture_changed
+            )
+        except Exception as e:
+            logging.error(f"Error re-embedding image {merged.url}: {e}")
+            failure = None
+        if not merged.image_embeddings:
+            merged.image_embeddings = None
+        return failure
+
+    try:
+        fetch_image_base64(picture)
+    except ImageEmbedError as e:
+        if not e.image_is_missing:
+            return None
+        logging.info(f"Picture for {merged.url} is gone, dropping its vector: {e}")
+        merged.image_embeddings = None
+        return e
+    return None
+
+
+def _record_rescrape_image_failure(url_hash: str, error: ImageEmbedError) -> None:
+    """File a re-scrape's failed picture the way the backfill would, so the
+    backfill backs off from it, and a 410 marks the picture gone for the
+    recommender straight away instead of on the backfill's next pass."""
+    try:
+        record_image_embed_failure(
+            url_hash,
+            str(error),
+            image_gone=error.image_is_gone,
+            image_missing=error.image_is_missing,
+        )
+    except Exception as e:
+        logging.error(f"Error recording image failure for {url_hash}: {e}")
 
 
 def rerank_feeds(feeds: set) -> None:
@@ -619,8 +697,7 @@ def rescrape_source(source: Source) -> None:
     rerank_feeds(feeds_to_rerank)
 
     logging.info(
-        f"Re-scraped source '{source.name}': "
-        f"{len(feeds_to_rerank)} feed(s) retrained"
+        f"Re-scraped source '{source.name}': {len(feeds_to_rerank)} feed(s) retrained"
     )
 
 
@@ -788,12 +865,24 @@ def backfill_image_embeddings_job() -> None:
             row = futures[future]
             embedding, error, image_gone, image_missing = future.result()
             try:
+                # both writes are dropped if a re-scrape changed the picture
+                # while this pass was fetching the old one
                 if embedding is not None:
-                    save_image_embedding(row["url_hash"], model_name, embedding)
-                    embedded += 1
+                    embedded += save_image_embedding(
+                        row["url_hash"],
+                        model_name,
+                        embedding,
+                        image_url=row["image_url"],
+                        content=row["content"],
+                    )
                 else:
                     record_image_embed_failure(
-                        row["url_hash"], error, image_gone, image_missing
+                        row["url_hash"],
+                        error,
+                        image_gone,
+                        image_missing,
+                        image_url=row["image_url"],
+                        content=row["content"],
                     )
                     reasons[_failure_reason(error)] += 1
                     retired += image_gone
